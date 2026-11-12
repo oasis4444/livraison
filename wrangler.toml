@@ -1,6 +1,6 @@
 # Alefa Livraison — Cloudflare Workers (plan gratuit) + D1 + fichiers statiques.
 # Déploiement automatique : Cloudflare « Workers Builds » relié au dépôt GitHub (commande de déploiement : npx wrangler deploy).
-name = "alefa-livraison"
+name = "livraison"
 main = "src/worker.js"
 compatibility_date = "2026-10-01"
 workers_dev = true

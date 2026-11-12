@@ -51,7 +51,7 @@ tools/               serveur local, création d'administrateur
    - Build command : *(vide)*
    - Deploy command : `npx wrangler deploy`
 3. Chaque `git push` sur `main` redéploie automatiquement.
-4. Ouvrir l'adresse `https://alefa-livraison.<compte>.workers.dev`, se connecter en administrateur, **changer le mot de passe** (Profil), puis renseigner les numéros MVola / Orange Money / Airtel Money dans **Paramètres**.
+4. Ouvrir l'adresse `https://livraison.<compte>.workers.dev`, se connecter en administrateur, **changer le mot de passe** (Profil), puis renseigner les numéros MVola / Orange Money / Airtel Money dans **Paramètres**.
 
 Nouvel administrateur ou mot de passe oublié :
 ```bash
