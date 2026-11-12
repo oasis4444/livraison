@@ -45,16 +45,56 @@ function renderPending() {
 }
 
 // ---------------------------------------------------------------- GPS
+const GPS_OPTS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 };
+let lastFix = 0, gateKind = null;
+
+// Le GPS est obligatoire : tant qu'aucune position n'est reçue, un écran bloque l'application.
 function startGps() {
-  if (!navigator.geolocation) return toast(t('gps_denied'), 'err');
-  watchId = navigator.geolocation.watchPosition((p) => {
-    const first = !pos;
-    pos = [p.coords.latitude, p.coords.longitude];
-    upsertMarker(map, mk, 'me', pos, icons.bike(active ? 'busy' : ''), { zIndexOffset: 1000, refreshIcon: true });
-    if (first) { map?.setView(pos, 15); sendPos(); if (available) loadRequests(); }
-  }, () => toast(t('gps_denied'), 'err'), { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
-  // Partage de la position toutes les 5 s quand le livreur est en service.
+  if (!navigator.geolocation) return showGate('off');
+  showGate('searching');
+  watchGps();
   posTimer = every(5000, sendPos, false);
+  // Signal perdu depuis plus d'1 minute pendant le service → écran bloquant.
+  every(10000, () => { if (lastFix && Date.now() - lastFix > 60e3) showGate('lost'); }, false);
+  navigator.permissions?.query({ name: 'geolocation' }).then((perm) => {
+    if (perm.state === 'denied') showGate('denied');
+    perm.onchange = () => (perm.state === 'denied' ? showGate('denied') : watchGps());
+  }).catch(() => {});
+}
+function watchGps() {
+  if (watchId != null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(onFix, (e) => showGate(e.code === 1 ? 'denied' : lastFix ? 'lost' : 'off'), GPS_OPTS);
+}
+function onFix(p) {
+  lastFix = Date.now();
+  const first = !pos;
+  pos = [p.coords.latitude, p.coords.longitude];
+  hideGate();
+  upsertMarker(map, mk, 'me', pos, icons.bike(active ? 'busy' : ''), { zIndexOffset: 1000, refreshIcon: true });
+  if (first) { map?.setView(pos, 15); sendPos(); if (available) loadRequests(); }
+}
+function showGate(kind) {
+  if (gateKind === kind) return;
+  gateKind = kind;
+  let g = $('#gps-gate');
+  if (!g) { g = document.createElement('div'); g.id = 'gps-gate'; g.className = 'gps-gate'; root.querySelector('.mapapp').append(g); }
+  const searching = kind === 'searching';
+  g.innerHTML = `<div class="gps-card">
+    ${searching ? '<div class="radar" style="margin:6px auto 18px"></div>' : '<div style="font-size:54px;line-height:1">📍</div>'}
+    <h2>${searching ? t('gps_searching') : kind === 'denied' ? t('gps_denied_title') : t('gps_off_title')}</h2>
+    <p class="muted">${t('gps_off_text')}</p>
+    ${searching ? '' : `<ol class="small" style="text-align:left;padding-left:18px;line-height:1.5"><li>${t('gps_step_android')}</li><li>${t('gps_step_iphone')}</li><li>${t('gps_step_browser')}</li></ol>`}
+    <button class="btn primary lg block" data-gps-retry>${t('gps_retry')}</button>
+    <button class="btn ghost block" data-gps-sos style="margin-top:6px;color:var(--red)">SOS</button>
+  </div>`;
+  g.querySelector('[data-gps-retry]').onclick = () => { gateKind = null; showGate('searching'); navigator.geolocation?.getCurrentPosition(onFix, (e) => showGate(e.code === 1 ? 'denied' : 'off'), GPS_OPTS); watchGps(); };
+  g.querySelector('[data-gps-sos]').onclick = () => sendSOS(active?.id);
+}
+function hideGate() {
+  if (!gateKind) return;
+  gateKind = null;
+  $('#gps-gate')?.remove();
+  toast(t('gps_ok'), 'ok');
 }
 async function sendPos() {
   if (!pos || (!available && !active)) return;
@@ -275,7 +315,7 @@ const actions = {
   tab: (el) => { tab = el.dataset.t; lastSig = ''; render(); },
   open: (el) => openRequest(+el.dataset.id),
   toggle: async () => {
-    if (!available && !pos) { try { const p = await getPosition(); pos = [p[0], p[1]]; } catch (e) { return toastErr(e); } }
+    if (!available && (!pos || Date.now() - lastFix > 60e3)) { showGate(pos ? 'lost' : 'off'); return toast(t('gps_off_title'), 'err'); }
     const r = await api('POST', '/api/courier/availability', { available: !available });
     available = r.available;
     if (available) { await sendPos(); keepAwake(); loadRequests(); }

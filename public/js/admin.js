@@ -97,7 +97,7 @@ const VIEWS = {
         const stale = r.server_time - c.last_seen > 2 * 60e3;
         keep.add('c' + c.id);
         upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : c.delivery_id ? 'busy' : ''), { refreshIcon: true })
-          ?.bindTooltip(`<b>${esc(c.name)}</b><br>${c.delivery_id ? `Livraison #${c.delivery_id} (${t('st_' + c.delivery_status)})` : 'Disponible'}${c.axe ? `<br>🧭 ${esc(c.axe)}` : ''}<br>Vu à ${time(c.last_seen)}`)
+          ?.bindTooltip(`<b>${esc(c.name)}</b><br>${c.delivery_id ? `Livraison #${c.delivery_id} (${t('st_' + c.delivery_status)})` : 'Disponible'}${c.axe ? `<br>🧭 ${esc(c.axe)}` : ''}<br>${stale ? '⚠ GPS perdu — ' : ''}Vu à ${time(c.last_seen)}`)
           .off('click').on('click', () => courierTrack(c));
       }
       for (const d of r.deliveries.filter((x) => x.status === 'open')) {

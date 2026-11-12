@@ -3,6 +3,13 @@ import { state, t, setLang, api, esc, $, bind, toast, toastErr, langSwitch } fro
 
 setLang(state.lang);
 const app = $('#app');
+// Espace livreur séparé : /livreur (connexion livreur uniquement, application installable à part).
+const COURIER_SPACE = location.pathname.replace(/\/+$/, '') === '/livreur';
+if (COURIER_SPACE) {
+  $('#manifest').href = '/manifest-livreur.webmanifest';
+  document.title = 'Alefa Livreur';
+  document.querySelector('meta[name=theme-color]').content = '#14211c';
+}
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
@@ -16,10 +23,41 @@ async function boot() {
     } catch { state.token = null; localStorage.removeItem('alefa_token'); }
   }
   app.className = '';
-  if (!state.user) return authView();
+  if (!state.user) return COURIER_SPACE ? courierLoginView() : authView();
   const role = state.user.role;
+  if (COURIER_SPACE && role !== 'courier') {
+    toastErr(new Error(state.lang === 'mg' ? 'Ho an\'ny mpitondra entana ihany ity pejy ity.' : 'Cet espace est réservé aux livreurs.'));
+    localStorage.removeItem('alefa_token'); state.token = null; state.user = null;
+    return courierLoginView();
+  }
+  if (!COURIER_SPACE && role === 'courier') { location.replace('/livreur'); return; }
   const mod = await import(role === 'admin' ? './admin.js' : role === 'courier' ? './courier.js' : './client.js');
   mod.mount(app);
+}
+
+function courierLoginView() {
+  app.innerHTML = `<div class="auth courier-auth"><div class="auth-card">
+    ${langSwitch()}
+    <div class="auth-brand"><img src="/icon.svg" alt=""><div><b>Alefa <span style="color:var(--green)">Livreur</span></b><span class="muted small">${t('courier_space')}</span></div></div>
+    <form class="stack" data-form autocomplete="on">
+      <label class="field"><span>${t('phone')}</span><input class="input" name="phone" type="tel" inputmode="tel" placeholder="034 12 345 67" required autocomplete="tel"></label>
+      <label class="field"><span>${t('password')}</span><input class="input" name="password" type="password" required autocomplete="current-password"></label>
+      <div class="card small" style="background:var(--sun-soft);border:0">📍 ${t('gps_required_login')}</div>
+      <button class="btn primary lg block" type="submit">${t('sign_in')}</button>
+      <p class="small muted" style="text-align:center">${t('courier_contact')}</p>
+    </form></div></div>`;
+  bind(app, { lang: (el) => { setLang(el.dataset.l); courierLoginView(); } });
+  const form = app.querySelector('[data-form]');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    try {
+      const r = await api('POST', '/api/auth/login', Object.fromEntries(new FormData(form)));
+      if (r.user.role !== 'courier') { state.token = r.token; await api('POST', '/api/auth/logout', {}).catch(() => {}); state.token = null; throw new Error(state.lang === 'mg' ? 'Tsy kaonty mpitondra entana ity.' : 'Ce compte n\'est pas un compte livreur.'); }
+      localStorage.setItem('alefa_token', r.token); state.token = r.token;
+      boot();
+    } catch (err) { toastErr(err); btn.disabled = false; }
+  });
 }
 
 function authView(mode = 'login', role = 'client') {
@@ -36,7 +74,7 @@ function authView(mode = 'login', role = 'client') {
         <label class="row small"><input type="checkbox" name="is_business"> ${t('business')}</label>
         <label class="field hidden" data-company><span>${t('company')}</span><input class="input" name="company"></label>` : ''}
       <button class="btn primary lg block" type="submit">${mode === 'register' ? t('create_account') : t('sign_in')}</button>
-      ${mode === 'register' ? `<p class="small muted" style="text-align:center">🚲 ${t('courier_contact')}</p>` : ''}
+      <p class="small muted" style="text-align:center">🚲 <a href="/livreur">${t('courier_space_link')}</a></p>
     </form>
   </div></div>`;
   bind(app, {

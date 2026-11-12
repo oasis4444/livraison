@@ -1,6 +1,6 @@
 // Service worker : installation de l'application (PWA) et ouverture rapide hors ligne.
-const CACHE = 'alefa-v3';
-const SHELL = ['/', '/css/app.css', '/js/app.js', '/js/core.js', '/js/client.js', '/js/courier.js', '/js/admin.js', '/icon.svg', '/manifest.webmanifest'];
+const CACHE = 'alefa-v4';
+const SHELL = ['/', '/css/app.css', '/js/app.js', '/js/core.js', '/js/client.js', '/js/courier.js', '/js/admin.js', '/icon.svg', '/manifest.webmanifest', '/manifest-livreur.webmanifest'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {

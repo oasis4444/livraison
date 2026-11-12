@@ -249,3 +249,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
   .side, .no-print, .filters { display: none !important; }
   .admin { display: block; } .main { padding: 0; }
 }
+
+/* Écran GPS obligatoire (livreur) */
+.gps-gate { position: absolute; inset: 0; z-index: 1800; background: rgba(10, 30, 22, .82); backdrop-filter: blur(4px); display: grid; place-items: center; padding: 20px; overflow-y: auto; }
+.gps-card { background: #fff; border-radius: 22px; padding: 26px 20px; max-width: 400px; width: 100%; text-align: center; box-shadow: var(--shadow); }
+.gps-card h2 { margin-top: 10px; }
+.courier-auth { background: radial-gradient(circle at 20% 0%, #2b3d36 0, #14211c 55%, #070d0b 100%); }

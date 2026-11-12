@@ -6,6 +6,8 @@ import {
 } from './lib.js';
 
 const SESSION_DAYS = 30;
+// Sans position GPS reçue depuis 2 minutes, le livreur n'est plus proposé aux clients ni notifié.
+const GPS_FRESH_MS = 2 * 60e3;
 const ACTIVE = ['assigned', 'picked_up'];
 const PAYMENT_METHODS = ['cash', 'mvola', 'orange_money', 'airtel_money'];
 const TYPES = ['colis', 'documents', 'marchandises', 'repas', 'autre'];
@@ -168,7 +170,7 @@ async function nearbyCouriers(env, lat, lng, km) {
   const [a, b, c, d] = bbox(lat, lng, km);
   const rows = await all(env, `SELECT c.user_id, c.lat, c.lng, c.rating_sum, c.rating_count FROM couriers c JOIN users u ON u.id = c.user_id
     WHERE c.available = 1 AND u.status = 'active' AND c.last_seen > ? AND c.lat BETWEEN ? AND ? AND c.lng BETWEEN ? AND ?`,
-    now() - 10 * 60e3, a, b, c, d);
+    now() - GPS_FRESH_MS, a, b, c, d);
   return rows.map((r) => ({ ...r, distance_km: haversineKm(lat, lng, r.lat, r.lng) })).filter((r) => r.distance_km <= km);
 }
 
@@ -193,7 +195,7 @@ const axeAllows = (st, lat, lng) => st.free || (st.current && inAxe(st.current, 
 // Livreurs à prévenir pour une demande : disponibles, et (sans axe & dans le rayon) ou (axe du créneau contenant le départ).
 async function eligibleCouriers(env, lat, lng, km) {
   const rows = await all(env, `SELECT c.user_id, c.lat, c.lng FROM couriers c JOIN users u ON u.id = c.user_id
-    WHERE c.available = 1 AND u.status = 'active' AND c.last_seen > ? AND c.lat IS NOT NULL`, now() - 10 * 60e3);
+    WHERE c.available = 1 AND u.status = 'active' AND c.last_seen > ? AND c.lat IS NOT NULL`, now() - GPS_FRESH_MS);
   if (!rows.length) return [];
   const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id IN (${rows.map(() => '?').join(',')})`, ...rows.map((r) => r.user_id));
   return rows.filter((r) => {
@@ -630,7 +632,7 @@ async function adminStats(ctx, env) {
       FROM deliveries WHERE created_at >= ?`, t0),
     one(env, "SELECT SUM(status='open') AS open, SUM(status='assigned') AS assigned, SUM(status='picked_up') AS picked_up FROM deliveries WHERE status IN ('open','assigned','picked_up')"),
     one(env, "SELECT SUM(role='client') AS clients, SUM(role='courier') AS couriers, SUM(role='courier' AND status='pending') AS pending FROM users"),
-    one(env, 'SELECT SUM(available=1 AND last_seen > ?) AS online FROM couriers', now() - 10 * 60e3),
+    one(env, 'SELECT SUM(available=1 AND last_seen > ?) AS online FROM couriers', now() - GPS_FRESH_MS),
     one(env, "SELECT COUNT(*) AS open, SUM(kind='sos') AS sos FROM complaints WHERE status='open'"),
     one(env, `SELECT COALESCE(SUM(CASE WHEN balance < 0 THEN -balance END),0) AS owed_by_couriers, COALESCE(SUM(CASE WHEN balance > 0 THEN balance END),0) AS owed_to_couriers FROM couriers`),
   ]);

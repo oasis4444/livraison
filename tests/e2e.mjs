@@ -76,15 +76,28 @@ try {
     await admin.screenshot({ path: 'tests/screens/12-admin-planning.png' });
     await admin.click('[data-save]'); await admin.waitForSelector('text=Planning enregistré');
   });
-  await step('livreur se connecte (pas d\'inscription publique)', async () => {
-    await courier.goto(BASE);
-    await courier.click('[data-m=register]'); await courier.waitForSelector('text=créés par l\'administration');
-    await courier.click('[data-m=login]');
+  await step('espace livreur séparé /livreur + GPS obligatoire', async () => {
+    // sans autorisation GPS → écran bloquant
+    const nc = await browser.newContext({ viewport: { width: 400, height: 860 }, locale: 'fr-FR' });
+    await nc.route('https://unpkg.com/**', (r) => r.request().url().endsWith('.js') ? r.fulfill({ contentType: 'text/javascript', body: LEAFLET_STUB }) : r.fulfill({ contentType: 'text/css', body: '' }));
+    const p = await nc.newPage(); watch(p, 'courier-nogps');
+    await p.goto(BASE + '/livreur');
+    await p.waitForSelector('text=Alefa Livreur');
+    await p.fill('[name=phone]', '0340000000'); await p.fill('[name=password]', 'admin12345'); await p.click('[type=submit]');
+    await p.waitForSelector('text=pas un compte livreur');
+    await p.fill('[name=phone]', '034 11 111 11'); await p.fill('[name=password]', 'velo1234'); await p.click('[type=submit]');
+    await p.waitForSelector('#gps-gate', { timeout: 15000 });
+    await p.waitForSelector('text=Accès à la position refusé', { timeout: 15000 });
+    await p.waitForTimeout(600); await p.screenshot({ path: 'tests/screens/13-livreur-sans-gps.png' });
+    await nc.close();
+    // avec GPS → l'écran disparaît
+    await courier.goto(BASE + '/livreur');
     await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'velo1234'); await courier.click('[type=submit]');
     await courier.waitForSelector('text=Analakely – Tsaralalana');
+    await courier.waitForSelector('#gps-gate', { state: 'detached', timeout: 15000 });
+    await courier.screenshot({ path: 'tests/screens/14-livreur-gps-ok.png' });
   });
   await step('livreur passe disponible', async () => {
-    await courier.reload();
     await courier.waitForSelector('[data-act=toggle]');
     await courier.click('[data-act=toggle]');
     await courier.waitForSelector('.switch.on');
