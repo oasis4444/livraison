@@ -179,8 +179,8 @@ export const TANA = [-18.9100, 47.5250];
 export function makeMap(el, { center = TANA, zoom = 14, zoomControl = false } = {}) {
   if (!window.L) { el.innerHTML = '<div style="padding:90px 20px;text-align:center;color:#85938d">Carte indisponible (connexion)</div>'; return null; }
   const map = L.map(el, { zoomControl, attributionControl: true, center, zoom, preferCanvas: false });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19, subdomains: 'abcd', attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © CARTO',
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
   map.attributionControl.setPrefix(false);
   setTimeout(() => map.invalidateSize(), 120);

@@ -35,7 +35,7 @@ export function withSecurityHeaders(res) {
       "default-src 'self'",
       "script-src 'self' https://unpkg.com",
       "style-src 'self' 'unsafe-inline' https://unpkg.com",
-      "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://unpkg.com",
+      "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://unpkg.com",
       "connect-src 'self' https://nominatim.openstreetmap.org https://routing.openstreetmap.de",
       "font-src 'self' data:",
       "frame-ancestors 'none'",
