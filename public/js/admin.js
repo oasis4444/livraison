@@ -3,15 +3,16 @@ import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA,
 } from './core.js';
+import { c, shipPill, sendForm, shipDetail } from './colis.js';
 
 let root, main, view = location.hash.replace('#', '') || 'dash', liveTimer = null, liveMap = null, counts = {};
 const liveMk = {};
 let trackLayer = null, axeLayers = [];
 
 const NAV = [
-  ['dash', '📊', 'Tableau de bord'], ['live', '🗺️', 'Carte en direct'], ['deliveries', '📦', 'Livraisons'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
+  ['dash', '📊', 'Tableau de bord'], ['live', '🗺️', 'Carte en direct'], ['parcels', '📦', 'Colis (centre)'], ['cash', '💵', 'Caisse & vendeurs'], ['deliveries', '🛵', 'Courses express'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
   ['clients', '👥', 'Clients'], ['payments', '💰', 'Paiements & soldes'], ['complaints', '⚠️', 'Réclamations & SOS'], ['reports', '📈', 'Rapports'],
-  ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
+  ['api', '🔌', 'API marchands'], ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
 ];
 
 export async function mount(el) {
@@ -63,7 +64,11 @@ const VIEWS = {
   async dash() {
     const [s, rep, comp] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`), api('GET', '/api/admin/complaints')]);
     main.innerHTML = head('Tableau de bord', `<span class="small muted">${new Date().toLocaleString('fr-FR')}</span>`) + `
-      <div class="kpis">
+      <h3>📦 Colis du centre</h3><div class="kpis">
+        ${kpi('Colis livrés aujourd\'hui', s.parcels.delivered_today || 0)}${kpi('Frais encaissés aujourd\'hui', ar(s.parcels.fees_today))}
+        ${kpi('En cours', s.parcels.open || 0)}${kpi('À programmer', s.parcels.pending || 0, s.parcels.pending ? 'alert' : '')}
+        ${kpi('Argent chez les livreurs', ar(s.parcels.cash_with_couriers))}${kpi('À rendre aux expéditeurs', s.parcels.to_return || 0)}</div>
+      <h3>🛵 Courses express</h3><div class="kpis">
         ${kpi('Livraisons aujourd\'hui', `${s.today.delivered || 0} <span class="small muted">/ ${s.today.created || 0}</span>`)}
         ${kpi('Chiffre d\'affaires du jour', ar(s.today.revenue))}
         ${kpi('Commissions du jour', ar(s.today.commission))}
@@ -195,6 +200,9 @@ const VIEWS = {
         <div class="panel stack"><h3>Fonctionnement</h3><div class="row">${f('request_radius_km', 'Rayon des demandes (km)')}${f('request_ttl_min', 'Expiration demande (min)')}</div>
           <div class="row">${f('max_open_requests', 'Demandes simultanées / client')}${f('position_retention_days', 'Conservation trajets GPS (jours)')}</div>${f('axe_slot_minutes', 'Durée d\'un créneau d\'axe (minutes)', 'Durée par défaut lors de la génération des plannings (60 = 1 heure)')}</div>
       </div><div class="stack">
+        <div class="panel stack"><h3>Colis du centre</h3><div class="row">${f('default_fee', 'Frais de livraison par défaut (Ar)', 'Modifiable par axe et par colis')}
+          <label class="field grow"><span>Le livreur peut modifier les frais</span><select class="input" data-s="courier_can_edit_fee"><option value="1" ${s.courier_can_edit_fee === '1' ? 'selected' : ''}>Oui</option><option value="0" ${s.courier_can_edit_fee !== '1' ? 'selected' : ''}>Non</option></select></label></div>
+          <div class="row">${f('centre_name', 'Nom du centre', '', 'text')}${f('centre_addr', 'Adresse du centre', '', 'text')}</div></div>
         <div class="panel stack"><h3>Plateforme & paiements</h3>${f('platform_name', 'Nom', '', 'text')}${f('support_phone', 'Téléphone support', '', 'tel')}
           ${f('mvola_number', 'Numéro marchand MVola', '', 'text')}${f('orange_money_number', 'Numéro Orange Money', '', 'text')}${f('airtel_money_number', 'Numéro Airtel Money', '', 'text')}</div>
         <div class="panel"><div class="row between"><h3>Zones de service</h3><button class="btn sm" data-act="zone">＋ Zone</button></div>
@@ -212,13 +220,58 @@ const VIEWS = {
       Un livreur avec planning ne voit que les demandes dont le départ est dans l'axe du créneau en cours ; sans planning, il voit toute la zone autour de lui.</p>
       <div class="grid2"><div class="livemap" id="axemap" style="height:520px"></div>
       <div class="panel"><div class="list">${r.axes.map((a) => `<div class="row between" style="border-bottom:1px solid var(--line);padding-bottom:8px">
-        <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${esc(a.color)}"></span> <b>${esc(a.name)}</b>${a.active ? '' : ' <span class="muted">(inactif)</span>'}<br><span class="small muted">Rayon ${a.radius_km} km · ${a.couriers} livreur(s)</span></span>
+        <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${esc(a.color)}"></span> <b>${esc(a.name)}</b>${a.active ? '' : ' <span class="muted">(inactif)</span>'}<br><span class="small muted">Rayon ${a.radius_km} km · ${a.couriers} livreur(s) · frais ${a.fee ? ar(a.fee) : 'par défaut'}</span></span>
         <span><button class="btn sm" data-act="axe" data-a='${esc(JSON.stringify(a))}'>Modifier</button> <button class="btn sm danger" data-act="axedel" data-id="${a.id}">✕</button></span></div>`).join('') || '<p class="muted">Aucun axe. Créez-en un (ex : Analakely, Ankorondrano, Ivandry…).</p>'}</div></div></div>`;
     liveMap = makeMap($('#axemap'), { zoom: 12, zoomControl: true });
     if (liveMap && r.axes.length) {
       const cs = r.axes.map((a) => L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color, weight: 2, fillOpacity: .12 }).addTo(liveMap).bindTooltip(esc(a.name), { permanent: true, direction: 'center' }));
       liveMap.fitBounds(L.featureGroup(cs).getBounds().pad(.1));
     }
+  },
+
+  async parcels() {
+    const st = sessionStorage.getItem('adm_pst') ?? 'open', qv = sessionStorage.getItem('adm_pq') || '';
+    const r = await api('GET', `/api/admin/shipments?status=${st}&q=${encodeURIComponent(qv)}`);
+    main.innerHTML = head('Colis (centre)', `<button class="btn sm primary" data-act="newparcel">＋ Colis</button><a class="btn sm" href="#" data-act="pexport">⬇ Excel</a>`) + `
+      <div class="filters"><select class="input" data-pf="status">${[['open', 'En cours'], ['pending', '⏳ À programmer'], ['assigned', 'Programmés'], ['picked_up', 'Récupérés'], ['return', '↩️ À rendre'], ['delivered', 'Livrés'], ['refused', 'Refusés'], ['cancelled', 'Annulés'], ['', 'Tous']].map(([v, l]) => `<option value="${v}" ${st === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <input class="input" data-pf="q" placeholder="Réf, nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Réf</th><th>Créé</th><th>Source</th><th>Expéditeur</th><th>Destinataire</th><th>Livreur / départ</th><th class="num">Valeur</th><th class="num">Frais</th><th class="num">Encaissé</th><th>Statut</th></tr></thead><tbody>
+      ${r.shipments.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}"><td><b>${esc(x.ref)}</b>${x.external_ref ? `<div class="tiny muted">${esc(x.external_ref)}</div>` : ''}</td><td class="small">${dt(x.created_at)}</td><td class="small">${esc(x.source)}</td>
+        <td class="small">${esc(x.sender.name)}<div class="tiny muted ellipsis" style="max-width:180px">${esc(x.sender.address)}</div></td><td class="small">${esc(x.recipient.name)}<div class="tiny muted ellipsis" style="max-width:180px">${esc(x.recipient.address)}</div></td>
+        <td class="small">${x.courier ? `🚲 ${esc(x.courier.name || '')}` : '—'}${x.departure_at ? `<div class="tiny muted">${dt(x.departure_at)} · ${esc(x.axe || '')}</div>` : ''}</td>
+        <td class="num">${ar(x.value ?? x.declared_value)}</td><td class="num">${ar(x.fee)}</td><td class="num">${x.collected ? ar(x.collected) : '—'}</td><td>${shipPill(x)}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
+  },
+
+  async cash() {
+    const r = await api('GET', '/api/admin/cash');
+    main.innerHTML = head('Caisse & vendeurs') + `
+      <p class="small muted">1. Quand le livreur rentre au centre, encaissez l'argent qu'il a collecté. 2. Payez ensuite chaque expéditeur : valeur des colis livrés (argent déjà remis) moins les frais de retour des colis annulés après récupération.</p>
+      <div class="grid2"><div class="panel"><h3>💵 Argent à récupérer auprès des livreurs</h3>
+        ${r.couriers.map((x) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.name)}</b><div class="tiny muted">${x.n} colis · ${esc(phoneFmt(x.phone))}</div></span><span><b>${ar(x.cash)}</b> <button class="btn sm primary" data-act="settle" data-id="${x.id}" data-amt="${x.cash}" data-name="${esc(x.name)}">Encaisser</button></span></div>`).join('') || '<p class="muted small">Aucun argent en attente.</p>'}
+        <h3 style="margin-top:16px">Dernières remises</h3>${r.settlements.slice(0, 15).map((x) => `<div class="row between small"><span>${esc(x.name)} · ${x.shipments} colis${x.note ? ` · <span style="color:var(--red)">${esc(x.note)}</span>` : ''}</span><span>${ar(x.amount)} <span class="muted tiny">${dt(x.at)}</span></span></div>`).join('') || '<p class="muted small">—</p>'}</div>
+      <div class="panel"><h3>🏪 À payer aux expéditeurs</h3>
+        ${r.vendors.map((v) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(v.company || v.name)}</b><div class="tiny muted">${esc(phoneFmt(v.phone))} · ventes ${ar(v.sales)}${v.return_fees ? ` · retours −${ar(v.return_fees)}` : ''}${v.waiting_cash ? ` · ${v.waiting_cash} colis encore chez le livreur` : ''}</div></span>
+          <span><b style="color:${v.due < 0 ? 'var(--red)' : 'var(--green)'}">${ar(v.due)}</b> ${v.sales || v.return_fees ? `<button class="btn sm primary" data-act="payvendor" data-id="${v.id}" data-amt="${v.due}" data-name="${esc(v.company || v.name)}">Payer</button>` : ''}</span></div>`).join('') || '<p class="muted small">Rien à payer.</p>'}
+        <h3 style="margin-top:16px">Derniers paiements</h3>${r.payouts.slice(0, 15).map((x) => `<div class="row between small"><span>${esc(x.name)} · ${esc(x.note || '')}</span><span>${ar(x.amount)} <span class="muted tiny">${dt(x.at)}</span></span></div>`).join('') || '<p class="muted small">—</p>'}</div></div>`;
+  },
+
+  async api() {
+    const r = await api('GET', '/api/admin/merchants');
+    const base = location.origin;
+    main.innerHTML = head('API marchands', '<button class="btn primary" data-act="newmerchant">＋ Connecter un logiciel de vente</button>') + `
+      <p class="small muted">Chaque logiciel de vente (ou boutique) reçoit une clé API. Ses commandes arrivent ici comme colis, sont programmées sur le prochain départ couvrant l'adresse, et son webhook est prévenu à chaque changement de statut.</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Logiciel / boutique</th><th>Compte vendeur</th><th>Clé</th><th>Webhook</th><th class="num">Colis</th><th>Dernier appel</th><th></th></tr></thead><tbody>
+      ${r.merchants.map((m) => `<tr><td><b>${esc(m.name)}</b> ${m.active ? '' : '<span class="status-pill st-suspended">désactivé</span>'}</td><td class="small">${esc(m.vendor_name)}<div class="tiny muted">${esc(phoneFmt(m.vendor_phone))}</div></td>
+        <td><code>${esc(m.key_prefix)}…</code></td><td class="small" style="max-width:220px;word-break:break-all">${esc(m.webhook_url || '—')}</td><td class="num">${m.shipments}</td><td class="small">${m.last_used ? dt(m.last_used) : 'jamais'}</td>
+        <td style="white-space:nowrap"><button class="btn sm" data-act="mhook" data-id="${m.id}" data-url="${esc(m.webhook_url || '')}">Webhook</button> <button class="btn sm" data-act="mkey" data-id="${m.id}">Nouvelle clé</button> <button class="btn sm ${m.active ? 'danger' : 'primary'}" data-act="mactive" data-id="${m.id}" data-v="${m.active ? 0 : 1}">${m.active ? 'Désactiver' : 'Activer'}</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aucun logiciel connecté.</td></tr>'}</tbody></table></div>
+      <div class="panel" style="margin-top:16px"><h3>Intégration rapide</h3>
+        <p class="small">Base : <code>${esc(base)}/api/v1</code> · En-tête : <code>X-API-Key: ak_…</code> · Documentation complète : <a href="https://github.com/oasis4444/livraison/blob/main/docs/API.md" target="_blank" rel="noopener">docs/API.md</a></p>
+        <pre style="background:#0f1a16;color:#cfe3da;padding:14px;border-radius:12px;overflow:auto;font-size:.8rem">curl -X POST ${esc(base)}/api/v1/shipments \
+  -H "X-API-Key: ak_VOTRE_CLE" -H "Content-Type: application/json" \
+  -d '{"external_ref":"CMD-1042","declared_value":25000,"description":"Robe taille M",
+       "sender":{"address":"Boutique Soa, Analakely","lat":-18.9055,"lng":47.5255},
+       "recipient":{"name":"Rasoa","phone":"0341234567","address":"Ankorondrano, immeuble X","lat":-18.884,"lng":47.524}}'</pre>
+        <p class="small muted">Autres appels : <code>GET /api/v1/schedule</code> (heures et axes) · <code>POST /api/v1/quote</code> · <code>GET /api/v1/shipments/{ref}</code> · <code>POST /api/v1/shipments/{ref}/cancel</code> · <code>GET /api/v1/shipments/{ref}/photo</code>. Webhook signé : en-tête <code>X-Alefa-Signature</code> = HMAC-SHA256 du corps avec le secret <code>whsec_…</code>.</p></div>`;
   },
 
   async audit() {
@@ -377,6 +430,33 @@ const actions = {
     };
   },
   newcourier: () => courierForm(),
+  pfilter: () => { sessionStorage.setItem('adm_pst', $('[data-pf=status]').value); sessionStorage.setItem('adm_pq', $('[data-pf=q]').value); show(); },
+  pexport: async () => {
+    const res = await fetch('/api/admin/shipments/export', { headers: { authorization: `Bearer ${state.token}` } });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = `alefa-colis-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  },
+  newparcel: () => sendForm({ adminMode: true, onDone: () => show() }),
+  parcel: (el) => parcelDetail(+el.dataset.id),
+  settle: async (el) => {
+    const v = await promptBox(`Encaisser — ${el.dataset.name}`, { label: 'Montant reçu du livreur (Ar)', type: 'number', value: el.dataset.amt });
+    if (v == null || v === '') return;
+    const r = await api('POST', `/api/admin/couriers/${el.dataset.id}/settle`, { amount: Number(v) });
+    toast(`${ar(r.received)} encaissés (${r.shipments} colis)`, r.received === r.total ? 'ok' : 'err'); show();
+  },
+  payvendor: async (el) => {
+    if (!(await confirmBox(`Payer ${ar(Number(el.dataset.amt))} à ${el.dataset.name} ?`, 'Payer'))) return;
+    const note = await promptBox('Référence du paiement', { label: 'Ex : MVola réf. 12345, espèces…' });
+    const r = await api('POST', `/api/admin/vendors/${el.dataset.id}/pay`, { note: note || '' });
+    toast(`${ar(r.amount)} payés (${r.shipments} colis)`, 'ok'); show();
+  },
+  newmerchant: () => merchantForm(),
+  mhook: async (el) => { const v = await promptBox('Webhook (https://…)', { value: el.dataset.url, placeholder: 'https://mon-logiciel.mg/webhooks/alefa' }); if (v == null) return; await api('POST', `/api/admin/merchants/${el.dataset.id}`, { webhook_url: v }); show(); },
+  mkey: async (el) => {
+    if (!(await confirmBox('Générer une nouvelle clé ? L\'ancienne cessera de fonctionner immédiatement.', 'Générer', true))) return;
+    const r = await api('POST', `/api/admin/merchants/${el.dataset.id}`, { regenerate: true });
+    modal('Nouvelle clé API', `<p>Copiez-la maintenant, elle ne sera plus affichée :</p><pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:12px;border-radius:10px">${esc(r.api_key)}</pre>`); show();
+  },
+  mactive: async (el) => { await api('POST', `/api/admin/merchants/${el.dataset.id}`, { active: el.dataset.v === '1' }); show(); },
   planning: (el) => planningForm(+el.dataset.id, el.dataset.name),
   pwreset: async (el) => {
     const pw = await promptBox(`Nouveau mot de passe — ${el.dataset.name}`, { label: 'Mot de passe provisoire (6 caractères min.)', value: Math.random().toString(36).slice(2, 10) });
@@ -425,7 +505,8 @@ function axeForm(a) {
     <div class="row"><input class="input grow" data-n placeholder="Nom (ex : Analakely – Tsaralalana)" value="${esc(a.name)}"><input type="color" data-c value="${esc(a.color)}" style="width:52px;height:46px;border:0;background:none"></div>
     <div class="small muted">Déplacez la carte pour centrer l'axe, réglez le rayon.</div>
     <div id="axm" style="height:320px;border-radius:12px;overflow:hidden;position:relative"></div>
-    <label class="field"><span>Rayon (km)</span><input class="input" type="number" step="0.1" min="0.2" data-r value="${a.radius_km}"></label>
+    <div class="row"><label class="field grow"><span>Rayon (km)</span><input class="input" type="number" step="0.1" min="0.2" data-r value="${a.radius_km}"></label>
+    <label class="field grow"><span>Frais colis sur cet axe (Ar)</span><input class="input" type="number" data-fe value="${a.fee ?? ''}" placeholder="par défaut"></label></div>
     <label class="row small"><input type="checkbox" data-a ${a.active ? 'checked' : ''}> Axe actif</label>
     <button class="btn primary block" data-ok>Enregistrer</button></div>`);
   const zm = makeMap(m.el.querySelector('#axm'), { center: [a.center_lat, a.center_lng], zoom: 14, zoomControl: true });
@@ -434,7 +515,7 @@ function axeForm(a) {
   zm?.on('move', upd); m.el.querySelector('[data-r]').addEventListener('input', upd); m.el.querySelector('[data-c]').addEventListener('input', upd);
   m.el.querySelector('[data-ok]').onclick = async () => {
     const c = zm ? zm.getCenter() : { lat: a.center_lat, lng: a.center_lng };
-    try { await api('POST', '/api/admin/axes', { id: a.id, name: m.el.querySelector('[data-n]').value, color: m.el.querySelector('[data-c]').value, center_lat: c.lat, center_lng: c.lng, radius_km: Number(m.el.querySelector('[data-r]').value), active: m.el.querySelector('[data-a]').checked }); m.close(); show(); } catch (e) { toastErr(e); }
+    try { await api('POST', '/api/admin/axes', { id: a.id, name: m.el.querySelector('[data-n]').value, color: m.el.querySelector('[data-c]').value, center_lat: c.lat, center_lng: c.lng, radius_km: Number(m.el.querySelector('[data-r]').value), fee: m.el.querySelector('[data-fe]').value, active: m.el.querySelector('[data-a]').checked }); m.close(); show(); } catch (e) { toastErr(e); }
   };
 }
 
@@ -490,5 +571,46 @@ async function planningForm(courierId, name) {
   };
   m.el.querySelector('[data-save]').onclick = async () => {
     try { await api('PUT', `/api/admin/couriers/${courierId}/axes`, { slots }); m.close(); toast('Planning enregistré', 'ok'); } catch (e) { toastErr(e); }
+  };
+}
+
+// ---------------------------------------------------------------- colis : détail centre (attribution) et marchands
+async function parcelDetail(id) {
+  const d = await shipDetail(id, { role: 'admin', onChange: () => show() });
+  const s = d.shipment;
+  if (!['pending', 'assigned'].includes(s.status)) return;
+  const sch = await api('GET', '/api/schedule');
+  const couriers = (await api('GET', '/api/admin/users?role=courier&status=active')).users;
+  const box = document.createElement('div');
+  box.className = 'card';
+  box.innerHTML = `<b>Programmer sur un départ</b>
+    <select class="input" data-dep style="margin-top:6px"><option value="auto">⚡ Automatique (prochain départ couvrant l'adresse)</option>
+      ${sch.departures.filter((x) => !x.started).map((x) => `<option value="${x.slot_id}|${x.departure_at}">${dt(x.departure_at)} · ${esc(x.axe)} · 🚲 ${esc(x.courier)} (${x.load} colis)</option>`).join('')}
+      <optgroup label="Livreur sans départ précis">${couriers.map((u) => `<option value="c${u.id}">🚲 ${esc(u.name)}</option>`).join('')}</optgroup></select>
+    <button class="btn primary block" data-go style="margin-top:8px">Programmer</button>`;
+  d.actions.prepend(box);
+  box.querySelector('[data-go]').onclick = async () => {
+    const v = box.querySelector('[data-dep]').value;
+    const body = v === 'auto' ? { auto: true } : v.startsWith('c') ? { courier_id: Number(v.slice(1)) } : { slot_id: Number(v.split('|')[0]), departure_at: Number(v.split('|')[1]) };
+    try { await api('POST', `/api/shipments/${s.id}/assign`, body); d.modal.close(); toast('Colis programmé', 'ok'); show(); } catch (e) { toastErr(e); }
+  };
+}
+
+function merchantForm() {
+  const m = modal('Connecter un logiciel de vente', `<div class="stack">
+    <label class="field"><span>Nom du logiciel / de la boutique</span><input class="input" data-n placeholder="Ex : Boutique Soa"></label>
+    <label class="field"><span>Téléphone du vendeur (compte qui reçoit les paiements)</span><input class="input" data-p type="tel" placeholder="034 12 345 67"></label>
+    <label class="field"><span>Webhook (facultatif)</span><input class="input" data-w placeholder="https://…/webhooks/alefa"></label>
+    <button class="btn primary block" data-ok>Créer la clé API</button></div>`);
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    try {
+      const r = await api('POST', '/api/admin/merchants', { name: m.el.querySelector('[data-n]').value, phone: m.el.querySelector('[data-p]').value, webhook_url: m.el.querySelector('[data-w]').value });
+      m.close();
+      modal('Logiciel connecté ✅', `<p class="small">À transmettre au développeur du logiciel de vente. <b>La clé ne sera plus affichée.</b></p>
+        <div class="field"><span>Clé API</span><pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:10px;border-radius:10px">${esc(r.api_key)}</pre></div>
+        <div class="field"><span>Secret webhook (vérification de signature)</span><pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:10px;border-radius:10px">${esc(r.webhook_secret)}</pre></div>
+        ${r.vendor_temp_password ? `<p class="small">Compte vendeur créé — mot de passe provisoire : <b>${esc(r.vendor_temp_password)}</b></p>` : ''}`);
+      show();
+    } catch (e) { toastErr(e); }
   };
 }

@@ -58,6 +58,7 @@ try {
     await client.click('[data-m=register]');
     await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12');
     await client.click('[type=submit]');
+    await client.waitForSelector('[data-t=home]'); await client.click('[data-t=home]');
     await client.waitForSelector('[data-q=b]');
   });
   await step('admin crée le livreur, un axe et son planning horaire', async () => {
@@ -101,6 +102,7 @@ try {
     await courier.waitForSelector('[data-act=toggle]');
     await courier.click('[data-act=toggle]');
     await courier.waitForSelector('.switch.on');
+    await courier.click('[data-t=req]');
     await courier.waitForTimeout(800);
   });
   await step('client : demande Analakely → Ankorondrano à 8 000 Ar', async () => {
@@ -155,6 +157,7 @@ try {
     await client.waitForSelector('.stars-input', { timeout: 10000 });
     await client.click('[data-act=star][data-v="5"]');
     await client.click('[data-act=rate]');
+    await client.waitForSelector('[data-t=home]'); await client.click('[data-t=home]');
     await client.waitForSelector('[data-q=b]');
   });
   await step('livreur : revenus', async () => {
@@ -181,6 +184,7 @@ try {
   });
   await step('langue malagasy', async () => {
     await client.click('[data-act=profile]'); await client.click('[data-l=mg]');
+    await client.waitForSelector('[data-t=home]'); await client.click('[data-t=home]');
     await client.waitForSelector('[placeholder="Toerana hanaterana"]');
     await client.screenshot({ path: 'tests/screens/11-client-malagasy.png' });
   });

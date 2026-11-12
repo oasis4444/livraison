@@ -4,6 +4,7 @@ import {
   HttpError, fail, json, withSecurityHeaders, readJson, str, int, coord, normalizePhone,
   randomHex, randomPin, hashPassword, safeEqual, haversineKm, bbox, suggestPrice, csv, fmtDate, now,
 } from './lib.js';
+import { registerShipmentRoutes, authenticateMerchant } from './shipments.js';
 
 const SESSION_DAYS = 30;
 // Sans position GPS reçue depuis 2 minutes, le livreur n'est plus proposé aux clients ni notifié.
@@ -13,22 +14,22 @@ const PAYMENT_METHODS = ['cash', 'mvola', 'orange_money', 'airtel_money'];
 const TYPES = ['colis', 'documents', 'marchandises', 'repas', 'autre'];
 
 // ---------------------------------------------------------------- base
-const q = (env, sql, ...params) => env.DB.prepare(sql).bind(...params);
-const one = (env, sql, ...p) => q(env, sql, ...p).first();
-const all = async (env, sql, ...p) => (await q(env, sql, ...p).all()).results || [];
-const run = (env, sql, ...p) => q(env, sql, ...p).run();
+export const q = (env, sql, ...params) => env.DB.prepare(sql).bind(...params);
+export const one = (env, sql, ...p) => q(env, sql, ...p).first();
+export const all = async (env, sql, ...p) => (await q(env, sql, ...p).all()).results || [];
+export const run = (env, sql, ...p) => q(env, sql, ...p).run();
 
-async function settings(env) {
+export async function settings(env) {
   const rows = await all(env, 'SELECT key, value FROM settings');
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
-async function audit(env, ctx, action, detail) {
+export async function audit(env, ctx, action, detail) {
   await run(env, 'INSERT INTO audit (user_id, action, detail, ip, at) VALUES (?,?,?,?,?)',
     ctx.user?.id ?? null, action, detail ? JSON.stringify(detail).slice(0, 1000) : null, ctx.ip, now());
 }
 
-async function notify(env, userIds, kind, title, body, deliveryId = null) {
+export async function notify(env, userIds, kind, title, body, deliveryId = null) {
   const ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return;
   const t = now();
@@ -36,7 +37,7 @@ async function notify(env, userIds, kind, title, body, deliveryId = null) {
     q(env, 'INSERT INTO notifications (user_id, kind, title, body, delivery_id, at) VALUES (?,?,?,?,?,?)', id, kind, title, body ?? null, deliveryId, t)));
 }
 
-async function alertAdmins(env, kind, body, deliveryId = null, userId = null, lat = null, lng = null) {
+export async function alertAdmins(env, kind, body, deliveryId = null, userId = null, lat = null, lng = null) {
   await run(env, 'INSERT INTO complaints (delivery_id, user_id, kind, body, lat, lng, at) VALUES (?,?,?,?,?,?,?)',
     deliveryId, userId, kind, body, lat, lng, now());
   const admins = await all(env, "SELECT id FROM users WHERE role='admin' AND status='active'");
@@ -63,7 +64,7 @@ async function createSession(env, user) {
   return token;
 }
 
-const iterations = (env) => Number(env.PBKDF2_ITER || 10000);
+export const iterations = (env) => Number(env.PBKDF2_ITER || 10000);
 
 async function register(ctx, env) {
   const b = ctx.body;
@@ -175,18 +176,18 @@ async function nearbyCouriers(env, lat, lng, km) {
 }
 
 // ---------------------------------------------------------------- axes (secteurs) et planning
-const mgNow = () => { const d = new Date(now() + 3 * 3600e3); return { min: d.getUTCHours() * 60 + d.getUTCMinutes(), day: ((d.getUTCDay() + 6) % 7) + 1 }; };
-const inAxe = (a, lat, lng) => haversineKm(lat, lng, a.center_lat, a.center_lng) <= a.radius_km;
-const SLOT_SQL = `SELECT ca.*, a.name, a.center_lat, a.center_lng, a.radius_km, a.color, a.active FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id`;
+export const mgNow = () => { const d = new Date(now() + 3 * 3600e3); return { min: d.getUTCHours() * 60 + d.getUTCMinutes(), day: ((d.getUTCDay() + 6) % 7) + 1 }; };
+export const inAxe = (a, lat, lng) => haversineKm(lat, lng, a.center_lat, a.center_lng) <= a.radius_km;
+export const SLOT_SQL = `SELECT ca.*, a.name, a.center_lat, a.center_lng, a.radius_km, a.color, a.active FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id`;
 
-function axeState(slots) {
+export function axeState(slots) {
   if (!slots.length) return { free: true, slots: [] };
   const { min, day } = mgNow();
   const today = slots.filter((x) => String(x.days).includes(String(day)) && x.active).sort((a, b) => a.start_min - b.start_min);
   const pick = (x) => x && { id: x.axe_id, name: x.name, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km, color: x.color, start_min: x.start_min, end_min: x.end_min };
   return { free: false, current: pick(today.find((x) => x.start_min <= min && min < x.end_min)), next: pick(today.find((x) => x.start_min > min)), today: today.map(pick) };
 }
-async function courierAxeState(env, courierId) {
+export async function courierAxeState(env, courierId) {
   return axeState(await all(env, `${SLOT_SQL} WHERE ca.courier_id = ? ORDER BY ca.start_min`, courierId));
 }
 // Le livreur peut-il servir ce point de départ ? Sans planning : tout le rayon. Avec planning : uniquement l'axe du créneau en cours.
@@ -636,7 +637,11 @@ async function adminStats(ctx, env) {
     one(env, "SELECT COUNT(*) AS open, SUM(kind='sos') AS sos FROM complaints WHERE status='open'"),
     one(env, `SELECT COALESCE(SUM(CASE WHEN balance < 0 THEN -balance END),0) AS owed_by_couriers, COALESCE(SUM(CASE WHEN balance > 0 THEN balance END),0) AS owed_to_couriers FROM couriers`),
   ]);
-  return json({ today, active, users, couriers, complaints, money });
+  const parcels = await one(env, `SELECT SUM(status = 'pending') AS pending, SUM(status IN ('assigned','picked_up')) AS open,
+      SUM(status = 'delivered' AND done_at >= ?) AS delivered_today, COALESCE(SUM(CASE WHEN status = 'delivered' AND done_at >= ? THEN fee END),0) AS fees_today,
+      COALESCE(SUM(CASE WHEN status IN ('delivered','refused') AND cash_settled_at IS NULL THEN collected END),0) AS cash_with_couriers,
+      SUM(status IN ('refused','cancelled') AND picked_at IS NOT NULL AND returned_at IS NULL) AS to_return FROM shipments`, t0, t0);
+  return json({ today, active, users, couriers, complaints, money, parcels });
 }
 
 async function adminLive(ctx, env) {
@@ -739,7 +744,7 @@ async function adminSettingsGet(ctx, env) {
 }
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
-  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes'];
+  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -748,6 +753,7 @@ async function adminSettingsPut(ctx, env) {
     let val = String(v ?? '').trim().slice(0, 200);
     if (NUMERIC.includes(k)) { const n = Number(val); if (!Number.isFinite(n) || n < 0) fail(400, 'invalid', `Valeur invalide pour ${k}`); val = String(n); }
     if (k === 'commission_mode' && !['percent', 'subscription'].includes(val)) fail(400, 'invalid', 'Mode de commission invalide');
+    if (k === 'courier_can_edit_fee') val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
     stmts.push(q(env, 'UPDATE settings SET value = ? WHERE key = ?', val, k));
   }
@@ -886,8 +892,9 @@ async function adminAxeSave(ctx, env) {
   if (!(radius >= 0.2 && radius <= 50)) fail(400, 'invalid', 'Rayon invalide (0,2 – 50 km)');
   const name = str(b.name, { min: 2, max: 60, name: 'Nom de l\'axe' });
   const color = /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : '#0b6e4f';
-  if (b.id) await run(env, 'UPDATE axes SET name = ?, center_lat = ?, center_lng = ?, radius_km = ?, color = ?, active = ? WHERE id = ?', name, lat, lng, radius, color, b.active === false ? 0 : 1, int(b.id));
-  else await run(env, 'INSERT INTO axes (name, center_lat, center_lng, radius_km, color) VALUES (?,?,?,?,?)', name, lat, lng, radius, color);
+  const fee = b.fee === '' || b.fee == null ? null : int(b.fee, { min: 0, max: 1_000_000, name: 'Frais de l\'axe' });
+  if (b.id) await run(env, 'UPDATE axes SET name = ?, center_lat = ?, center_lng = ?, radius_km = ?, color = ?, active = ?, fee = ? WHERE id = ?', name, lat, lng, radius, color, b.active === false ? 0 : 1, fee, int(b.id));
+  else await run(env, 'INSERT INTO axes (name, center_lat, center_lng, radius_km, color, fee) VALUES (?,?,?,?,?,?)', name, lat, lng, radius, color, fee);
   await audit(env, ctx, 'admin_axe', { name });
   return json({ ok: true });
 }
@@ -949,7 +956,7 @@ export async function maintenance(env) {
 const R = [];
 const route = (method, path, roles, handler) => {
   const keys = [];
-  const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k) => (keys.push(k), '(\\d+)')) + '$');
+  const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k) => (keys.push(k), k === 'ref' ? '([A-Za-z0-9_-]{4,40})' : '(\\d+)')) + '$');
   R.push({ method, re, keys, roles, handler });
 };
 const ANY = ['client', 'courier', 'admin'];
@@ -1011,7 +1018,22 @@ route('GET', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesGet);
 route('PUT', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesPut);
 route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
 
+registerShipmentRoutes(route);
+
+// API publique v1 : appelée par les logiciels de vente (souvent côté serveur, CORS ouvert pour les intégrations web).
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };
+
 export async function handleApi(req, env) {
+  const isV1 = new URL(req.url).pathname.startsWith('/api/v1/');
+  if (isV1 && req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+  const res = await handleApiInner(req, env);
+  if (!isV1) return res;
+  const r = new Response(res.body, res);
+  for (const [k, v] of Object.entries(CORS)) r.headers.set(k, v);
+  return r;
+}
+
+async function handleApiInner(req, env) {
   const url = new URL(req.url);
   const ctx = { url, ip: req.headers.get('cf-connecting-ip') || '', params: {}, body: {} };
   try {
@@ -1023,8 +1045,11 @@ export async function handleApi(req, env) {
     const r = R.find((x) => x.method === req.method && x.re.test(url.pathname));
     if (!r) fail(404, 'not_found', 'Route inconnue');
     const m = url.pathname.match(r.re);
-    r.keys.forEach((k, i) => (ctx.params[k] = Number(m[i + 1])));
-    if (r.roles) {
+    r.keys.forEach((k, i) => (ctx.params[k] = k === 'ref' ? m[i + 1] : Number(m[i + 1])));
+    if (r.roles === 'merchant') {
+      ctx.merchant = await authenticateMerchant(req, env);
+      if (!ctx.merchant) fail(401, 'bad_api_key', 'Clé API invalide ou désactivée');
+    } else if (r.roles) {
       ctx.user = await authenticate(req, env);
       if (!ctx.user) fail(401, 'unauthenticated', 'Session expirée, reconnectez-vous');
       if (!r.roles.includes(ctx.user.role)) fail(403, 'forbidden', 'Accès refusé');

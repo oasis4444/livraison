@@ -4,12 +4,13 @@ import {
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications,
   profileForm, sendSOS, complaintForm, chatHtml, TANA,
 } from './core.js';
+import { c, shipCard, scheduleHtml, sendForm, shipDetail } from './colis.js';
 
 let root, map, sheet, poller, nearbyTimer;
 const mk = {};
 let routeLayer = null;
 const form = { a: null, b: null, type: 'colis', price: null, priceTouched: false, quote: null, payment: 'cash', schedule: false, scheduled_at: '', promo: '', desc: '', rname: '', rphone: '' };
-let picking = null, me = null, tab = 'home', current = null, lastSig = '', lastMsgId = 0, lastRouteFrom = null, favorites = [];
+let picking = null, me = null, tab = 'colis', current = null, lastSig = '', lastMsgId = 0, lastRouteFrom = null, favorites = [];
 
 export async function mount(el) {
   root = el;
@@ -34,7 +35,10 @@ export async function mount(el) {
   bind(root, actions);
   root.addEventListener('input', onInput);
   root.addEventListener('change', onInput);
-  startNotifications((fresh) => { if (current && fresh.some((n) => n.delivery_id === current.id)) refreshCurrent(); });
+  startNotifications((fresh) => {
+    if (current && fresh.some((n) => n.delivery_id === current.id)) refreshCurrent();
+    if (!current && ['colis', 'sched'].includes(tab) && fresh.some((n) => ['shipment', 'payout'].includes(n.kind))) renderHome();
+  });
   locate(true);
   favorites = (await api('GET', '/api/favorites').catch(() => ({ favorites: [] }))).favorites;
   const list = (await api('GET', '/api/deliveries')).deliveries;
@@ -84,7 +88,10 @@ function renderHome() {
   current = null;
   sheet.classList.remove('collapsed');
   const body = $('#sheet-body');
-  const tabs = `<div class="tabs"><button data-act="tab" data-t="home" class="${tab === 'home' ? 'on' : ''}">${t('home')}</button><button data-act="tab" data-t="history" class="${tab === 'history' ? 'on' : ''}">${t('history')}</button><button data-act="tab" data-t="fav" class="${tab === 'fav' ? 'on' : ''}">${t('favorites')}</button></div>`;
+  const tb = (k, l) => `<button data-act="tab" data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`;
+  const tabs = `<div class="tabs">${tb('colis', '📦 ' + c('colis'))}${tb('sched', '🕘 ' + c('schedule_tab'))}${tb('home', 'Express')}${tb('history', t('history'))}${tb('fav', '⭐')}</div>`;
+  if (tab === 'colis') { body.innerHTML = tabs + '<div data-colis>…</div>'; return loadColis(); }
+  if (tab === 'sched') { body.innerHTML = tabs + '<div data-sched>…</div>'; return scheduleHtml(map).then((h) => { const el = $('[data-sched]'); if (el) el.innerHTML = h; }).catch(toastErr); }
   if (tab === 'history') { body.innerHTML = tabs + '<div data-hist class="list"><p class="muted">…</p></div>'; return loadHistory(); }
   if (tab === 'fav') { body.innerHTML = tabs + favHtml(); return; }
   const q = form.quote;
@@ -116,6 +123,17 @@ function favHtml() {
     <button class="btn sm" data-act="usefav" data-id="${f.id}">→</button><button class="btn sm danger" data-act="delfav" data-id="${f.id}">✕</button></div>`).join('') || `<p class="muted">${t('empty')}</p>`}
     ${form.a ? `<button class="btn block" data-act="addfav" data-w="a">＋ ${t('add_favorite')} : ${esc(form.a.label)}</button>` : ''}
     ${form.b ? `<button class="btn block" data-act="addfav" data-w="b">＋ ${t('add_favorite')} : ${esc(form.b.label)}</button>` : ''}</div>`;
+}
+
+async function loadColis() {
+  const [list, bal] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/shipments/balance').catch(() => null)]);
+  const el = $('[data-colis]'); if (!el) return;
+  const sent = list.shipments.filter((x) => x.mine_as === 'sender'), recv = list.shipments.filter((x) => x.mine_as === 'recipient');
+  el.innerHTML = `<button class="btn primary lg block" data-act="sendparcel">＋ ${c('send_parcel')}</button>
+    ${bal && (bal.due || bal.with_courier) ? `<div class="card" style="margin-top:10px;background:var(--green-soft);border:0"><div class="small muted">${c('balance_vendor')}</div><div class="price">${ar(bal.due)}</div>${bal.with_courier ? `<div class="tiny muted">${c('with_courier')} : ${ar(bal.with_courier)}</div>` : ''}</div>` : ''}
+    ${recv.length ? `<h3 style="margin-top:14px">📥 ${c('recipient')}</h3><div class="list">${recv.map((x) => shipCard(x)).join('')}</div>` : ''}
+    <h3 style="margin-top:14px">📤 ${c('my_parcels')}</h3><div class="list">${sent.map((x) => shipCard(x)).join('') || `<p class="muted small">${c('empty')}</p>`}</div>`;
+  el._list = list.shipments;
 }
 
 async function loadHistory() {
@@ -239,6 +257,12 @@ const actions = {
     track(r.id);
   },
   histdetail: (el) => historyDetail(+el.dataset.id),
+  sendparcel: () => sendForm({ me: true, onDone: () => { tab = 'colis'; renderHome(); } }),
+  ship: (el) => {
+    const s = ($('[data-colis]')?._list || []).find((x) => x.id === +el.dataset.id);
+    shipDetail(+el.dataset.id, { role: s?.mine_as === 'sender' ? 'sender' : 'recipient', onChange: () => renderHome(),
+      courierMarker: (d) => { upsertMarker(map, mk, 'shipcourier', [d.courier.lat, d.courier.lng], icons.bike('busy'), { zIndexOffset: 900 }); map?.setView([d.courier.lat, d.courier.lng], 15); } });
+  },
   // suivi
   accept: async (el) => { await api('POST', `/api/deliveries/${current.id}/accept`, { offer_id: +el.dataset.id }); toast('✅', 'ok'); refreshCurrent(true); },
   raise: async (el) => { await api('POST', `/api/deliveries/${current.id}/raise`, { price: current.proposed_price + Number(el.dataset.d) }); refreshCurrent(true); },

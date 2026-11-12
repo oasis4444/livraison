@@ -4,10 +4,11 @@ import {
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, getPosition, hm, every, startNotifications, showNotifications, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
+import { c, shipCard, shipDetail, courierScheduleEditor, scheduleHtml } from './colis.js';
 
 let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null;
 const mk = {};
-let axeLayer = null, axe = null, routeLayer = null, tab = 'req', requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
+let axeLayer = null, axe = null, routeLayer = null, tab = 'colis', shipTimer = null, requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
 
 export async function mount(el) {
   root = el;
@@ -30,6 +31,7 @@ export async function mount(el) {
   startNotifications((fresh) => {
     if (fresh.some((n) => n.kind === 'offer_accepted')) checkActive();
     if (fresh.some((n) => ['new_request', 'price_raised'].includes(n.kind))) loadRequests();
+    if (tab === 'colis' && !active && fresh.some((n) => n.kind.startsWith('shipment'))) loadMissions();
   });
   axe = state.axe; drawAxe();
   startGps();
@@ -140,7 +142,7 @@ function axeLine() {
 }
 function header() {
   return `<button class="switch ${available ? 'on' : 'off'}" data-act="toggle"><span class="knob"></span><span class="grow" style="text-align:left">${available ? t('available') : t('unavailable')}</span><span class="small">${available ? '🟢 GPS' : ''}</span></button>${axeLine()}
-    <div class="tabs" style="margin-top:10px"><button data-act="tab" data-t="req" class="${tab === 'req' ? 'on' : ''}">${t('requests')}${requests.length ? ` (${requests.length})` : ''}</button><button data-act="tab" data-t="wallet" class="${tab === 'wallet' ? 'on' : ''}">${t('wallet')}</button><button data-act="tab" data-t="hist" class="${tab === 'hist' ? 'on' : ''}">${t('history')}</button></div>`;
+    <div class="tabs" style="margin-top:10px"><button data-act="tab" data-t="colis" class="${tab === 'colis' ? 'on' : ''}">📦 ${c('colis')}</button><button data-act="tab" data-t="plan" class="${tab === 'plan' ? 'on' : ''}">🕘 ${c('my_schedule')}</button><button data-act="tab" data-t="req" class="${tab === 'req' ? 'on' : ''}">Express${requests.length ? ` (${requests.length})` : ''}</button><button data-act="tab" data-t="wallet" class="${tab === 'wallet' ? 'on' : ''}">${t('wallet')}</button><button data-act="tab" data-t="hist" class="${tab === 'hist' ? 'on' : ''}">${t('history')}</button></div>`;
 }
 
 function reqCard(q) {
@@ -158,6 +160,9 @@ function render() {
   sheet.classList.remove('collapsed');
   const body = $('#sheet-body');
   if (tab === 'wallet') { body.innerHTML = header() + '<div data-wallet>…</div>'; return loadWallet(); }
+  if (tab === 'colis') { body.innerHTML = header() + '<div data-colis>…</div>'; return loadMissions(); }
+  if (tab === 'plan') { body.innerHTML = header() + '<div data-plan>…</div><h3 style="margin-top:16px">' + c('from_centre') + '</h3><div data-allsched class="small">…</div>'; const all = () => scheduleHtml(null).then((h) => { const el = $('[data-allsched]'); if (el) el.innerHTML = h; });
+    courierScheduleEditor($('[data-plan]'), all).catch(toastErr); all(); return; }
   if (tab === 'hist') { body.innerHTML = header() + '<div data-hist class="list">…</div>'; return loadHistory(); }
   body.innerHTML = header() + (available
     ? `<div class="list">${requests.map(reqCard).join('') || (axe && !axe.free && !axe.current ? `<p class="muted" style="text-align:center;padding:16px">⏸ ${t('off_schedule')}</p>` : `<div style="text-align:center;padding:16px"><div class="radar" style="margin:10px auto 16px"></div><p class="muted">${t('no_requests')}</p></div>`)}</div>`
@@ -296,6 +301,28 @@ async function loadWallet() {
   </div>`;
 }
 
+async function loadMissions() {
+  const { shipments } = await api('GET', '/api/shipments');
+  const el = $('[data-colis]'); if (!el) return;
+  const grp = [
+    [c('to_pickup'), shipments.filter((x) => x.status === 'assigned')],
+    [c('to_deliver'), shipments.filter((x) => x.status === 'picked_up')],
+    [c('to_return'), shipments.filter((x) => x.to_return)],
+    [c('done_today'), shipments.filter((x) => ['delivered', 'refused', 'cancelled'].includes(x.status) && !x.to_return)],
+  ];
+  const cash = shipments.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + (x.collected || 0), 0);
+  el.innerHTML = (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
+    + grp.filter(([, l]) => l.length).map(([title, l]) => `<h3>${esc(title)} (${l.length})</h3><div class="list">${l.map((x) => shipCard(x)).join('')}</div>`).join('')
+    || `<p class="muted" style="text-align:center;padding:16px">${c('empty')}</p>`;
+  // repères sur la carte
+  for (const k of Object.keys(mk)) if (k.startsWith('s')) { mk[k].remove(); delete mk[k]; }
+  for (const x of shipments) {
+    if (x.status === 'assigned' && x.sender.lat != null) upsertMarker(map, mk, 's' + x.id, [x.sender.lat, x.sender.lng], icons.a())?.on('click', () => openShip(x.id));
+    if (x.status === 'picked_up' && x.recipient.lat != null) upsertMarker(map, mk, 's' + x.id, [x.recipient.lat, x.recipient.lng], icons.b())?.on('click', () => openShip(x.id));
+  }
+}
+const openShip = (id) => shipDetail(id, { role: 'courier', onChange: () => { lastSig = ''; render(); } });
+
 async function loadHistory() {
   const list = (await api('GET', '/api/deliveries')).deliveries;
   const el = $('[data-hist]'); if (!el) return;
@@ -314,6 +341,7 @@ const actions = {
   sos: () => sendSOS(active?.id),
   tab: (el) => { tab = el.dataset.t; lastSig = ''; render(); },
   open: (el) => openRequest(+el.dataset.id),
+  ship: (el) => openShip(+el.dataset.id),
   toggle: async () => {
     if (!available && (!pos || Date.now() - lastFix > 60e3)) { showGate(pos ? 'lost' : 'off'); return toast(t('gps_off_title'), 'err'); }
     const r = await api('POST', '/api/courier/availability', { available: !available });
