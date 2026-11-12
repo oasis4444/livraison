@@ -1,0 +1,17 @@
+{
+  "name": "alefa-livraison",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Alefa — plateforme de livraison à vélo à Antananarivo (style inDrive) : client, livreur, administration.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "node --no-warnings tools/dev-server.mjs",
+    "test": "node --no-warnings --test tests/api.test.mjs",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply alefa-livraison-prod --remote",
+    "admin": "node tools/create-admin.mjs"
+  }
+}

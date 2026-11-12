@@ -1,0 +1,27 @@
+# Alefa Livraison — Cloudflare Workers (plan gratuit) + D1 + fichiers statiques.
+# Déploiement automatique : Cloudflare « Workers Builds » relié au dépôt GitHub (commande de déploiement : npx wrangler deploy).
+name = "alefa-livraison"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[vars]
+APP_VERSION = "1.0.0"
+# Plan gratuit : 10 ms CPU par requête → PBKDF2 réduit (verrouillage après 5 échecs conservé)
+PBKDF2_ITER = "10000"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "alefa-livraison-prod"
+database_id = "07f57312-6db2-4887-9b13-960ce5ab2c3b"
+migrations_dir = "migrations"
+
+# Maintenance horaire : purge des trajets GPS anciens, expiration des demandes, sessions périmées.
+[triggers]
+crons = ["17 * * * *"]
