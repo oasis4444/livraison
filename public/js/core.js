@@ -30,6 +30,7 @@ const D = {
     gps_denied: 'Activez la localisation GPS pour continuer.', set_points: 'Choisissez le départ et l\'arrivée.', tap_map: 'Touchez la carte pour placer le point',
     confirm_point: 'Valider ce point', scheduled_for: 'Programmée pour', describe_problem: 'Décrivez le problème', sent: 'Envoyé', error: 'Erreur',
     notifications: 'Notifications', mark_read: 'Tout marquer comme lu', new_offer: 'Nouvelle offre', abandon: 'Se désister', reason: 'Motif',
+    courier_contact: 'Vous êtes livreur ? Les comptes livreurs sont créés par l\'administration Alefa.', my_axe: 'Mon axe', next_axe: 'Ensuite', off_schedule: 'Hors de vos horaires de travail', free_axe: 'Toute la zone',
     pay_to: 'Payez au numéro', subscription_until: 'Abonnement valide jusqu\'au', offline_mode: 'Connexion perdue — dernière position affichée',
   },
   mg: {
@@ -58,6 +59,7 @@ const D = {
     gps_denied: 'Alefaso ny GPS hanohizana.', set_points: 'Fidio ny toerana halaina sy hanaterana.', tap_map: 'Tsindrio ny sarintany hametrahana ny teboka',
     confirm_point: 'Hamafisina ity toerana ity', scheduled_for: 'Voakasa amin\'ny', describe_problem: 'Lazao ny olana', sent: 'Lasa', error: 'Nisy olana',
     notifications: 'Fampandrenesana', mark_read: 'Novakiana daholo', new_offer: 'Tolotra vaovao', abandon: 'Hiala', reason: 'Antony',
+    courier_contact: 'Mpitondra entana ianao? Ny administration Alefa no mamorona ny kaontin\'ny mpitondra.', my_axe: 'Ny faritra iasako', next_axe: 'Manaraka', off_schedule: 'Ivelan\'ny ora fiasanao', free_axe: 'Faritra rehetra',
     pay_to: 'Aloavy amin\'ny laharana', subscription_until: 'Manan-kery hatramin\'ny', offline_mode: 'Tapaka ny fifandraisana — toerana farany no aseho',
   },
 };
@@ -71,6 +73,7 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&a
 export const ar = (n) => (n == null ? '—' : `${Math.round(n).toLocaleString('fr-FR').replace(/ /g, ' ')} Ar`);
 export const km = (n) => (n == null ? '—' : n < 1 ? `${Math.round(n * 1000)} m` : `${(Math.round(n * 10) / 10).toString().replace('.', ',')} km`);
 export const dt = (ms) => (ms ? new Date(ms).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+export const hm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 export const time = (ms) => new Date(ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 export const initials = (n) => (n || '?').split(/\s+/).map((x) => x[0]).slice(0, 2).join('').toUpperCase();
 export const stars = (r) => (r == null ? `<span class="muted tiny">Nouveau</span>` : `<span class="stars">★ ${String(r).replace('.', ',')}</span>`);

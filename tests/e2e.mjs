@@ -25,7 +25,7 @@ const LEAFLET_STUB = `
     tileLayer() { return mkLayer(); }, divIcon(o) { return o; },
     marker(ll, o) { let p = ll; const mk = mkLayer({ setLatLng(x) { p = x; return mk; }, getLatLng() { return { lat: p[0] ?? p.lat, lng: p[1] ?? p.lng }; }, setIcon() { return mk; }, icon: o.icon }); return mk; },
     polyline(c) { return mkLayer({ getBounds: () => b(c) }); }, layerGroup(a) { return mkLayer(); }, latLngBounds: b,
-    circle() { return mkLayer({ setLatLng() {}, setRadius() {} }); },
+    circle() { return mkLayer({ setLatLng() {}, setRadius() {}, setStyle() {} }); }, featureGroup() { return { getBounds: () => b([]) }; },
   };
 })();`;
 
@@ -60,20 +60,28 @@ try {
     await client.click('[type=submit]');
     await client.waitForSelector('[data-q=b]');
   });
-  await step('inscription livreur (en attente)', async () => {
-    await courier.goto(BASE);
-    await courier.click('[data-m=register]'); await courier.click('[data-r=courier]');
-    await courier.fill('[name=name]', 'Hery Vélo'); await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'secret12'); await courier.fill('[name=cin]', '101 211 123 456');
-    await courier.click('[type=submit]');
-    await courier.waitForSelector('text=Compte en attente de validation');
-  });
-  await step('admin valide le livreur', async () => {
+  await step('admin crée le livreur, un axe et son planning horaire', async () => {
     await admin.goto(BASE);
     await admin.fill('[name=phone]', '0340000000'); await admin.fill('[name=password]', 'admin12345'); await admin.click('[type=submit]');
     await admin.waitForSelector('text=Livraisons aujourd');
-    await admin.click('[data-v=couriers]');
-    await admin.click('[data-act=ustatus][data-s=active]');
-    await admin.waitForSelector('text=Actif', { timeout: 5000 }).catch(() => {});
+    await admin.click('[data-v=axes]'); await admin.click('[data-act=axe]');
+    await admin.fill('[data-n]', 'Analakely – Tsaralalana'); await admin.fill('[data-r]', '2');
+    await admin.evaluate(() => window.__maps.at(-1).setView([-18.9055, 47.5255]));
+    await admin.click('[data-ok]'); await admin.waitForSelector('text=Rayon 2 km');
+    await admin.click('[data-v=couriers]'); await admin.click('[data-act=newcourier]');
+    await admin.fill('[data-v=name]', 'Hery Vélo'); await admin.fill('[data-v=phone]', '034 11 111 11'); await admin.fill('[data-v=cin]', '101 211 123 456'); await admin.fill('[data-v=password]', 'velo1234');
+    await admin.click('[data-ok]'); await admin.waitForSelector('text=Livreur créé');
+    await admin.click('[data-pl]'); await admin.waitForSelector('[data-gax]');
+    await admin.check('[data-gax] input'); await admin.fill('[data-gfrom]', '00:00'); await admin.fill('[data-gto]', '23:59'); await admin.click('[data-gen]');
+    await admin.screenshot({ path: 'tests/screens/12-admin-planning.png' });
+    await admin.click('[data-save]'); await admin.waitForSelector('text=Planning enregistré');
+  });
+  await step('livreur se connecte (pas d\'inscription publique)', async () => {
+    await courier.goto(BASE);
+    await courier.click('[data-m=register]'); await courier.waitForSelector('text=créés par l\'administration');
+    await courier.click('[data-m=login]');
+    await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'velo1234'); await courier.click('[type=submit]');
+    await courier.waitForSelector('text=Analakely – Tsaralalana');
   });
   await step('livreur passe disponible', async () => {
     await courier.reload();
@@ -93,6 +101,10 @@ try {
     await client.screenshot({ path: 'tests/screens/02-client-demande.png' });
     await client.click('[data-act=submit]');
     await client.waitForSelector('text=Recherche de livreurs');
+  });
+  await step('client voit le livreur en temps réel (position exacte)', async () => {
+    const n = await client.evaluate(() => fetch('/api/couriers/nearby?lat=-18.9055&lng=47.5255', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()));
+    if (n.couriers[0]?.lat !== -18.903) throw new Error('position ' + JSON.stringify(n));
   });
   await step('livreur voit la demande et propose 10 000 Ar', async () => {
     await courier.waitForSelector('[data-act=open]', { timeout: 12000 });
@@ -139,6 +151,7 @@ try {
     await courier.screenshot({ path: 'tests/screens/07-livreur-revenus.png' });
   });
   await step('admin : tableau de bord, carte, rapports, paramètres', async () => {
+    await admin.click('[data-v=live]'); await admin.waitForSelector('text=🧭');
     await admin.click('[data-v=dash]'); await admin.waitForSelector('.kpis');
     await admin.screenshot({ path: 'tests/screens/08-admin-dashboard.png' });
     await admin.click('[data-v=live]'); await admin.waitForSelector('text=Livreurs (');

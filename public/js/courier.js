@@ -1,13 +1,13 @@
 // Application Livreur (vélo) : disponibilité, partage GPS, demandes proches, négociation, livraison avec PIN, revenus.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, getPosition, every, startNotifications, showNotifications, profileForm,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, getPosition, hm, every, startNotifications, showNotifications, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
 
 let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null;
 const mk = {};
-let routeLayer = null, tab = 'req', requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
+let axeLayer = null, axe = null, routeLayer = null, tab = 'req', requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
 
 export async function mount(el) {
   root = el;
@@ -31,6 +31,7 @@ export async function mount(el) {
     if (fresh.some((n) => n.kind === 'offer_accepted')) checkActive();
     if (fresh.some((n) => ['new_request', 'price_raised'].includes(n.kind))) loadRequests();
   });
+  axe = state.axe; drawAxe();
   startGps();
   await checkActive();
   if (!active) render();
@@ -69,6 +70,7 @@ async function loadRequests() {
   const qs = pos ? `?lat=${pos[0]}&lng=${pos[1]}` : '';
   const r = await api('GET', '/api/courier/requests' + qs);
   if (r.active_delivery && !active) return checkActive();
+  if (r.axe && JSON.stringify(r.axe) !== JSON.stringify(axe)) { axe = r.axe; drawAxe(); lastSig = ''; }
   const before = new Set(requests.map((x) => x.id));
   requests = r.requests;
   if (requests.some((x) => !before.has(x.id)) && before.size) beep();
@@ -83,8 +85,21 @@ async function loadRequests() {
   if (sig !== lastSig && tab === 'req') { lastSig = sig; render(); }
 }
 
+function drawAxe() {
+  if (!map) return;
+  axeLayer?.remove(); axeLayer = null;
+  const c = axe?.current;
+  if (c) axeLayer = L.circle([c.center_lat, c.center_lng], { radius: c.radius_km * 1000, color: c.color, weight: 2, fillOpacity: .07, interactive: false }).addTo(map);
+}
+function axeLine() {
+  if (!axe || axe.free) return `<div class="small muted" style="margin-top:8px">📍 ${t('my_axe')} : <b>${t('free_axe')}</b></div>`;
+  const c = axe.current, n = axe.next;
+  return `<div class="card" style="margin-top:8px;padding:10px 12px;${c ? `border-color:${esc(c.color)}` : 'background:var(--sun-soft);border:0'}">
+    ${c ? `📍 ${t('my_axe')} : <b>${esc(c.name)}</b> <span class="muted small">${hm(c.start_min)}–${hm(c.end_min)}</span>` : `⏸ <b>${t('off_schedule')}</b>`}
+    ${n ? `<div class="small muted">${t('next_axe')} : ${esc(n.name)} ${state.lang === 'mg' ? 'amin\'ny' : 'à'} ${hm(n.start_min)}</div>` : ''}</div>`;
+}
 function header() {
-  return `<button class="switch ${available ? 'on' : 'off'}" data-act="toggle"><span class="knob"></span><span class="grow" style="text-align:left">${available ? t('available') : t('unavailable')}</span><span class="small">${available ? '🟢 GPS' : ''}</span></button>
+  return `<button class="switch ${available ? 'on' : 'off'}" data-act="toggle"><span class="knob"></span><span class="grow" style="text-align:left">${available ? t('available') : t('unavailable')}</span><span class="small">${available ? '🟢 GPS' : ''}</span></button>${axeLine()}
     <div class="tabs" style="margin-top:10px"><button data-act="tab" data-t="req" class="${tab === 'req' ? 'on' : ''}">${t('requests')}${requests.length ? ` (${requests.length})` : ''}</button><button data-act="tab" data-t="wallet" class="${tab === 'wallet' ? 'on' : ''}">${t('wallet')}</button><button data-act="tab" data-t="hist" class="${tab === 'hist' ? 'on' : ''}">${t('history')}</button></div>`;
 }
 
@@ -105,7 +120,7 @@ function render() {
   if (tab === 'wallet') { body.innerHTML = header() + '<div data-wallet>…</div>'; return loadWallet(); }
   if (tab === 'hist') { body.innerHTML = header() + '<div data-hist class="list">…</div>'; return loadHistory(); }
   body.innerHTML = header() + (available
-    ? `<div class="list">${requests.map(reqCard).join('') || `<div style="text-align:center;padding:16px"><div class="radar" style="margin:10px auto 16px"></div><p class="muted">${t('no_requests')}</p></div>`}</div>`
+    ? `<div class="list">${requests.map(reqCard).join('') || (axe && !axe.free && !axe.current ? `<p class="muted" style="text-align:center;padding:16px">⏸ ${t('off_schedule')}</p>` : `<div style="text-align:center;padding:16px"><div class="radar" style="margin:10px auto 16px"></div><p class="muted">${t('no_requests')}</p></div>`)}</div>`
     : `<div style="text-align:center;padding:16px 8px"><div style="font-size:46px">🚲</div><p class="muted">${t('go_online')}</p></div>`);
 }
 

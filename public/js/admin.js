@@ -1,15 +1,15 @@
 // Tableau de bord Administrateur.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, every, startNotifications, showNotifications, profileForm, chatHtml, TANA,
+  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA,
 } from './core.js';
 
 let root, main, view = location.hash.replace('#', '') || 'dash', liveTimer = null, liveMap = null, counts = {};
 const liveMk = {};
-let trackLayer = null;
+let trackLayer = null, axeLayers = [];
 
 const NAV = [
-  ['dash', '📊', 'Tableau de bord'], ['live', '🗺️', 'Carte en direct'], ['deliveries', '📦', 'Livraisons'], ['couriers', '🚲', 'Livreurs'],
+  ['dash', '📊', 'Tableau de bord'], ['live', '🗺️', 'Carte en direct'], ['deliveries', '📦', 'Livraisons'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
   ['clients', '👥', 'Clients'], ['payments', '💰', 'Paiements & soldes'], ['complaints', '⚠️', 'Réclamations & SOS'], ['reports', '📈', 'Rapports'],
   ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
 ];
@@ -44,7 +44,7 @@ function head(title, extra = '') {
 
 async function show() {
   liveTimer?.stop(); liveTimer = null;
-  if (liveMap) { liveMap.remove(); liveMap = null; for (const k of Object.keys(liveMk)) delete liveMk[k]; trackLayer = null; }
+  if (liveMap) { liveMap.remove(); liveMap = null; for (const k of Object.keys(liveMk)) delete liveMk[k]; trackLayer = null; axeLayers = []; }
   renderNav();
   $('#side').classList.remove('open');
   main.innerHTML = '<p class="muted">Chargement…</p>';
@@ -92,11 +92,12 @@ const VIEWS = {
     liveTimer = every(5000, async () => {
       const r = await api('GET', '/api/admin/live');
       const keep = new Set();
+      if (liveMap && !axeLayers.length && r.axes.length) axeLayers = r.axes.map((a) => L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color, weight: 2, fillOpacity: .05, interactive: false }).addTo(liveMap).bindTooltip?.(esc(a.name)));
       for (const c of r.couriers) {
         const stale = r.server_time - c.last_seen > 2 * 60e3;
         keep.add('c' + c.id);
         upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : c.delivery_id ? 'busy' : ''), { refreshIcon: true })
-          ?.bindTooltip(`<b>${esc(c.name)}</b><br>${c.delivery_id ? `Livraison #${c.delivery_id} (${t('st_' + c.delivery_status)})` : 'Disponible'}<br>Vu à ${time(c.last_seen)}`)
+          ?.bindTooltip(`<b>${esc(c.name)}</b><br>${c.delivery_id ? `Livraison #${c.delivery_id} (${t('st_' + c.delivery_status)})` : 'Disponible'}${c.axe ? `<br>🧭 ${esc(c.axe)}` : ''}<br>Vu à ${time(c.last_seen)}`)
           .off('click').on('click', () => courierTrack(c));
       }
       for (const d of r.deliveries.filter((x) => x.status === 'open')) {
@@ -113,7 +114,7 @@ const VIEWS = {
         <div class="list">${r.deliveries.map((d) => `<div class="small" data-act="delivery" data-id="${d.id}" style="cursor:pointer"><div class="row between"><b>#${d.id} ${esc(d.client_name)}</b>${statusPill(d.status)}</div>
           <div class="muted ellipsis">${esc(d.pickup_addr || '')} → ${esc(d.drop_addr || '')}</div><div>${d.courier_name ? '🚲 ' + esc(d.courier_name) : '—'} · ${ar(d.final_price ?? d.proposed_price)}</div></div>`).join('') || '<p class="muted small">Aucune</p>'}</div>
         <h3 style="margin-top:14px">Livreurs (${r.couriers.length})</h3>
-        ${r.couriers.map((c) => `<div class="row between small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:4px 0"><span>${c.delivery_id ? '🟠' : '🟢'} ${esc(c.name)}</span><span class="muted">${time(c.last_seen)}</span></div>`).join('')}`;
+        ${r.couriers.map((c) => `<div class="row between small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:4px 0"><span>${c.delivery_id ? '🟠' : '🟢'} ${esc(c.name)}${c.axe ? ` <span class="tiny muted">🧭 ${esc(c.axe)}</span>` : ''}</span><span class="muted">${time(c.last_seen)}</span></div>`).join('')}`;
       $('[data-live-list]')._couriers = r.couriers;
     });
   },
@@ -192,7 +193,7 @@ const VIEWS = {
         <div class="panel stack"><h3>Tarification conseillée (vélo)</h3><div class="row">${f('base_fare', 'Prise en charge (Ar)')}${f('per_km', 'Prix par km (Ar)')}</div>
           <div class="row">${f('min_price', 'Prix minimum (Ar)')}${f('road_factor', 'Coefficient route', 'Distance réelle ≈ vol d\'oiseau × coef.')}</div>${f('bike_speed_kmh', 'Vitesse moyenne vélo (km/h)')}</div>
         <div class="panel stack"><h3>Fonctionnement</h3><div class="row">${f('request_radius_km', 'Rayon des demandes (km)')}${f('request_ttl_min', 'Expiration demande (min)')}</div>
-          <div class="row">${f('max_open_requests', 'Demandes simultanées / client')}${f('position_retention_days', 'Conservation trajets GPS (jours)')}</div></div>
+          <div class="row">${f('max_open_requests', 'Demandes simultanées / client')}${f('position_retention_days', 'Conservation trajets GPS (jours)')}</div>${f('axe_slot_minutes', 'Durée d\'un créneau d\'axe (minutes)', 'Durée par défaut lors de la génération des plannings (60 = 1 heure)')}</div>
       </div><div class="stack">
         <div class="panel stack"><h3>Plateforme & paiements</h3>${f('platform_name', 'Nom', '', 'text')}${f('support_phone', 'Téléphone support', '', 'tel')}
           ${f('mvola_number', 'Numéro marchand MVola', '', 'text')}${f('orange_money_number', 'Numéro Orange Money', '', 'text')}${f('airtel_money_number', 'Numéro Airtel Money', '', 'text')}</div>
@@ -202,6 +203,22 @@ const VIEWS = {
           ${r.promos.map((p) => `<div class="row between small" style="padding:6px 0;border-bottom:1px solid var(--line)"><span>${p.active ? '🟢' : '⚪'} <b>${esc(p.code)}</b> −${p.percent}%${p.max_amount ? ` (max ${ar(p.max_amount)})` : ''} · ${p.uses}${p.max_uses ? '/' + p.max_uses : ''} utilisations${p.expires_at ? ` · jusqu'au ${dt(p.expires_at)}` : ''}</span><button class="btn sm" data-act="promo" data-p='${esc(JSON.stringify(p))}'>Modifier</button></div>`).join('') || '<p class="muted small">Aucun</p>'}</div>
         <div class="panel"><div class="row between"><h3>Administrateurs & comptes</h3><button class="btn sm" data-act="newuser">＋ Créer un compte</button></div><p class="small muted">Créez un compte administrateur, un livreur pré-validé ou un compte entreprise.</p></div>
       </div></div>`;
+  },
+
+  async axes() {
+    const r = await api('GET', '/api/admin/axes');
+    main.innerHTML = head('Axes & planning', '<button class="btn primary" data-act="axe">＋ Nouvel axe</button>') + `
+      <p class="small muted">Un axe est un secteur de travail (cercle sur la carte). Attribuez des axes aux livreurs par créneaux horaires depuis <a href="#couriers">Livreurs → 🧭 Axes</a>.
+      Un livreur avec planning ne voit que les demandes dont le départ est dans l'axe du créneau en cours ; sans planning, il voit toute la zone autour de lui.</p>
+      <div class="grid2"><div class="livemap" id="axemap" style="height:520px"></div>
+      <div class="panel"><div class="list">${r.axes.map((a) => `<div class="row between" style="border-bottom:1px solid var(--line);padding-bottom:8px">
+        <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${esc(a.color)}"></span> <b>${esc(a.name)}</b>${a.active ? '' : ' <span class="muted">(inactif)</span>'}<br><span class="small muted">Rayon ${a.radius_km} km · ${a.couriers} livreur(s)</span></span>
+        <span><button class="btn sm" data-act="axe" data-a='${esc(JSON.stringify(a))}'>Modifier</button> <button class="btn sm danger" data-act="axedel" data-id="${a.id}">✕</button></span></div>`).join('') || '<p class="muted">Aucun axe. Créez-en un (ex : Analakely, Ankorondrano, Ivandry…).</p>'}</div></div></div>`;
+    liveMap = makeMap($('#axemap'), { zoom: 12, zoomControl: true });
+    if (liveMap && r.axes.length) {
+      const cs = r.axes.map((a) => L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color, weight: 2, fillOpacity: .12 }).addTo(liveMap).bindTooltip(esc(a.name), { permanent: true, direction: 'center' }));
+      liveMap.fitBounds(L.featureGroup(cs).getBounds().pad(.1));
+    }
   },
 
   async audit() {
@@ -216,7 +233,7 @@ async function usersView(role) {
   const qv = sessionStorage.getItem('adm_uq_' + role) || '';
   const r = await api('GET', `/api/admin/users?role=${role}&status=${st}&q=${encodeURIComponent(qv)}`);
   const isC = role === 'courier';
-  main.innerHTML = head(isC ? 'Livreurs' : 'Clients', `<a class="btn sm" href="#" data-act="export" data-type="users">⬇ CSV</a>`) + `
+  main.innerHTML = head(isC ? 'Livreurs' : 'Clients', `${isC ? '<button class="btn sm primary" data-act="newcourier">＋ Nouveau livreur</button>' : ''}<a class="btn sm" href="#" data-act="export" data-type="users">⬇ CSV</a>`) + `
     <div class="filters"><select class="input" data-u="status"><option value="">Tous</option>${(isC ? ['pending', 'active', 'suspended', 'rejected'] : ['active', 'suspended']).map((s) => `<option value="${s}" ${st === s ? 'selected' : ''}>${{ pending: 'À valider', active: 'Actifs', suspended: 'Suspendus', rejected: 'Refusés' }[s]}</option>`).join('')}</select>
     <input class="input" data-u="q" placeholder="Nom ou téléphone" value="${esc(qv)}"><button class="btn sm primary" data-act="ufilter" data-role="${role}">Filtrer</button></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nom</th><th>Téléphone</th>${isC ? '<th>CIN</th><th>Note</th><th class="num">Solde</th><th>En ligne</th>' : '<th>Type</th><th>Annulations</th>'}<th class="num">Livraisons</th><th>Inscrit</th><th>Statut</th><th></th></tr></thead><tbody>
@@ -227,7 +244,8 @@ async function usersView(role) {
       <td style="white-space:nowrap">${u.status !== 'active' ? `<button class="btn sm primary" data-act="ustatus" data-id="${u.id}" data-s="active">${u.status === 'pending' ? 'Valider' : 'Activer'}</button>` : ''}
         ${u.status === 'pending' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="rejected">Refuser</button>` : ''}
         ${u.status === 'active' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="suspended">Suspendre</button>` : ''}
-        ${isC && u.status === 'active' ? `<button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}">💰</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
+        ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button>` : ''}
+        <button class="btn sm ghost" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}" title="Nouveau mot de passe">🔑</button></td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
     </tbody></table></div>`;
 }
 
@@ -358,6 +376,16 @@ const actions = {
       try { await api('POST', '/api/admin/promos', { code: v('[data-c]'), percent: Number(v('[data-pc]')), max_amount: v('[data-mx]') || null, max_uses: v('[data-mu]') || null, expires_at: v('[data-ex]') ? new Date(v('[data-ex]') + 'T23:59:59').getTime() : null, active: m.el.querySelector('[data-a]').checked }); m.close(); show(); } catch (e) { toastErr(e); }
     };
   },
+  newcourier: () => courierForm(),
+  planning: (el) => planningForm(+el.dataset.id, el.dataset.name),
+  pwreset: async (el) => {
+    const pw = await promptBox(`Nouveau mot de passe — ${el.dataset.name}`, { label: 'Mot de passe provisoire (6 caractères min.)', value: Math.random().toString(36).slice(2, 10) });
+    if (!pw) return;
+    await api('POST', `/api/admin/users/${el.dataset.id}/password`, { password: pw });
+    modal('Mot de passe modifié', `<p>Communiquez ce mot de passe à <b>${esc(el.dataset.name)}</b> :</p><p style="font-size:1.6rem;font-weight:800;text-align:center;letter-spacing:.05em">${esc(pw)}</p><p class="small muted">Il pourra le changer dans son profil.</p>`);
+  },
+  axe: (el) => axeForm(el.dataset.a ? JSON.parse(el.dataset.a) : null),
+  axedel: async (el) => { if (!(await confirmBox('Supprimer cet axe ? Il sera retiré du planning des livreurs.', 'Supprimer', true))) return; await api('DELETE', `/api/admin/axes/${el.dataset.id}`); show(); },
   newuser: () => {
     const m = modal('Créer un compte', `<div class="stack"><select class="input" data-r><option value="admin">Administrateur</option><option value="courier">Livreur (pré-validé)</option><option value="client">Client entreprise</option></select>
       <input class="input" data-n placeholder="Nom"><input class="input" data-p type="tel" placeholder="Téléphone"><input class="input" data-c placeholder="Entreprise / CIN (facultatif)"><input class="input" data-pw type="text" placeholder="Mot de passe provisoire (6 car. min.)">
@@ -368,3 +396,99 @@ const actions = {
     };
   },
 };
+
+// ---------------------------------------------------------------- livreurs, axes, planning
+function courierForm() {
+  const m = modal('Nouveau livreur', `<div class="stack">
+    <div class="row"><label class="field grow"><span>Nom complet</span><input class="input" data-v="name"></label><label class="field grow"><span>Téléphone</span><input class="input" type="tel" data-v="phone" placeholder="034 12 345 67"></label></div>
+    <div class="row"><label class="field grow"><span>Numéro CIN</span><input class="input" data-v="cin"></label><label class="field grow"><span>Mot de passe provisoire</span><input class="input" data-v="password" value="${Math.random().toString(36).slice(2, 10)}"></label></div>
+    <label class="field"><span>Adresse</span><input class="input" data-v="address"></label>
+    <label class="field"><span>Contact d'urgence</span><input class="input" data-v="emergency_contact" placeholder="Nom + téléphone"></label>
+    <label class="field"><span>Vélo / documents vérifiés</span><textarea class="input" data-v="doc_note" rows="2" placeholder="Type et couleur du vélo, documents contrôlés…"></textarea></label>
+    <button class="btn primary block" data-ok>Créer le livreur</button></div>`);
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    const b = { role: 'courier' }; m.el.querySelectorAll('[data-v]').forEach((i) => (b[i.dataset.v] = i.value));
+    try {
+      const r = await api('POST', '/api/admin/users', b);
+      m.close();
+      const done = modal('Livreur créé ✅', `<p>Identifiants à communiquer à <b>${esc(b.name)}</b> :</p><div class="card"><div>📱 <b>${esc(b.phone)}</b></div><div>🔑 <b>${esc(b.password)}</b></div><div class="small muted">Lien : ${esc(location.origin)}</div></div>
+        <button class="btn primary block" style="margin-top:12px" data-pl>🧭 Définir ses axes maintenant</button>`);
+      done.el.querySelector('[data-pl]').onclick = () => { done.close(); planningForm(r.id, b.name); };
+      show();
+    } catch (e) { toastErr(e); }
+  };
+}
+
+function axeForm(a) {
+  a ||= { name: '', center_lat: TANA[0], center_lng: TANA[1], radius_km: 1.5, color: '#0b6e4f', active: 1 };
+  const m = modal(a.id ? `Axe : ${a.name}` : 'Nouvel axe', `<div class="stack">
+    <div class="row"><input class="input grow" data-n placeholder="Nom (ex : Analakely – Tsaralalana)" value="${esc(a.name)}"><input type="color" data-c value="${esc(a.color)}" style="width:52px;height:46px;border:0;background:none"></div>
+    <div class="small muted">Déplacez la carte pour centrer l'axe, réglez le rayon.</div>
+    <div id="axm" style="height:320px;border-radius:12px;overflow:hidden;position:relative"></div>
+    <label class="field"><span>Rayon (km)</span><input class="input" type="number" step="0.1" min="0.2" data-r value="${a.radius_km}"></label>
+    <label class="row small"><input type="checkbox" data-a ${a.active ? 'checked' : ''}> Axe actif</label>
+    <button class="btn primary block" data-ok>Enregistrer</button></div>`);
+  const zm = makeMap(m.el.querySelector('#axm'), { center: [a.center_lat, a.center_lng], zoom: 14, zoomControl: true });
+  const circle = zm && L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color }).addTo(zm);
+  const upd = () => { if (!circle) return; circle.setLatLng(zm.getCenter()); circle.setRadius(Number(m.el.querySelector('[data-r]').value) * 1000); circle.setStyle?.({ color: m.el.querySelector('[data-c]').value }); };
+  zm?.on('move', upd); m.el.querySelector('[data-r]').addEventListener('input', upd); m.el.querySelector('[data-c]').addEventListener('input', upd);
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    const c = zm ? zm.getCenter() : { lat: a.center_lat, lng: a.center_lng };
+    try { await api('POST', '/api/admin/axes', { id: a.id, name: m.el.querySelector('[data-n]').value, color: m.el.querySelector('[data-c]').value, center_lat: c.lat, center_lng: c.lng, radius_km: Number(m.el.querySelector('[data-r]').value), active: m.el.querySelector('[data-a]').checked }); m.close(); show(); } catch (e) { toastErr(e); }
+  };
+}
+
+const DAYS = ['L', 'Ma', 'Me', 'J', 'V', 'S', 'D'];
+const toMin = (v) => { const [h, mi] = String(v || '0:0').split(':').map(Number); return h * 60 + (mi || 0); };
+async function planningForm(courierId, name) {
+  const [{ axes, slot_minutes }, cur] = await Promise.all([api('GET', '/api/admin/axes'), api('GET', `/api/admin/couriers/${courierId}/axes`)]);
+  if (!axes.length) { toast('Créez d\'abord un axe (menu Axes & planning)', 'err'); location.hash = 'axes'; return; }
+  let slots = cur.slots.map((x) => ({ axe_id: x.axe_id, start_min: x.start_min, end_min: x.end_min, days: x.days }));
+  const m = modal(`Axes & horaires — ${name}`, `<div class="stack">
+    <div class="small muted">Sans aucun créneau, le livreur travaille sur toute la zone autour de lui. Avec des créneaux, il ne reçoit que les demandes de l'axe du créneau en cours (heure de Madagascar).</div>
+    <div class="card" style="background:var(--bg);border:0"><b>⚡ Générer une rotation</b>
+      <div class="small muted" style="margin:4px 0 8px">Ex : de 07:00 à 19:00, créneaux de ${slot_minutes} min, en alternant les axes cochés.</div>
+      <div class="chips" data-gax>${axes.filter((a) => a.active).map((a) => `<label class="chip"><input type="checkbox" value="${a.id}" style="margin-right:4px">${esc(a.name)}</label>`).join('')}</div>
+      <div class="row wrap" style="margin-top:8px"><label class="field"><span>De</span><input class="input" type="time" data-gfrom value="07:00"></label><label class="field"><span>À</span><input class="input" type="time" data-gto value="19:00"></label>
+        <label class="field"><span>Créneau (min)</span><input class="input" type="number" min="15" step="15" data-gstep value="${slot_minutes}" style="width:100px"></label>
+        <button class="btn sun" data-gen style="align-self:flex-end">Générer</button></div></div>
+    <div class="row between"><b>Créneaux</b><span><button class="btn sm" data-add>＋ Créneau</button> <button class="btn sm danger" data-clear>Tout effacer</button></span></div>
+    <div data-slots class="list"></div>
+    <button class="btn primary block" data-save>Enregistrer le planning</button></div>`, { wide: true });
+  const box = m.el.querySelector('[data-slots]');
+  const render = () => {
+    slots.sort((a, b) => a.start_min - b.start_min);
+    box.innerHTML = slots.map((x, i) => `<div class="row wrap" data-i="${i}" style="border-bottom:1px solid var(--line);padding-bottom:8px">
+      <select class="input" data-k="axe_id" style="width:auto;min-width:160px">${axes.map((a) => `<option value="${a.id}" ${a.id === x.axe_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      <input class="input" type="time" data-k="start" value="${hm(x.start_min)}" style="width:auto"> → <input class="input" type="time" data-k="end" value="${x.end_min >= 1440 ? '23:59' : hm(x.end_min)}" style="width:auto">
+      <span class="chips">${DAYS.map((d, j) => `<button class="chip ${String(x.days).includes(String(j + 1)) ? 'on' : ''}" data-day="${j + 1}" style="padding:.25rem .5rem">${d}</button>`).join('')}</span>
+      <button class="btn sm danger" data-del>✕</button></div>`).join('') || '<p class="muted small">Aucun créneau : le livreur travaille sur toute la zone.</p>';
+  };
+  render();
+  box.addEventListener('change', (e) => {
+    const row = e.target.closest('[data-i]'); if (!row) return; const x = slots[+row.dataset.i];
+    if (e.target.dataset.k === 'axe_id') x.axe_id = +e.target.value;
+    if (e.target.dataset.k === 'start') x.start_min = toMin(e.target.value);
+    if (e.target.dataset.k === 'end') { const v = toMin(e.target.value); x.end_min = v === 1439 ? 1440 : v; }
+  });
+  box.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-i]'); if (!row) return; const x = slots[+row.dataset.i];
+    if (e.target.closest('[data-del]')) { slots.splice(+row.dataset.i, 1); render(); }
+    const d = e.target.closest('[data-day]')?.dataset.day;
+    if (d) { x.days = String(x.days).includes(d) ? String(x.days).replace(d, '') : [...String(x.days) + d].sort().join(''); render(); }
+  });
+  m.el.querySelector('[data-add]').onclick = () => { const last = slots[slots.length - 1]; const st = last ? last.end_min % 1440 : 420; slots.push({ axe_id: axes[0].id, start_min: st, end_min: Math.min(1440, st + slot_minutes), days: '1234567' }); render(); };
+  m.el.querySelector('[data-clear]').onclick = () => { slots = []; render(); };
+  m.el.querySelector('[data-gen]').onclick = () => {
+    const ids = [...m.el.querySelectorAll('[data-gax] input:checked')].map((i) => +i.value);
+    if (!ids.length) return toast('Cochez au moins un axe', 'err');
+    const from = toMin(m.el.querySelector('[data-gfrom]').value), to = toMin(m.el.querySelector('[data-gto]').value) || 1440, step = Math.max(15, Number(m.el.querySelector('[data-gstep]').value) || 60);
+    if (to <= from) return toast('Heure de fin invalide', 'err');
+    slots = []; let k = 0;
+    for (let t0 = from; t0 < to; t0 += step) slots.push({ axe_id: ids[k++ % ids.length], start_min: t0, end_min: Math.min(to, t0 + step), days: '1234567' });
+    render();
+  };
+  m.el.querySelector('[data-save]').onclick = async () => {
+    try { await api('PUT', `/api/admin/couriers/${courierId}/axes`, { slots }); m.close(); toast('Planning enregistré', 'ok'); } catch (e) { toastErr(e); }
+  };
+}

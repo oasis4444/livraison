@@ -41,7 +41,7 @@ export async function mount(el) {
   const active = list.find((d) => ['open', 'assigned', 'picked_up'].includes(d.status))
     || list.find((d) => d.status === 'delivered' && !d.rating && Date.now() - d.delivered_at < 3 * 3600e3);
   if (active) track(active.id); else renderHome();
-  nearbyTimer = every(10000, showNearby);
+  nearbyTimer = every(5000, showNearby);
 }
 
 // ---------------------------------------------------------------- position & livreurs proches
@@ -60,7 +60,10 @@ async function showNearby() {
   const c = form.a || (me && { lat: me[0], lng: me[1] }) || { lat: TANA[0], lng: TANA[1] };
   const r = await api('GET', `/api/couriers/nearby?lat=${c.lat}&lng=${c.lng}`);
   const keep = new Set();
-  r.couriers.forEach((p, i) => { keep.add('n' + i); upsertMarker(map, mk, 'n' + i, [p.lat, p.lng], icons.bike(), { interactive: false }); });
+  r.couriers.forEach((p) => {
+    keep.add('n' + p.id);
+    upsertMarker(map, mk, 'n' + p.id, [p.lat, p.lng], icons.bike())?.bindTooltip(`🚲 ${esc(p.name)} · ${km(p.distance_km)}${p.rating ? ` · ★ ${p.rating}` : ''}`);
+  });
   for (const k of Object.keys(mk)) if (k.startsWith('n') && !keep.has(k)) { mk[k].remove(); delete mk[k]; }
   const el = $('[data-near]'); if (el) el.textContent = `🚲 ${r.couriers.length} ${t('couriers_near')}`;
 }

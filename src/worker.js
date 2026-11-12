@@ -65,25 +65,19 @@ const iterations = (env) => Number(env.PBKDF2_ITER || 10000);
 
 async function register(ctx, env) {
   const b = ctx.body;
-  const role = b.role === 'courier' ? 'courier' : 'client';
+  if (b.role === 'courier') fail(403, 'courier_by_admin', 'Les comptes livreurs sont créés par l\'administration Alefa. Contactez-nous.');
+  const role = 'client';
   const phone = normalizePhone(b.phone);
   const name = str(b.name, { min: 2, max: 80, name: 'Nom' });
   const password = str(b.password, { min: 6, max: 128, name: 'Mot de passe (6 caractères min.)' });
   if (await one(env, 'SELECT id FROM users WHERE phone = ?', phone)) fail(409, 'phone_taken', 'Ce numéro est déjà inscrit');
   const salt = randomHex(16);
   const hash = await hashPassword(password, salt, iterations(env));
-  const status = role === 'courier' ? 'pending' : 'active';
+  const status = 'active';
   const res = await run(env, `INSERT INTO users (phone, name, role, pass_hash, pass_salt, status, lang, is_business, company, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?)`, phone, name, role, hash, salt, status, b.lang === 'mg' ? 'mg' : 'fr',
     b.is_business ? 1 : 0, b.is_business ? str(b.company, { max: 120 }) : null, now());
   const id = res.meta.last_row_id;
-  if (role === 'courier') {
-    await run(env, 'INSERT INTO couriers (user_id, vehicle, cin, address, emergency_contact, doc_note) VALUES (?,?,?,?,?,?)',
-      id, 'velo', str(b.cin, { min: 5, max: 30, name: 'Numéro CIN' }), str(b.address, { max: 200 }),
-      str(b.emergency_contact, { max: 60 }), str(b.doc_note, { max: 500 }));
-    const admins = await all(env, "SELECT id FROM users WHERE role='admin' AND status='active'");
-    await notify(env, admins.map((a) => a.id), 'courier_signup', 'Nouveau livreur à valider', `${name} (${phone})`);
-  }
   const user = await one(env, 'SELECT * FROM users WHERE id = ?', id);
   ctx.user = user;
   await audit(env, ctx, 'register', { role });
@@ -113,7 +107,7 @@ async function login(ctx, env) {
 async function me(ctx, env) {
   const u = ctx.user;
   const out = { user: publicUser(u) };
-  if (u.role === 'courier') out.courier = await courierProfile(env, u.id);
+  if (u.role === 'courier') { out.courier = await courierProfile(env, u.id); out.axe = await courierAxeState(env, u.id); }
   return json(out);
 }
 
@@ -178,12 +172,44 @@ async function nearbyCouriers(env, lat, lng, km) {
   return rows.map((r) => ({ ...r, distance_km: haversineKm(lat, lng, r.lat, r.lng) })).filter((r) => r.distance_km <= km);
 }
 
+// ---------------------------------------------------------------- axes (secteurs) et planning
+const mgNow = () => { const d = new Date(now() + 3 * 3600e3); return { min: d.getUTCHours() * 60 + d.getUTCMinutes(), day: ((d.getUTCDay() + 6) % 7) + 1 }; };
+const inAxe = (a, lat, lng) => haversineKm(lat, lng, a.center_lat, a.center_lng) <= a.radius_km;
+const SLOT_SQL = `SELECT ca.*, a.name, a.center_lat, a.center_lng, a.radius_km, a.color, a.active FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id`;
+
+function axeState(slots) {
+  if (!slots.length) return { free: true, slots: [] };
+  const { min, day } = mgNow();
+  const today = slots.filter((x) => String(x.days).includes(String(day)) && x.active).sort((a, b) => a.start_min - b.start_min);
+  const pick = (x) => x && { id: x.axe_id, name: x.name, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km, color: x.color, start_min: x.start_min, end_min: x.end_min };
+  return { free: false, current: pick(today.find((x) => x.start_min <= min && min < x.end_min)), next: pick(today.find((x) => x.start_min > min)), today: today.map(pick) };
+}
+async function courierAxeState(env, courierId) {
+  return axeState(await all(env, `${SLOT_SQL} WHERE ca.courier_id = ? ORDER BY ca.start_min`, courierId));
+}
+// Le livreur peut-il servir ce point de départ ? Sans planning : tout le rayon. Avec planning : uniquement l'axe du créneau en cours.
+const axeAllows = (st, lat, lng) => st.free || (st.current && inAxe(st.current, lat, lng));
+
+// Livreurs à prévenir pour une demande : disponibles, et (sans axe & dans le rayon) ou (axe du créneau contenant le départ).
+async function eligibleCouriers(env, lat, lng, km) {
+  const rows = await all(env, `SELECT c.user_id, c.lat, c.lng FROM couriers c JOIN users u ON u.id = c.user_id
+    WHERE c.available = 1 AND u.status = 'active' AND c.last_seen > ? AND c.lat IS NOT NULL`, now() - 10 * 60e3);
+  if (!rows.length) return [];
+  const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id IN (${rows.map(() => '?').join(',')})`, ...rows.map((r) => r.user_id));
+  return rows.filter((r) => {
+    const st = axeState(slots.filter((x) => x.courier_id === r.user_id));
+    return st.free ? haversineKm(lat, lng, r.lat, r.lng) <= km : axeAllows(st, lat, lng);
+  });
+}
+
 async function clientNearby(ctx, env) {
   const [lat, lng] = coord(ctx.url.searchParams.get('lat'), ctx.url.searchParams.get('lng'));
   const s = await settings(env);
-  const list = await nearbyCouriers(env, lat, lng, Number(s.request_radius_km));
-  // Positions arrondies (~100 m) : confidentialité des livreurs avant attribution.
-  return json({ couriers: list.slice(0, 50).map((c) => ({ lat: Math.round(c.lat * 1000) / 1000, lng: Math.round(c.lng * 1000) / 1000 })) });
+  const list = await nearbyCouriers(env, lat, lng, Math.max(Number(s.request_radius_km), 5));
+  const names = list.length ? await all(env, `SELECT id, name FROM users WHERE id IN (${list.map(() => '?').join(',')})`, ...list.map((c) => c.user_id)) : [];
+  // Positions réelles, actualisées toutes les 5 s (prénom seulement).
+  return json({ couriers: list.slice(0, 80).map((c) => ({ id: c.user_id, name: (names.find((n) => n.id === c.user_id)?.name || '').split(' ')[0], lat: c.lat, lng: c.lng,
+    rating: c.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null, distance_km: Math.round(c.distance_km * 100) / 100 })) });
 }
 
 // ---------------------------------------------------------------- livraisons (client)
@@ -222,7 +248,7 @@ async function createDelivery(ctx, env) {
     qv.distance_km, qv.suggested_price, price, discount, promo, pay, randomPin(), scheduled, now());
   const id = res.meta.last_row_id;
   if (promo) await run(env, 'UPDATE promos SET uses = uses + 1 WHERE code = ?', promo);
-  const near = await nearbyCouriers(env, p[0], p[1], Number(s.request_radius_km));
+  const near = await eligibleCouriers(env, p[0], p[1], Number(s.request_radius_km));
   await notify(env, near.map((c) => c.user_id), 'new_request', 'Nouvelle demande de livraison',
     `${price.toLocaleString('fr-FR')} Ar · ${qv.distance_km} km · ${b.pickup_addr || ''}`.trim(), id);
   await audit(env, ctx, 'delivery_create', { id, price });
@@ -301,7 +327,7 @@ async function raisePrice(ctx, env) {
   const price = int(ctx.body.price, { min: d.proposed_price + 1, max: 1_000_000, name: 'Nouveau prix (doit être supérieur)' });
   await run(env, 'UPDATE deliveries SET proposed_price = ? WHERE id = ?', price, d.id);
   const s = await settings(env);
-  const near = await nearbyCouriers(env, d.pickup_lat, d.pickup_lng, Number(s.request_radius_km));
+  const near = await eligibleCouriers(env, d.pickup_lat, d.pickup_lng, Number(s.request_radius_km));
   await notify(env, near.map((c) => c.user_id), 'price_raised', 'Prix augmenté', `${price.toLocaleString('fr-FR')} Ar · ${d.pickup_addr || ''}`, d.id);
   return json({ ok: true, proposed_price: price });
 }
@@ -441,8 +467,10 @@ async function courierRequests(ctx, env) {
   const s = await settings(env);
   const lat = Number(ctx.url.searchParams.get('lat') ?? c.lat), lng = Number(ctx.url.searchParams.get('lng') ?? c.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0) return json({ requests: [], need_location: true });
-  const km = Number(s.request_radius_km);
-  const [a, b, cc, d] = bbox(lat, lng, km);
+  const axe = await courierAxeState(env, u.id);
+  if (!axe.free && !axe.current) return json({ requests: [], axe, off_schedule: true });
+  const km = axe.free ? Number(s.request_radius_km) : null;
+  const [a, b, cc, d] = axe.free ? bbox(lat, lng, km) : bbox(axe.current.center_lat, axe.current.center_lng, axe.current.radius_km);
   const rows = await all(env, `SELECT d.id, d.type, d.description, d.pickup_lat, d.pickup_lng, d.pickup_addr, d.drop_lat, d.drop_lng, d.drop_addr,
       d.distance_km, d.suggested_price, d.proposed_price, d.payment_method, d.scheduled_at, d.created_at, u.name AS client_name,
       o.price AS my_price, o.status AS my_status
@@ -452,9 +480,9 @@ async function courierRequests(ctx, env) {
       AND (d.scheduled_at IS NOT NULL OR d.created_at > ?)
     ORDER BY d.created_at DESC LIMIT 50`, u.id, u.id, a, b, cc, d, now() - Number(s.request_ttl_min) * 60e3);
   const list = rows.map((r) => ({ ...r, to_pickup_km: Math.round(haversineKm(lat, lng, r.pickup_lat, r.pickup_lng) * 100) / 100 }))
-    .filter((r) => r.to_pickup_km <= km && r.my_status !== 'withdrawn').sort((x, y) => x.to_pickup_km - y.to_pickup_km);
+    .filter((r) => (axe.free ? r.to_pickup_km <= km : inAxe(axe.current, r.pickup_lat, r.pickup_lng)) && r.my_status !== 'withdrawn').sort((x, y) => x.to_pickup_km - y.to_pickup_km);
   const active = await one(env, "SELECT id FROM deliveries WHERE courier_id = ? AND status IN ('assigned','picked_up')", u.id);
-  return json({ requests: list, active_delivery: active?.id ?? null });
+  return json({ requests: list, active_delivery: active?.id ?? null, axe });
 }
 
 async function makeOffer(ctx, env) {
@@ -470,6 +498,8 @@ async function makeOffer(ctx, env) {
   await expireIfStale(env, d);
   if (d.status !== 'open') fail(409, 'not_open', 'La demande n\'est plus ouverte');
   if (d.client_id === u.id) fail(400, 'own', 'Impossible');
+  const axe = await courierAxeState(env, u.id);
+  if (!axeAllows(axe, d.pickup_lat, d.pickup_lng)) fail(403, 'out_of_axe', axe.current ? `Cette demande est hors de votre axe (${axe.current.name})` : 'Vous êtes hors de vos horaires de travail');
   const price = ctx.body.price == null ? d.proposed_price : int(ctx.body.price, { min: Number(s.min_price), max: 1_000_000, name: 'Prix' });
   const dist = c.lat != null ? haversineKm(c.lat, c.lng, d.pickup_lat, d.pickup_lng) : null;
   const eta = dist != null ? Math.max(2, Math.round((dist * 1.3 / Number(s.bike_speed_kmh)) * 60)) : null;
@@ -619,7 +649,12 @@ async function adminLive(ctx, env) {
     FROM deliveries d JOIN users cl ON cl.id = d.client_id LEFT JOIN users cu ON cu.id = d.courier_id
     WHERE d.status IN ('open','assigned','picked_up') ORDER BY d.created_at DESC LIMIT 200`);
   const sos = await all(env, "SELECT * FROM complaints WHERE status = 'open' AND kind = 'sos' ORDER BY at DESC LIMIT 20");
-  return json({ couriers, deliveries, sos, server_time: now() });
+  const axes = await all(env, 'SELECT * FROM axes WHERE active = 1');
+  if (couriers.length) {
+    const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id IN (${couriers.map(() => '?').join(',')})`, ...couriers.map((c) => c.id));
+    for (const c of couriers) { const st = axeState(slots.filter((x) => x.courier_id === c.id)); c.axe = st.free ? null : st.current?.name || 'hors horaires'; }
+  }
+  return json({ couriers, deliveries, sos, axes, server_time: now() });
 }
 
 async function adminUsers(ctx, env) {
@@ -649,7 +684,8 @@ async function adminCreateUser(ctx, env) {
     phone, str(b.name, { min: 2, max: 80, name: 'Nom' }), role,
     await hashPassword(str(b.password, { min: 6, max: 128, name: 'Mot de passe (6 caractères min.)' }), salt, iterations(env)), salt, 'active',
     b.is_business ? 1 : 0, str(b.company, { max: 120 }) || null, now());
-  if (role === 'courier') await run(env, 'INSERT INTO couriers (user_id, cin, validated_at) VALUES (?,?,?)', res.meta.last_row_id, str(b.cin, { max: 30 }), now());
+  if (role === 'courier') await run(env, 'INSERT INTO couriers (user_id, vehicle, cin, address, emergency_contact, doc_note, validated_at) VALUES (?,?,?,?,?,?,?)',
+    res.meta.last_row_id, 'velo', str(b.cin, { min: 5, max: 30, name: 'Numéro CIN' }), str(b.address, { max: 200 }), str(b.emergency_contact, { max: 60 }), str(b.doc_note, { max: 500 }), now());
   await audit(env, ctx, 'admin_user_create', { id: res.meta.last_row_id, role });
   return json({ id: res.meta.last_row_id }, 201);
 }
@@ -701,7 +737,7 @@ async function adminSettingsGet(ctx, env) {
 }
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
-  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt'];
+  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -837,6 +873,58 @@ async function adminTrack(ctx, env) {
   return json({ positions: await all(env, 'SELECT lat, lng, at, delivery_id FROM positions WHERE courier_id = ? AND at BETWEEN ? AND ? ORDER BY at LIMIT 5000', cid, from, to) });
 }
 
+async function adminAxes(ctx, env) {
+  const axes = await all(env, 'SELECT a.*, (SELECT COUNT(DISTINCT courier_id) FROM courier_axes ca WHERE ca.axe_id = a.id) AS couriers FROM axes a ORDER BY a.name');
+  return json({ axes, slot_minutes: Number((await settings(env)).axe_slot_minutes || 60) });
+}
+async function adminAxeSave(ctx, env) {
+  const b = ctx.body;
+  const [lat, lng] = coord(b.center_lat, b.center_lng);
+  const radius = Number(b.radius_km);
+  if (!(radius >= 0.2 && radius <= 50)) fail(400, 'invalid', 'Rayon invalide (0,2 – 50 km)');
+  const name = str(b.name, { min: 2, max: 60, name: 'Nom de l\'axe' });
+  const color = /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : '#0b6e4f';
+  if (b.id) await run(env, 'UPDATE axes SET name = ?, center_lat = ?, center_lng = ?, radius_km = ?, color = ?, active = ? WHERE id = ?', name, lat, lng, radius, color, b.active === false ? 0 : 1, int(b.id));
+  else await run(env, 'INSERT INTO axes (name, center_lat, center_lng, radius_km, color) VALUES (?,?,?,?,?)', name, lat, lng, radius, color);
+  await audit(env, ctx, 'admin_axe', { name });
+  return json({ ok: true });
+}
+async function adminAxeDelete(ctx, env) {
+  await run(env, 'DELETE FROM axes WHERE id = ?', ctx.params.id);
+  await audit(env, ctx, 'admin_axe_delete', { id: ctx.params.id });
+  return json({ ok: true });
+}
+async function adminCourierAxesGet(ctx, env) {
+  const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id = ? ORDER BY ca.start_min`, ctx.params.id);
+  return json({ slots, state: axeState(slots) });
+}
+async function adminCourierAxesPut(ctx, env) {
+  const cid = ctx.params.id;
+  if (!(await one(env, 'SELECT user_id FROM couriers WHERE user_id = ?', cid))) fail(404, 'not_found', 'Livreur introuvable');
+  const slots = Array.isArray(ctx.body.slots) ? ctx.body.slots.slice(0, 96) : [];
+  const stmts = [q(env, 'DELETE FROM courier_axes WHERE courier_id = ?', cid)];
+  for (const x of slots) {
+    const start = int(x.start_min, { min: 0, max: 1439, name: 'Heure de début' }), end = int(x.end_min, { min: 1, max: 1440, name: 'Heure de fin' });
+    if (end <= start) fail(400, 'invalid', 'L\'heure de fin doit être après l\'heure de début');
+    const days = String(x.days || '1234567').replace(/[^1-7]/g, '') || '1234567';
+    stmts.push(q(env, 'INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days) VALUES (?,?,?,?,?)', cid, int(x.axe_id), start, end, days));
+  }
+  await env.DB.batch(stmts);
+  await notify(env, [cid], 'axe', 'Planning mis à jour', 'Vos axes de travail ont été modifiés par l\'administration.');
+  await audit(env, ctx, 'admin_courier_axes', { courier: cid, slots: slots.length });
+  return json({ ok: true });
+}
+async function adminResetPassword(ctx, env) {
+  const target = await one(env, 'SELECT id FROM users WHERE id = ?', ctx.params.id);
+  if (!target) fail(404, 'not_found', 'Utilisateur introuvable');
+  const salt = randomHex(16);
+  await run(env, 'UPDATE users SET pass_hash = ?, pass_salt = ?, failed_logins = 0, locked_until = NULL WHERE id = ?',
+    await hashPassword(str(ctx.body.password, { min: 6, max: 128, name: 'Mot de passe (6 caractères min.)' }), salt, iterations(env)), salt, target.id);
+  await run(env, 'DELETE FROM sessions WHERE user_id = ?', target.id);
+  await audit(env, ctx, 'admin_password_reset', { id: target.id });
+  return json({ ok: true });
+}
+
 async function adminAudit(ctx, env) {
   return json({ audit: await all(env, 'SELECT a.*, u.name AS user_name FROM audit a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 300') });
 }
@@ -914,6 +1002,12 @@ route('GET', '/api/admin/reports', ['admin'], adminReports);
 route('GET', '/api/admin/export', ['admin'], adminExport);
 route('GET', '/api/admin/track', ['admin'], adminTrack);
 route('GET', '/api/admin/audit', ['admin'], adminAudit);
+route('GET', '/api/admin/axes', ['admin'], adminAxes);
+route('POST', '/api/admin/axes', ['admin'], adminAxeSave);
+route('DELETE', '/api/admin/axes/:id', ['admin'], adminAxeDelete);
+route('GET', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesGet);
+route('PUT', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesPut);
+route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
 
 export async function handleApi(req, env) {
   const url = new URL(req.url);
