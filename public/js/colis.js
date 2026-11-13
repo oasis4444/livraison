@@ -346,7 +346,11 @@ export async function courierScheduleEditor(container, onSaved) {
 
 // ---------------------------------------------------------------- import Excel / CSV (une ligne = un colis)
 const COLS = {
-  external_ref: ['ref', 'reference', 'référence', 'commande', 'n° commande', 'no commande', 'order', 'facture', 'id'],
+  external_ref: ['ref', 'reference', 'référence', 'n°', 'no', 'commande', 'n° commande', 'no commande', 'order', 'facture', 'id'],
+  status: ['statut', 'status', 'etat', 'état'],
+  paid: ['payé', 'paye', 'déjà payé', 'acompte', 'avance'],
+  zone: ['zone', 'secteur'],
+  facebook: ['facebook', 'nom facebook'],
   recipient_name: ['nom', 'destinataire', 'client', 'name', 'anarana', 'mpandray'],
   recipient_phone: ['telephone', 'téléphone', 'tel', 'tél', 'phone', 'contact', 'finday', 'numero', 'numéro'],
   drop_addr: ['adresse', 'adresse de livraison', 'address', 'quartier', 'lieu', 'adiresy', 'livraison'],
@@ -415,10 +419,26 @@ export function importForm({ adminMode = false, onDone } = {}) {
       const hi = table.findIndex((r) => r.filter((h) => mapHeader(h)).length >= 2);
       if (hi < 0) throw new Error(mg ? 'Tsy hita ny tsanganana (nom, telephone, adresse…)' : 'Colonnes introuvables (nom, telephone, adresse…) : utilisez le modèle');
       const keys = table[hi].map(mapHeader);
-      rows = table.slice(hi + 1).map((r) => { const o = {}; keys.forEach((k, i) => { if (k && String(r[i] ?? '').trim()) o[k] = String(r[i]).trim(); }); return o; })
-        .filter((o) => o.recipient_phone || o.recipient_name)
-        .map((o) => ({ ...o, declared_value: Number(String(o.declared_value || '0').replace(/[^\d]/g, '')) || 0, drop_lat: o.drop_lat ? Number(String(o.drop_lat).replace(',', '.')) : undefined, drop_lng: o.drop_lng ? Number(String(o.drop_lng).replace(',', '.')) : undefined }));
-      el.querySelector('[data-prev]').innerHTML = `<div class="small"><b>${rows.length}</b> ${c('parcels')} · ${mg ? 'tsanganana hita' : 'colonnes reconnues'} : ${keys.filter(Boolean).join(', ')}</div>
+      const num = (v) => Number(String(v || '0').replace(/[^\d]/g, '')) || 0;
+      let raw = table.slice(hi + 1).map((r) => { const o = {}; keys.forEach((k, i) => { if (k && !o[k] && String(r[i] ?? '').trim()) o[k] = String(r[i]).trim(); }); return o; })
+        .filter((o) => o.recipient_phone || o.recipient_name);
+      // Export « Ventes et commandes » d'un logiciel de vente (ex. Tsena) : on garde les commandes à livrer,
+      // valeur = total − déjà payé, adresse = lieu + zone.
+      const hasStatus = keys.includes('status');
+      const READY = /attente de livraison|a livrer|prete|pret a livrer|a expedier/;
+      const total = raw.length;
+      if (hasStatus) raw = raw.filter((o) => READY.test(norm(o.status)));
+      rows = raw.map((o) => ({
+        ...o,
+        recipient_name: o.recipient_name || o.facebook || 'Client',
+        drop_addr: [o.drop_addr, o.zone].filter(Boolean).join(', ') || o.zone || '',
+        declared_value: Math.max(0, num(o.declared_value) - num(o.paid)),
+        drop_lat: o.drop_lat ? Number(String(o.drop_lat).replace(',', '.')) : undefined, drop_lng: o.drop_lng ? Number(String(o.drop_lng).replace(',', '.')) : undefined,
+      })).map(({ status, paid, zone, facebook, ...r }) => r);
+      el._hasStatus = hasStatus; el._total = total;
+      el.querySelector('[data-prev]').innerHTML = `${hasStatus ? `<div class="card small" style="background:var(--green-soft);border:0">✅ ${mg ? `Export logiciel de vente : <b>${rows.length}</b> baiko « En attente de livraison » amin'ny ${total}. Vidiny = Total − efa naloa.` : `Export du logiciel de vente : <b>${rows.length}</b> commande(s) « En attente de livraison » sur ${total}. Valeur = total − déjà payé.`}</div>` : ''}
+        <label class="field" style="margin-top:6px"><span>${mg ? 'Saran-dalana efa tafiditra ao amin\'ny Total, esorina (Ar)' : 'Frais de livraison déjà compris dans le total, à retirer (Ar)'}</span><input class="input" data-feein inputmode="numeric" value="0" style="max-width:160px"></label>
+        <div class="small"><b>${rows.length}</b> ${c('parcels')} · ${mg ? 'tsanganana hita' : 'colonnes reconnues'} : ${keys.filter(Boolean).join(', ')}</div>
         <div class="tbl-wrap" style="max-height:220px;overflow:auto;margin-top:6px"><table class="tbl"><thead><tr><th>Réf</th><th>${c('rname')}</th><th>Tél</th><th>${c('drop_addr')}</th><th class="num">${c('value')}</th></tr></thead><tbody>
         ${rows.slice(0, 50).map((r) => `<tr><td>${esc(r.external_ref || '')}</td><td>${esc(r.recipient_name || '')}</td><td>${esc(r.recipient_phone || '')}</td><td class="small">${esc(r.drop_addr || '')}</td><td class="num">${ar(r.declared_value)}</td></tr>`).join('')}</tbody></table></div>`;
       el.querySelector('[data-ok]').disabled = !rows.length;
@@ -437,6 +457,8 @@ export function importForm({ adminMode = false, onDone } = {}) {
         }
       }
       btn.textContent = '…';
+      const feeIn = Number((el.querySelector('[data-feein]')?.value || '0').replace(/\D/g, '')) || 0;
+      if (feeIn) rows = rows.map((r) => ({ ...r, declared_value: Math.max(0, r.declared_value - feeIn) }));
       const res = await api('POST', '/api/shipments/bulk', { rows, pickup_addr: el.querySelector('[data-pk]').value.trim() || undefined, pickup_lat: pk?.lat, pickup_lng: pk?.lng, sender_phone: adminMode ? el.querySelector('[data-sp]').value : undefined });
       m.close();
       const r = modal(`✅ ${res.created} ${c('parcels')}${res.duplicates ? ` · ${res.duplicates} ${mg ? 'efa nalefa' : 'déjà envoyés'}` : ''}${res.errors ? ` · ⚠ ${res.errors}` : ''}`, `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Réf</th><th>${c('rname')}</th><th>Code</th><th>Statut</th></tr></thead><tbody>

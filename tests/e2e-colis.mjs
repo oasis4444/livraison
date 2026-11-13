@@ -122,6 +122,19 @@ try {
     await client.screenshot({ path: 'tests/screens/33-import-resultat.png' });
     await client.click('.modal-back [data-x]');
   });
+  await step('import direct de l\'export Excel du logiciel de vente (format Tsena)', async () => {
+    await client.click('[data-act=importparcels]');
+    await client.fill('.modal [data-pk]', 'Boutique, Behoririka');
+    await client.setInputFiles('.modal [data-file]', 'tests/fixture-tsena.csv');
+    await client.waitForSelector('text=2 commande(s) « En attente de livraison » sur 4');
+    await client.screenshot({ path: 'tests/screens/34-import-tsena.png' });
+    await client.click('.modal [data-ok]');
+    await client.waitForSelector('text=✅ 2 colis', { timeout: 20000 });
+    const v = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.filter((x) => /CMD-010/.test(x.external_ref || '')).map((x) => [x.external_ref, x.declared_value, x.recipient.name, x.recipient.address])));
+    const m = Object.fromEntries(v.map((x) => [x[0], x]));
+    if (m['CMD-0101'][1] !== 35000 || m['CMD-0102'][2] !== 'Tiana Fb' || !/Marché, Isotry/.test(m['CMD-0102'][3])) throw new Error(JSON.stringify(v));
+    await client.click('.modal-back [data-x]');
+  });
   await step('livreur part du centre → le client le voit en direct (statut + carte)', async () => {
     await courier.click('[data-t=colis]'); await courier.waitForSelector('text=CMD-1042');
     await courier.click('[data-act=depart]'); await courier.waitForSelector('text=Chez l\'expéditeur', { timeout: 15000 });
