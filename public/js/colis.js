@@ -31,16 +31,20 @@ const L_MG = {
 };
 const STEP = {
   fr: { pending: 'À programmer', scheduled: 'Programmé', departed: 'Parti du centre', at_pickup: 'Chez l\'expéditeur', picked_up: 'Récupéré', en_route: 'En route',
-    nearby: 'Tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour expéditeur', returned: 'Rendu à l\'expéditeur', fee: 'Frais modifiés', assigned: 'Programmé' },
+    nearby: 'Tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour expéditeur', returned: 'Rendu à l\'expéditeur', fee: 'Frais modifiés', assigned: 'Programmé',
+    awaiting_recipient: 'Remis · à confirmer par le destinataire', awaiting_courier: 'Reçu · à confirmer par le livreur', courier_confirmed: 'Remise déclarée par le livreur',
+    recipient_confirmed: 'Réception confirmée', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée' },
   mg: { pending: 'Mbola tsy voalahatra', scheduled: 'Voalahatra', departed: 'Lasa (niala centre)', at_pickup: 'Tonga eo amin\'ny mpandefa', picked_up: 'Voaray', en_route: 'An-dalana',
-    nearby: 'Efa akaiky', delivered: 'Tonga', refused: 'Nolavina', cancelled: 'Nofoanana', returning: 'Haverina amin\'ny mpandefa', returned: 'Naverina tamin\'ny mpandefa', fee: 'Saran-dalana novaina', assigned: 'Voalahatra' },
+    nearby: 'Efa akaiky', delivered: 'Tonga', refused: 'Nolavina', cancelled: 'Nofoanana', returning: 'Haverina amin\'ny mpandefa', returned: 'Naverina tamin\'ny mpandefa', fee: 'Saran-dalana novaina', assigned: 'Voalahatra',
+    awaiting_recipient: 'Natolotra · miandry fanamarinan\'ny mpandray', awaiting_courier: 'Voaray · miandry fanamarinan\'ny livreur', courier_confirmed: 'Nambaran\'ny livreur fa natolotra',
+    recipient_confirmed: 'Nohamafisin\'ny mpandray fa voaray', pin_fail: 'Kaody PIN diso', disputed: 'Nolavin\'ny mpandray fa tsy voaray' },
 };
 export const stepLabel = (k) => (STEP[state.lang] || STEP.fr)[k] || STEP.fr[k] || k;
-export const STEPS_FLOW = ['scheduled', 'departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'delivered'];
-export const stepBar = (s) => { const i = STEPS_FLOW.indexOf(s.step); return i < 0 ? '' : `<div class="steps">${STEPS_FLOW.map((_, j) => `<i class="${j <= i ? 'on' : ''}"></i>`).join('')}</div>`; };
+export const STEPS_FLOW = ['scheduled', 'departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'awaiting_recipient', 'delivered'];
+export const stepBar = (s) => { const i = STEPS_FLOW.indexOf(s.step === 'awaiting_courier' ? 'awaiting_recipient' : s.step); return i < 0 ? '' : `<div class="steps">${STEPS_FLOW.map((_, j) => `<i class="${j <= i ? 'on' : ''}"></i>`).join('')}</div>`; };
 export const c = (k) => (state.lang === 'mg' ? L_MG : L_FR)[k] ?? L_FR[k] ?? k;
 
-const PILL = { pending: 'pending', scheduled: 'assigned', departed: 'assigned', at_pickup: 'assigned', picked_up: 'picked_up', en_route: 'picked_up', nearby: 'picked_up', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled', returning: 'cancelled', returned: 'cancelled' };
+const PILL = { pending: 'pending', scheduled: 'assigned', departed: 'assigned', at_pickup: 'assigned', picked_up: 'picked_up', en_route: 'picked_up', nearby: 'picked_up', awaiting_recipient: 'pending', awaiting_courier: 'pending', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled', returning: 'cancelled', returned: 'cancelled' };
 export const shipPill = (s) => `<span class="status-pill st-${PILL[s.step] || 'pending'}">${esc(stepLabel(s.step))}</span>`;
 const dayLabel = (ms) => { const d0 = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10), d = new Date(ms + 3 * 3600e3).toISOString().slice(0, 10); return d === d0 ? c('today') : c('tomorrow'); };
 
@@ -184,6 +188,10 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     </div>
     ${s.courier ? `<div class="small">🚲 <b>${esc(s.courier.name || '')}</b>${s.departure_at ? ` · ${c('departure')} ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : ''} ${s.courier.phone && !isCourier ? call(s.courier.phone) : ''}</div>` : ''}
     ${s.has_photo ? `<img data-ph alt="${c('photo')}" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;background:var(--bg)">` : ''}
+    ${s.delivery_pin && ['pending', 'assigned', 'picked_up'].includes(s.status) ? `<div class="card" style="text-align:center;background:var(--green-soft);border:0">
+      <div class="small muted">${state.lang === 'mg' ? 'Kaody fanamarinana (omena ny livreur rehefa voaray ny entana)' : 'Code de confirmation (à donner au livreur à la réception)'}</div>
+      <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div>
+      ${role === 'sender' ? `<div class="tiny muted" style="margin-top:6px">${state.lang === 'mg' ? 'Alefaso amin\'ny mpandray ity kaody ity (SMS, appel).' : 'Transmettez ce code au destinataire (SMS, appel).'}</div>` : ''}</div>` : ''}
     ${stepBar(s)}
     <div class="small"><b>Suivi</b>${s.events.map((e) => `<div class="row between" style="border-bottom:1px solid var(--line);padding:3px 0"><span>${esc(e.status === 'assigned' ? stepLabel('scheduled') : stepLabel(e.status))}${e.note ? ` <span class="muted">— ${esc(e.note)}</span>` : ''}</span><span class="muted tiny">${dt(e.at)}</span></div>`).join('')}</div>
     <div class="stack" data-actions></div></div>`);
@@ -200,10 +208,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
   if (isCourier) {
     if (s.status === 'assigned') btn(`📦 ${c('pickup_btn')}`, 'primary lg', () => { m.close(); pickupForm(s, () => onChange?.()); });
     if (s.status === 'picked_up') {
-      btn(`${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', async () => {
-        const v = await promptBox(c('delivered_ok'), { label: c('collected') + ' (Ar)', type: 'number', value: s.amount_to_collect }); if (v == null) return;
-        await api('POST', `/api/shipments/${s.id}/deliver`, { collected: Number(v) }); toast(c('sh_delivered'), 'ok'); done();
-      });
+      if (!s.courier_confirmed_at) btn(`${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', () => { m.close(); deliverForm(s, () => onChange?.()); });
+      else acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">⏳ ${esc(stepLabel('awaiting_recipient'))}</div>`);
       btn(c('refused_btn'), 'sun', async () => {
         const note = await promptBox(c('refused_btn'), { label: c('reason') }); if (!note) return;
         const v = await promptBox(c('fee'), { label: c('collected') + ' (Ar)', type: 'number', value: s.fee }); if (v == null) return;
@@ -216,6 +222,17 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     }
     if (s.to_return) btn(c('returned_btn'), 'primary lg', async () => { if (await confirmBox(c('returned_btn') + ' ?', 'OK')) { await api('POST', `/api/shipments/${s.id}/returned`, {}); done(); } });
   }
+  if ((role === 'recipient' || isAdmin) && s.status === 'picked_up' && !s.recipient_confirmed_at) {
+    btn(state.lang === 'mg' ? '✅ Voaray ny entana' : '✅ J\'ai reçu le colis', 'primary lg', async () => {
+      if (!(await confirmBox(isAdmin ? 'Confirmer la réception à la place du destinataire (preuve hors application) ?' : (state.lang === 'mg' ? `Hamafisinao fa voarainao ny entana ary nandoa ${ar(s.amount_to_collect)} ianao?` : `Confirmez-vous avoir reçu le colis et payé ${ar(s.amount_to_collect)} ?`), 'OK'))) return;
+      const r = await api('POST', `/api/shipments/${s.id}/confirm`, isAdmin ? { note: 'Confirmé par téléphone' } : {});
+      toast(r.delivered ? stepLabel('delivered') : stepLabel('recipient_confirmed'), 'ok'); done();
+    });
+    btn(state.lang === 'mg' ? '⚠ Tsy voaray' : '⚠ Je n\'ai pas reçu le colis', 'danger', async () => {
+      const note = await promptBox(state.lang === 'mg' ? 'Inona no nitranga?' : 'Que s\'est-il passé ?', { label: c('reason') }); if (!note) return;
+      await api('POST', `/api/shipments/${s.id}/confirm`, { received: false, note }); toast(stepLabel('disputed'), 'err'); done();
+    });
+  }
   if (!isCourier && ['pending', 'assigned'].includes(s.status) && (isAdmin || role === 'sender')) {
     btn('✖ ' + (state.lang === 'mg' ? 'Foanana' : 'Annuler le colis'), 'danger', async () => {
       const note = await promptBox(state.lang === 'mg' ? 'Foanana' : 'Annuler', { label: c('reason') }); if (!note) return;
@@ -227,6 +244,30 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     await api('POST', `/api/shipments/${s.id}/cancel`, { note }); done();
   });
   return { modal: m, shipment: s, actions: acts, button: btn };
+}
+
+// Remise au destinataire : code PIN (preuve immédiate) ou confirmation par le destinataire dans son application.
+function deliverForm(s, done) {
+  const mg = state.lang === 'mg';
+  const m = modal(`${c('deliver_btn')} · ${s.ref}`, `<div class="stack">
+    <label class="field"><span>${c('collected')} (Ar)</span><input class="input" data-v inputmode="numeric" value="${s.amount_to_collect}" style="font-size:1.3rem;font-weight:800"></label>
+    <label class="field"><span>${mg ? 'Kaody 4 isa avy amin\'ny mpandray' : 'Code à 4 chiffres donné par le destinataire'}</span>
+      <input class="input" data-pin inputmode="numeric" maxlength="4" placeholder="••••" style="text-align:center;font-size:1.8rem;letter-spacing:.5em;font-weight:850"></label>
+    <button class="btn primary lg block" data-ok>✅ ${mg ? 'Hamafisina amin\'ny kaody' : 'Confirmer avec le code'}</button>
+    <button class="btn block" data-nopin style="white-space:normal;line-height:1.3">${mg ? 'Tsy manana kaody → ny mpandray no hanamarina amin\'ny application-ny' : 'Pas de code → le destinataire confirmera dans son application'}</button>
+    <p class="tiny muted">${mg ? 'Tsy ho « Tonga » ny entana raha tsy samy manamarina ianao sy ny mpandray.' : 'Le colis n\'est « Livré » qu\'une fois confirmé par vous ET par le destinataire.'}</p></div>`);
+  const send = async (withPin) => {
+    const pin = m.el.querySelector('[data-pin]').value.trim();
+    if (withPin && !/^\d{4}$/.test(pin)) return toast(mg ? 'Kaody 4 isa' : 'Code à 4 chiffres', 'err');
+    let pos = [];
+    try { pos = await getPosition({ timeout: 5000 }); } catch {}
+    try {
+      const r = await api('POST', `/api/shipments/${s.id}/deliver`, { collected: Number(m.el.querySelector('[data-v]').value.replace(/\D/g, '')), pin: withPin ? pin : undefined, lat: pos[0], lng: pos[1] });
+      m.close(); toast(r.delivered ? stepLabel('delivered') : stepLabel('awaiting_recipient'), 'ok'); done();
+    } catch (err) { toastErr(err); }
+  };
+  m.el.querySelector('[data-ok]').onclick = () => send(true);
+  m.el.querySelector('[data-nopin]').onclick = () => send(false);
 }
 
 function pickupForm(s, done) {

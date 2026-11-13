@@ -123,7 +123,13 @@ try {
     await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=À livrer');
     await courier.click('[data-act=ship] >> text=CMD-1042');
     await courier.waitForSelector('[data-ph][src^="blob:"]');
-    await courier.click('text=✅ Livré et payé'); await courier.click('[data-yes]');
+    const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
+    await client.waitForSelector(`text=🔑 ${pin}`);
+    await courier.click('text=✅ Livré et payé');
+    await courier.fill('.modal [data-pin]', pin === '0000' ? '1111' : '0000'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Code incorrect');
+    await courier.fill('.modal [data-pin]', pin);
+    await courier.screenshot({ path: 'tests/screens/31-livreur-pin.png' });
+    await courier.click('.modal [data-ok]');
     await courier.waitForSelector('text=Terminés aujourd');
     await courier.screenshot({ path: 'tests/screens/26-livreur-missions.png' });
   });

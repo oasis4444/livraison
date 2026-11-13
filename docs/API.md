@@ -40,11 +40,23 @@ En plus de `status`, chaque colis expose `step` (et `step_label` en français), 
 | `picked_up` | Colis récupéré |
 | `en_route` | En route vers le destinataire |
 | `nearby` | Livreur à moins de 300 m du destinataire |
+| `awaiting_recipient` | Le livreur a déclaré la remise ; en attente de la confirmation du destinataire |
+| `awaiting_courier` | Le destinataire a confirmé ; en attente de la déclaration du livreur |
 | `delivered` | Livré |
 | `refused` / `cancelled` | Refusé / annulé avant récupération |
 | `returning` / `returned` | Retour vers l'expéditeur / rendu |
 
 Chaque changement d'étape déclenche aussi le webhook.
+
+## Double confirmation de livraison (preuve)
+
+Un colis ne passe à `delivered` que lorsque **le livreur ET le destinataire** ont confirmé :
+
+- soit le destinataire donne au livreur le **code à 4 chiffres** `delivery_pin` (renvoyé à la création et dans `GET /shipments/{ref}`) — envoyez-le-lui par SMS depuis votre logiciel ; le livreur ne le voit jamais ;
+- soit le destinataire (compte Alefa avec le même numéro) appuie sur « J'ai reçu le colis » dans l'application ;
+- à défaut, le centre peut confirmer après vérification (`confirmed_by: "admin"`).
+
+Champs : `courier_confirmed_at`, `recipient_confirmed_at`, `confirmed_by` (`pin`, `app` ou `admin`).
 
 ## Endpoints
 

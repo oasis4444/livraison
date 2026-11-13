@@ -162,7 +162,7 @@ async function showLiveParcels(list) {
     return `<div class="live-card" data-act="ship" data-id="${x.id}"><div class="avatar">🚲</div><div class="grow">
       <b>${esc((x.courier?.name || '').split(' ')[0])} · ${esc(stepLabel(x.step))}</b>
       <div class="small muted">${esc(x.ref)} · ${d != null ? `${km(d)} · ~${etaMin(d)} ${t('min')}` : ''}${stale ? ` · ⚠ GPS ${time(x.courier_live.last_seen)}` : ''}</div>${stepBar(x)}</div>
-      <span class="small">${x.mine_as === 'recipient' ? ar(x.amount_to_collect) : ''}</span></div>`;
+      <span class="small" style="text-align:right">${x.mine_as === 'recipient' ? `${ar(x.amount_to_collect)}${x.delivery_pin ? `<div style="font-size:1.1rem;font-weight:850;letter-spacing:.15em;color:var(--sun)">🔑 ${esc(x.delivery_pin)}</div>` : ''}` : ''}</span></div>`;
   }).join('');
   for (const k of Object.keys(mk)) if (/^(lc|lt)/.test(k) && !keep.has(k)) { mk[k].remove(); delete mk[k]; }
   if (live.length === 1) {

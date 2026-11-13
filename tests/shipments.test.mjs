@@ -111,7 +111,17 @@ test('étapes : en route puis livreur tout proche', async () => {
 });
 
 test('livraison, refus (destinataire paie les frais), annulation (expéditeur paie le retour)', async () => {
-  assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, {}, courier)).data.collected, 23000);
+  // double confirmation : PIN faux refusé ; sans PIN → attente du destinataire ; le destinataire confirme → livré
+  assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, { pin: '0000' === (await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.delivery_pin ? '1111' : '0000' }, courier)).status, 400);
+  const d1 = await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, {}, courier);
+  assert.equal(d1.data.collected, 23000); assert.equal(d1.data.delivered, false); assert.equal(d1.data.awaiting_recipient, true);
+  assert.equal((await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.step, 'awaiting_recipient');
+  assert.equal((await call('GET', `/api/shipments/${ids['CMD-1']}`, null, courier)).data.shipment.delivery_pin, undefined, 'le livreur ne voit jamais le PIN');
+  assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/confirm`, {}, vendorTok)).status, 403, 'seul le destinataire confirme');
+  const conf = await call('POST', `/api/shipments/${ids['CMD-1']}/confirm`, {}, recipient);
+  assert.equal(conf.data.delivered, true);
+  const sh1 = (await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment;
+  assert.equal(sh1.status, 'delivered'); assert.equal(sh1.confirmed_by, 'app'); assert.ok(sh1.courier_confirmed_at && sh1.recipient_confirmed_at);
   const ref = await call('POST', `/api/shipments/${ids['CMD-2']}/refuse`, { note: 'Taille trop petite' }, courier);
   assert.equal(ref.data.collected, 2500);
   assert.equal((await call('POST', `/api/shipments/${ids['CMD-3']}/cancel`, { note: 'Destinataire injoignable' }, courier)).status, 200);
@@ -148,5 +158,11 @@ test('centre : attribution manuelle, frais, export', async () => {
   // client crée un colis depuis l'application
   const c = await call('POST', '/api/shipments', { pickup_addr: 'Chez moi, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng, recipient_name: 'Koto', recipient_phone: '0347777777', drop_addr: 'Behoririka', drop_lat: BEHORIRIKA.lat, drop_lng: BEHORIRIKA.lng, declared_value: 5000 }, recipient);
   assert.equal(c.status, 201); assert.equal(c.data.shipment.status, 'assigned');
-  assert.equal((await call('POST', `/api/shipments/${c.data.shipment.id}/cancel`, { note: 'Erreur' }, recipient)).status, 200);
+  const sid = c.data.shipment.id;
+  const pin = (await call('GET', `/api/shipments/${sid}`, null, recipient)).data.shipment.delivery_pin;
+  assert.match(pin, /^\d{4}$/, 'l\'expéditeur voit le PIN à transmettre');
+  assert.equal((await call('POST', `/api/shipments/${sid}/pickup`, { value: 5000, photo: PHOTO }, courier)).status, 200);
+  const dp = await call('POST', `/api/shipments/${sid}/deliver`, { pin }, courier);
+  assert.equal(dp.data.delivered, true, 'PIN du destinataire = double confirmation immédiate');
+  assert.equal((await call('GET', `/api/shipments/${sid}`, null, admin)).data.shipment.confirmed_by, 'pin');
 });
