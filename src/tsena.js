@@ -72,6 +72,14 @@ async function patchDelivery(s, token, docId, fields) {
   });
 }
 
+// Table créée au premier usage (même contenu que migrations/0006_tsena.sql).
+let schemaOk = false;
+async function ensureSchema(env) {
+  if (schemaOk) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS tsena_links (shipment_id INTEGER PRIMARY KEY REFERENCES shipments(id) ON DELETE CASCADE, doc_id TEXT NOT NULL UNIQUE, last_step TEXT, synced_at INTEGER)').run();
+  schemaOk = true;
+}
+
 // ---------------------------------------------------------------- synchronisation
 async function shopAccount(env, s) {
   const phone = normalizePhone(s.tsena_shop_phone);
@@ -91,6 +99,7 @@ const TSENA_STATUS = { departed: 'cours', at_pickup: 'cours', picked_up: 'cours'
 export async function syncTsena(env) {
   const s = await settings(env);
   if (!s.tsena_refresh) return { skipped: 'not_connected' };
+  await ensureSchema(env);
   const out = { imported: 0, updated: 0, errors: [] };
   try {
     const token = await idToken(env, s);
@@ -141,6 +150,7 @@ export async function syncTsena(env) {
 
 // ---------------------------------------------------------------- routes (centre)
 async function status(ctx, env) {
+  await ensureSchema(env);
   const s = await settings(env);
   const n = await one(env, 'SELECT COUNT(*) AS n FROM tsena_links');
   return json({ connected: !!s.tsena_refresh, url: s.tsena_url, email: s.tsena_email, shop_name: s.tsena_shop_name, shop_phone: s.tsena_shop_phone, pickup_addr: s.tsena_pickup_addr,
