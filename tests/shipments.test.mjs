@@ -181,3 +181,11 @@ test('import Excel/CSV et lien : une ligne = un colis, sans doublon', async () =
   const link = await call('POST', '/api/shipments', { external_ref: 'F-001', recipient_name: 'Naina', recipient_phone: '0341000001', drop_addr: 'Behoririka', pickup_addr: 'Boutique' }, vendorTok);
   assert.equal(link.data.duplicate, true);
 });
+
+test('le centre importe pour une boutique sans compte : compte créé automatiquement', async () => {
+  const r = await call('POST', '/api/shipments/bulk', { sender_phone: '0326666666', sender_name: 'Tsena Ampandrana', pickup_addr: 'Ampandrana',
+    rows: [{ external_ref: 'L-00001', recipient_name: 'Hotely Mamy', recipient_phone: '033 45 678 90', drop_addr: 'Andravoahangy', declared_value: 45000 }] }, admin);
+  assert.equal(r.data.created, 1);
+  const u = (await call('GET', '/api/admin/users?role=client&q=Tsena', null, admin)).data.users;
+  assert.equal(u[0].company, 'Tsena Ampandrana');
+});

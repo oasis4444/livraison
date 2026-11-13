@@ -230,7 +230,16 @@ async function bulkCreate(ctx, env) {
   const st = await settings(env);
   let sender = u;
   if (u.role === 'admin') {
-    sender = await one(env, 'SELECT * FROM users WHERE phone = ?', normalizePhone(ctx.body.sender_phone)) || fail(404, 'not_found', 'Expéditeur introuvable : créez d\'abord son compte client');
+    // Le centre importe pour une boutique : son compte est créé automatiquement s'il n'existe pas encore.
+    const phone = normalizePhone(ctx.body.sender_phone);
+    sender = await one(env, 'SELECT * FROM users WHERE phone = ?', phone);
+    if (!sender) {
+      const name = str(ctx.body.sender_name || 'Boutique', { min: 2, max: 80, name: 'Nom de la boutique' });
+      const salt = randomHex(16);
+      const r = await run(env, "INSERT INTO users (phone, name, role, pass_hash, pass_salt, status, is_business, company, created_at) VALUES (?,?,'client',?,?,'active',1,?,?)",
+        phone, name, await hashPassword(randomHex(6), salt, Number(env.PBKDF2_ITER || 10000)), salt, name, now());
+      sender = await one(env, 'SELECT * FROM users WHERE id = ?', r.meta.last_row_id);
+    }
   }
   const out = [];
   for (const [i, r] of rows.entries()) {

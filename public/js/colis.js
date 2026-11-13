@@ -415,7 +415,7 @@ export function importForm({ adminMode = false, onDone } = {}) {
   const m = modal(mg ? 'Hampiditra Excel / CSV' : 'Importer un fichier Excel / CSV', `<div class="stack">
     <p class="small muted">${mg ? 'Avoahy avy amin\'ny logiciel de vente ny lisitry ny baiko (Excel na CSV). Andalana iray = colis iray.' : 'Exportez la liste des commandes depuis votre logiciel de vente (Excel ou CSV). Une ligne = un colis.'}
       ${mg ? 'Tsanganana' : 'Colonnes'} : <b>ref · nom · telephone · adresse · valeur · description</b>. <a href="#" data-tpl>⬇ ${mg ? 'Modely' : 'Modèle'}</a></p>
-    ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel"></label>` : ''}
+    ${adminMode ? `<div class="row"><label class="field grow"><span>Boutique (expéditeur)</span><input class="input" data-sn placeholder="Tsena Ampandrana"></label><label class="field grow"><span>Téléphone de la boutique</span><input class="input" data-sp type="tel" placeholder="034 12 345 67"></label></div>` : ''}
     <label class="field"><span>🟢 ${c('pickup_addr')} (${mg ? 'ho an\'ny colis rehetra' : 'pour tous les colis'})</span><div class="row"><input class="input grow" data-pk placeholder="Boutique, quartier…"><button class="btn" data-gps>◎</button></div></label>
     <div class="card" style="background:var(--bg);border:0"><b>📋 Tsena Ampandrana</b>
       <div class="small muted" style="margin:4px 0 6px">${mg ? 'Ao amin\'ny Tsena: Paramètres → Copier la sauvegarde → Copier. Avy eo apetaho (coller) eto:' : 'Dans Tsena : Paramètres → Copier la sauvegarde → Copier. Puis collez ici :'}</div>
@@ -487,7 +487,7 @@ export function importForm({ adminMode = false, onDone } = {}) {
       btn.textContent = '…';
       const feeIn = Number((el.querySelector('[data-feein]')?.value || '0').replace(/\D/g, '')) || 0;
       if (feeIn) rows = rows.map((r) => ({ ...r, declared_value: Math.max(0, r.declared_value - feeIn) }));
-      const res = await api('POST', '/api/shipments/bulk', { rows, pickup_addr: el.querySelector('[data-pk]').value.trim() || undefined, pickup_lat: pk?.lat, pickup_lng: pk?.lng, sender_phone: adminMode ? el.querySelector('[data-sp]').value : undefined });
+      const res = await api('POST', '/api/shipments/bulk', { rows, pickup_addr: el.querySelector('[data-pk]').value.trim() || undefined, pickup_lat: pk?.lat, pickup_lng: pk?.lng, sender_phone: adminMode ? el.querySelector('[data-sp]').value : undefined, sender_name: adminMode ? el.querySelector('[data-sn]').value : undefined });
       m.close();
       const r = modal(`✅ ${res.created} ${c('parcels')}${res.duplicates ? ` · ${res.duplicates} ${mg ? 'efa nalefa' : 'déjà envoyés'}` : ''}${res.errors ? ` · ⚠ ${res.errors}` : ''}`, `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Réf</th><th>${c('rname')}</th><th>Code</th><th>Statut</th></tr></thead><tbody>
         ${res.results.map((x) => `<tr><td>${x.line}</td><td>${x.ok ? `<b>${esc(x.ref)}</b> <span class="muted tiny">${esc(x.external_ref || '')}</span>` : ''}</td><td>${esc(x.recipient || '')}</td><td>${x.pin ? `<b>${esc(x.pin)}</b>` : ''}</td>
