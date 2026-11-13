@@ -185,12 +185,32 @@ export function bind(root, handlers) {
 
 // ---------------------------------------------------------------- carte (Leaflet + OpenStreetMap)
 export const TANA = [-18.9100, 47.5250];
-export function makeMap(el, { center = TANA, zoom = 14, zoomControl = false } = {}) {
+// Fond de carte : OpenFreeMap (vectoriel, net et lisible, sans clé) ; repli automatique sur OpenStreetMap classique.
+const OSM_ATTR = '© <a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
+const webgl = (() => { try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; } })();
+function baseLayers() {
+  const osm = () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' });
+  if (!(webgl && L.maplibreGL && window.maplibregl)) return { 'Plan': osm() };
+  const vec = (style) => L.maplibreGL({ style: `https://tiles.openfreemap.org/styles/${style}`, attribution: OSM_ATTR });
+  return { 'Plan': vec('liberty'), 'Clair': vec('positron'), 'Classique': osm() };
+}
+export function makeMap(el, { center = TANA, zoom = 14, zoomControl = false, layers = false } = {}) {
   if (!window.L) { el.innerHTML = '<div style="padding:90px 20px;text-align:center;color:#85938d">Carte indisponible (connexion)</div>'; return null; }
-  const map = L.map(el, { zoomControl, attributionControl: true, center, zoom, preferCanvas: false });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(map);
+  const map = L.map(el, { zoomControl, attributionControl: true, center, zoom, preferCanvas: false, maxZoom: 19 });
+  const bases = baseLayers();
+  const pref = localStorage.getItem('alefa_map') || 'Plan';
+  const base = bases[pref] || bases.Plan;
+  base.addTo(map);
+  // Si le fond vectoriel ne se charge pas (réseau, appareil), on bascule sur la carte classique.
+  if (base.getMaplibreMap && bases.Classique) {
+    let ok = false;
+    try { base.getMaplibreMap()?.once('load', () => { ok = true; }); } catch {}
+    setTimeout(() => { if (!ok && map.hasLayer(base)) { map.removeLayer(base); bases.Classique.addTo(map); } }, 9000);
+  }
+  if (layers && Object.keys(bases).length > 1) {
+    L.control.layers(bases, null, { position: 'topright', collapsed: true }).addTo(map);
+    map.on('baselayerchange', (e) => { try { localStorage.setItem('alefa_map', e.name); } catch {} });
+  }
   map.attributionControl.setPrefix(false);
   setTimeout(() => map.invalidateSize(), 120);
   return map;
@@ -200,7 +220,10 @@ export const icons = {
   me: () => icon('<div class="mk-me"></div>', [20, 20]),
   a: () => icon('<div class="mk-pin mk-a"><b>A</b></div>', [34, 34], [17, 34]),
   b: () => icon('<div class="mk-pin mk-b"><b>B</b></div>', [34, 34], [17, 34]),
-  bike: (cls = '') => icon(`<div class="mk-bike ${cls}">🚲</div>`),
+  bike: (cls = '', label = '') => label
+    ? icon(`<div class="mk-bike ${cls}">🚲</div><div class="mk-label">${esc(label)}</div>`, [38, 38])
+    : icon(`<div class="mk-bike ${cls}">🚲</div>`),
+  dot: (color, label = '') => icon(`<div class="mk-dot" style="background:${color}"></div>${label ? `<div class="mk-label">${esc(label)}</div>` : ''}`, [16, 16]),
   req: (label) => icon(`<div class="mk-req">${esc(label)}</div>`, [80, 24], [40, 12]),
   sos: () => icon('<div class="mk-sos">!</div>', [30, 30]),
 };

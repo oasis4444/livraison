@@ -74,6 +74,21 @@ test('le destinataire voit son colis, le livreur ses missions', async () => {
   assert.equal((await call('GET', '/api/shipments', null, courier)).data.shipments.length, 3);
 });
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const loc = (lat, lng) => call('POST', '/api/courier/location', { lat, lng }, courier);
+test('étapes : parti du centre → arrivé chez l\'expéditeur (GPS)', async () => {
+  assert.equal((await loc(-18.91, 47.53)).data.ignored, 'offline', 'pas de suivi avant le départ');
+  assert.equal((await call('POST', '/api/courier/depart', {}, courier)).data.shipments, 3);
+  assert.equal((await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.step, 'departed');
+  await sleep(2600);
+  const r = await loc(ANALAKELY.lat, ANALAKELY.lng);
+  assert.equal(r.data.stages.length, 3);
+  const mine = (await call('GET', '/api/shipments', null, recipient)).data.shipments;
+  assert.equal(mine[0].step, 'at_pickup'); assert.ok(mine[0].courier_live.lat, 'le client voit le livreur en direct');
+  const live = (await call('GET', '/api/admin/live', null, admin)).data;
+  assert.ok(live.trails[courierId].length >= 1); assert.equal(live.parcels.length >= 3, true); assert.ok(live.feed.some((f) => /parti du centre/.test(f.text)));
+});
+
 test('récupération : photo et valeur obligatoires, frais modifiable', async () => {
   assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/pickup`, { value: 20000 }, courier)).status, 400, 'photo obligatoire');
   const r = await call('POST', `/api/shipments/${ids['CMD-1']}/pickup`, { value: 20000, photo: PHOTO }, courier);
@@ -83,6 +98,16 @@ test('récupération : photo et valeur obligatoires, frais modifiable', async ()
   assert.equal((await call('POST', `/api/shipments/${ids['CMD-2']}/pickup`, { value: 15000, fee: 2500, photo: PHOTO }, courier)).status, 200);
   assert.equal((await call('POST', `/api/shipments/${ids['CMD-3']}/pickup`, { value: 10000, photo: PHOTO }, courier)).status, 200);
   assert.equal((await call('POST', '/api/v1/shipments/CMD-3/cancel', { reason: 'x' }, null, { 'x-api-key': key })).status, 409, 'annulation API impossible après récupération');
+});
+
+test('étapes : en route puis livreur tout proche', async () => {
+  await sleep(2600);
+  await loc(-18.904, 47.521);
+  assert.equal((await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.step, 'en_route');
+  await sleep(2600);
+  await loc(BEHORIRIKA.lat, BEHORIRIKA.lng);
+  const sh = (await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment;
+  assert.equal(sh.step, 'nearby'); assert.equal(sh.step_label, 'Livreur tout proche');
 });
 
 test('livraison, refus (destinataire paie les frais), annulation (expéditeur paie le retour)', async () => {

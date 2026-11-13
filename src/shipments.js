@@ -1,7 +1,7 @@
 // Colis gérés par le centre : récupération chez l'expéditeur et livraison au destinataire en un seul trajet,
 // selon les départs (heure + axe) déclarés par les livreurs. Le destinataire paie valeur + frais ;
 // le centre reverse la valeur à l'expéditeur une fois l'argent remis par le livreur.
-import { fail, json, str, int, normalizePhone, randomHex, hashPassword, now, csv, fmtDate } from './lib.js';
+import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
 import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL } from './worker.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
@@ -34,11 +34,22 @@ async function hmacHex(secret, body) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Étape lisible d'un colis (statut + sous-étape GPS).
+export function stepOf(s) {
+  if (s.status === 'pending') return 'pending';
+  if (s.status === 'assigned') return s.stage === 'at_pickup' ? 'at_pickup' : s.stage === 'departed' ? 'departed' : 'scheduled';
+  if (s.status === 'picked_up') return s.stage === 'nearby' ? 'nearby' : s.stage === 'en_route' ? 'en_route' : 'picked_up';
+  if (['refused', 'cancelled'].includes(s.status)) return s.returned_at ? 'returned' : s.picked_at ? 'returning' : s.status;
+  return s.status;
+}
+const STEP_FR = { pending: 'À programmer', scheduled: 'Programmé', departed: 'Parti du centre', at_pickup: 'Arrivé chez l\'expéditeur', picked_up: 'Récupéré',
+  en_route: 'En route vers le destinataire', nearby: 'Livreur tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour vers l\'expéditeur', returned: 'Rendu à l\'expéditeur', assigned: 'Programmé', fee: 'Frais modifiés' };
+
 const toPay = (s) => (s.value ?? s.declared_value) + s.fee; // montant à encaisser auprès du destinataire
 
 export function publicShipment(s) {
   return {
-    id: s.id, ref: s.ref, external_ref: s.external_ref, status: s.status, source: s.source,
+    id: s.id, ref: s.ref, external_ref: s.external_ref, status: s.status, step: stepOf(s), step_label: STEP_FR[stepOf(s)], stage_at: s.stage_at, source: s.source,
     sender: { name: s.sender_name, phone: s.sender_phone, address: s.pickup_addr, lat: s.pickup_lat, lng: s.pickup_lng },
     recipient: { name: s.recipient_name, phone: s.recipient_phone, address: s.drop_addr, lat: s.drop_lat, lng: s.drop_lng },
     description: s.description, declared_value: s.declared_value, value: s.value, fee: s.fee, amount_to_collect: toPay(s),
@@ -93,8 +104,8 @@ async function broadcast(env, s, title, body) {
 
 // ---------------------------------------------------------------- départs (heure + axe déclarés par les livreurs)
 export async function departures(env, { days = 2, includePast = false } = {}) {
-  const slots = await all(env, `${SLOT_SQL} JOIN users u ON u.id = ca.courier_id JOIN couriers c ON c.user_id = ca.courier_id
-    WHERE a.active = 1 AND u.status = 'active'`);
+  const slots = (await all(env, `${SLOT_SQL} JOIN users u ON u.id = ca.courier_id JOIN couriers c ON c.user_id = ca.courier_id
+    WHERE a.active = 1 AND u.status = 'active'`.replace('SELECT ca.*,', 'SELECT ca.*, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen,')));
   if (!slots.length) return [];
   const names = await all(env, `SELECT id, name FROM users WHERE id IN (${[...new Set(slots.map((x) => x.courier_id))].map(() => '?').join(',')})`, ...new Set(slots.map((x) => x.courier_id)));
   const loads = await all(env, `SELECT slot_id, departure_at, COUNT(*) AS n FROM shipments WHERE departure_at >= ? AND status IN ('assigned','picked_up') GROUP BY slot_id, departure_at`, mgMidnight(0));
@@ -110,6 +121,7 @@ export async function departures(env, { days = 2, includePast = false } = {}) {
         axe_id: x.axe_id, axe: x.name, color: x.color, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km,
         departure_at: dep, return_at: end, started: dep <= now(),
         load: loads.find((l) => l.slot_id === x.id && l.departure_at === dep)?.n || 0,
+        lat: dep <= now() ? x.clat : null, lng: dep <= now() ? x.clng : null, last_seen: dep <= now() ? x.cseen : null,
       });
     }
   }
@@ -210,7 +222,12 @@ async function listMine(ctx, env) {
   } else {
     rows = await all(env, `${SHIP_SQL} WHERE s.sender_id = ? OR s.recipient_phone = ? ORDER BY s.created_at DESC LIMIT 100`, u.id, u.phone);
   }
-  return json({ shipments: rows.map((s) => ({ ...publicShipment(s), mine_as: s.sender_id === u.id ? 'sender' : s.recipient_phone === u.phone ? 'recipient' : 'courier', to_return: ['refused', 'cancelled'].includes(s.status) && s.picked_at && !s.returned_at })) });
+  const live = {};
+  const trackIds = [...new Set(rows.filter((s) => s.courier_id && (s.status === 'picked_up' || (s.status === 'assigned' && s.stage))).map((s) => s.courier_id))];
+  if (u.role !== 'courier' && trackIds.length) {
+    for (const c of await all(env, `SELECT user_id, lat, lng, last_seen FROM couriers WHERE user_id IN (${trackIds.map(() => '?').join(',')})`, ...trackIds)) live[c.user_id] = c;
+  }
+  return json({ shipments: rows.map((s) => ({ ...publicShipment(s), courier_live: live[s.courier_id] && (s.status === 'picked_up' || s.stage) ? live[s.courier_id] : null, mine_as: s.sender_id === u.id ? 'sender' : s.recipient_phone === u.phone ? 'recipient' : 'courier', to_return: ['refused', 'cancelled'].includes(s.status) && s.picked_at && !s.returned_at })) });
 }
 
 async function getOne(ctx, env) {
@@ -293,7 +310,7 @@ async function pickup(ctx, env) {
   }
   await env.DB.batch([
     q(env, 'INSERT OR REPLACE INTO shipment_photos (shipment_id, mime, data, at) VALUES (?,?,?,?)', s.id, m[1], m[2], now()),
-    q(env, "UPDATE shipments SET status = 'picked_up', picked_at = ?, value = ?, fee = ?, photo = 1 WHERE id = ?", now(), value, fee, s.id),
+    q(env, "UPDATE shipments SET status = 'picked_up', picked_at = ?, value = ?, fee = ?, photo = 1, stage = NULL, stage_at = ? WHERE id = ?", now(), value, fee, now(), s.id),
   ]);
   await logEvent(env, s, 'picked_up', `Valeur ${value} Ar · frais ${fee} Ar`, ctx.user, b.lat ?? null, b.lng ?? null);
   if (s.declared_value && Math.abs(value - s.declared_value) > Math.max(1000, s.declared_value * 0.2))
@@ -559,6 +576,74 @@ async function v1Photo(ctx, env) { const s = await byRef(env, ctx.merchant, ctx.
 async function v1Schedule(ctx, env) { return schedule(ctx, env); }
 async function v1Quote(ctx, env) { return quoteShipment(ctx, env); }
 
+// ---------------------------------------------------------------- étapes automatiques (GPS) et départ du centre
+async function setStage(env, s, stage, user, title, body, notifyWho) {
+  await run(env, 'UPDATE shipments SET stage = ?, stage_at = ? WHERE id = ?', stage, now(), s.id);
+  await logEvent(env, s, stage, null, user);
+  const fresh = await broadcast(env, s, title, body);
+  if (notifyWho?.length) await notify(env, notifyWho, 'shipment', title, `${s.ref} · ${body || ''}`);
+  return fresh;
+}
+
+export async function courierOpenShipments(env, cid) {
+  const r = await one(env, "SELECT COUNT(*) AS n FROM shipments WHERE courier_id = ? AND (status = 'picked_up' OR (status = 'assigned' AND stage IS NOT NULL) OR (status IN ('refused','cancelled') AND picked_at IS NOT NULL AND returned_at IS NULL))", cid);
+  return r.n;
+}
+
+// Appelé à chaque position GPS du livreur : met à jour les étapes et prévient expéditeur / destinataire.
+export async function onCourierMove(env, u, lat, lng) {
+  const rows = await all(env, "SELECT * FROM shipments WHERE courier_id = ? AND (status = 'picked_up' OR (status = 'assigned' AND stage IS NOT NULL))", u.id);
+  const changes = [];
+  for (const s of rows) {
+    const dP = s.pickup_lat != null ? haversineKm(lat, lng, s.pickup_lat, s.pickup_lng) : null;
+    const dD = s.drop_lat != null ? haversineKm(lat, lng, s.drop_lat, s.drop_lng) : null;
+    if (s.status === 'assigned' && s.stage === 'departed' && dP != null && dP <= 0.15) {
+      await setStage(env, s, 'at_pickup', u, '🚲 Le livreur est arrivé chez l\'expéditeur', `${u.name.split(' ')[0]} récupère le colis`);
+      changes.push([s.ref, 'at_pickup']);
+    } else if (s.status === 'picked_up' && s.stage !== 'nearby' && dD != null && dD <= 0.3) {
+      await setStage(env, s, 'nearby', u, '📍 Votre livreur est tout proche', `Moins de 300 m · préparez ${(toPay(s)).toLocaleString('fr-FR')} Ar`);
+      changes.push([s.ref, 'nearby']);
+    } else if (s.status === 'picked_up' && !s.stage && dP != null && dP > 0.2) {
+      await setStage(env, s, 'en_route', u, '🚲 Colis en route', dD != null ? `${dD.toFixed(1).replace('.', ',')} km du destinataire` : 'Vers le destinataire');
+      changes.push([s.ref, 'en_route']);
+    }
+  }
+  return changes;
+}
+
+async function depart(ctx, env) {
+  const u = ctx.user;
+  const rows = await all(env, "SELECT * FROM shipments WHERE courier_id = ? AND status = 'assigned' AND stage IS NULL AND (departure_at IS NULL OR departure_at < ?)", u.id, now() + 3 * 3600e3);
+  if (!rows.length) fail(409, 'nothing', 'Aucun colis programmé à emporter');
+  for (const s of rows) await setStage(env, s, 'departed', u, '🚀 Le livreur est parti du centre', `${u.name.split(' ')[0]} est en route pour récupérer le colis`);
+  await audit(env, ctx, 'courier_depart', { n: rows.length });
+  return json({ ok: true, shipments: rows.length });
+}
+
+// Carte centre : colis en cours avec leur étape.
+export async function liveShipments(env) {
+  const rows = await all(env, `${SHIP_SQL} WHERE s.status IN ('pending','assigned','picked_up') OR (s.status IN ('refused','cancelled') AND s.picked_at IS NOT NULL AND s.returned_at IS NULL) ORDER BY s.created_at DESC LIMIT 300`);
+  return rows.map((s) => ({ id: s.id, ref: s.ref, step: stepOf(s), step_label: STEP_FR[stepOf(s)], courier_id: s.courier_id, courier: s.courier_name,
+    sender: s.sender_name, recipient: s.recipient_name, pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
+    pickup_addr: s.pickup_addr, drop_addr: s.drop_addr, amount: toPay(s), departure_at: s.departure_at }));
+}
+
+// Fil des mouvements : étapes des colis + actions importantes des clients, livreurs et du centre.
+export async function liveFeed(env) {
+  const ev = await all(env, `SELECT e.at, e.status, e.note, s.ref, u.name AS who, u.role FROM shipment_events e JOIN shipments s ON s.id = e.shipment_id
+    LEFT JOIN users u ON u.id = e.user_id ORDER BY e.id DESC LIMIT 40`);
+  const au = await all(env, `SELECT a.at, a.action, a.detail, u.name AS who, u.role FROM audit a LEFT JOIN users u ON u.id = a.user_id
+    WHERE a.action IN ('register','login','delivery_create','delivery_cancel','delivery_pickup','delivery_done','offer_accept','sos','complaint','courier_online','courier_offline','courier_depart','courier_schedule','shipment_create','cash_settle','vendor_pay')
+    ORDER BY a.id DESC LIMIT 40`);
+  const A = { register: 'inscription', login: 'connexion', delivery_create: 'nouvelle course express', delivery_cancel: 'course annulée', delivery_pickup: 'course : colis récupéré',
+    delivery_done: 'course livrée', offer_accept: 'offre acceptée', sos: '🚨 SOS', complaint: 'réclamation', courier_online: 'disponible', courier_offline: 'indisponible',
+    courier_depart: '🚀 parti du centre', courier_schedule: 'planning modifié', shipment_create: 'nouveau colis', cash_settle: '💵 argent remis au centre', vendor_pay: '💰 vendeur payé' };
+  return [
+    ...ev.map((e) => ({ at: e.at, kind: 'shipment', who: e.who || (e.status === 'pending' ? 'API' : 'Centre'), role: e.role, text: `${e.ref} · ${STEP_FR[e.status] || e.status}${e.note ? ' — ' + e.note : ''}` })),
+    ...au.map((a) => ({ at: a.at, kind: a.action, who: a.who || '—', role: a.role, text: A[a.action] || a.action })),
+  ].sort((x, y) => y.at - x.at).slice(0, 60);
+}
+
 // ---------------------------------------------------------------- enregistrement des routes
 export function registerShipmentRoutes(route) {
   const ANY = ['client', 'courier', 'admin'];
@@ -577,6 +662,7 @@ export function registerShipmentRoutes(route) {
   route('POST', '/api/shipments/:id/cancel', ANY, cancel);
   route('POST', '/api/shipments/:id/returned', ['courier'], returned);
   route('GET', '/api/courier/schedule', ['courier'], mySchedule);
+  route('POST', '/api/courier/depart', ['courier'], depart);
   route('PUT', '/api/courier/schedule', ['courier'], saveMySchedule);
   route('GET', '/api/admin/shipments', ['admin'], adminList);
   route('GET', '/api/admin/shipments/export', ['admin'], adminExportShipments);

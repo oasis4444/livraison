@@ -4,7 +4,7 @@ import {
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, getPosition, hm, every, startNotifications, showNotifications, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
-import { c, shipCard, shipDetail, courierScheduleEditor, scheduleHtml } from './colis.js';
+import { c, shipCard, shipDetail, courierScheduleEditor, scheduleHtml, stepLabel } from './colis.js';
 
 let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null;
 const mk = {};
@@ -99,9 +99,11 @@ function hideGate() {
   toast(t('gps_ok'), 'ok');
 }
 async function sendPos() {
-  if (!pos || (!available && !active)) return;
+  // Position envoyée dès que le GPS répond ; le serveur ne l'enregistre que pendant le service (disponible, course ou colis en cours).
+  if (!pos) return;
   const r = await api('POST', '/api/courier/location', { lat: pos[0], lng: pos[1] });
   if (r.active_delivery && !active) checkActive();
+  if (r.stages?.length) { for (const [ref, st] of r.stages) toast(`${ref} · ${stepLabel(st)}`, 'ok'); if (tab === 'colis') loadMissions(); }
 }
 async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && (available || active)) keepAwake(); });
@@ -311,7 +313,8 @@ async function loadMissions() {
     [c('done_today'), shipments.filter((x) => ['delivered', 'refused', 'cancelled'].includes(x.status) && !x.to_return)],
   ];
   const cash = shipments.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + (x.collected || 0), 0);
-  el.innerHTML = (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
+  const toLeave = shipments.filter((x) => x.step === 'scheduled').length;
+  el.innerHTML = (toLeave ? `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${state.lang === 'mg' ? 'Miala amin\'ny centre' : 'Je pars du centre'} (${toLeave} ${c('parcels')})</button>` : '') + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
     + grp.filter(([, l]) => l.length).map(([title, l]) => `<h3>${esc(title)} (${l.length})</h3><div class="list">${l.map((x) => shipCard(x)).join('')}</div>`).join('')
     || `<p class="muted" style="text-align:center;padding:16px">${c('empty')}</p>`;
   // repères sur la carte
@@ -342,6 +345,12 @@ const actions = {
   tab: (el) => { tab = el.dataset.t; lastSig = ''; render(); },
   open: (el) => openRequest(+el.dataset.id),
   ship: (el) => openShip(+el.dataset.id),
+  depart: async () => {
+    if (!pos) return toast(t('gps_off_title'), 'err');
+    const r = await api('POST', '/api/courier/depart', {});
+    toast(`🚀 ${r.shipments} ${c('parcels')}`, 'ok');
+    await sendPos(); loadMissions();
+  },
   toggle: async () => {
     if (!available && (!pos || Date.now() - lastFix > 60e3)) { showGate(pos ? 'lost' : 'off'); return toast(t('gps_off_title'), 'err'); }
     const r = await api('POST', '/api/courier/availability', { available: !available });

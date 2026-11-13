@@ -2,15 +2,15 @@
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications,
-  profileForm, sendSOS, complaintForm, chatHtml, TANA,
+  profileForm, sendSOS, complaintForm, chatHtml, TANA, haversine,
 } from './core.js';
-import { c, shipCard, scheduleHtml, sendForm, shipDetail } from './colis.js';
+import { c, shipCard, scheduleHtml, sendForm, shipDetail, stepLabel, stepBar } from './colis.js';
 
 let root, map, sheet, poller, nearbyTimer;
 const mk = {};
 let routeLayer = null;
 const form = { a: null, b: null, type: 'colis', price: null, priceTouched: false, quote: null, payment: 'cash', schedule: false, scheduled_at: '', promo: '', desc: '', rname: '', rphone: '' };
-let picking = null, me = null, tab = 'colis', current = null, lastSig = '', lastMsgId = 0, lastRouteFrom = null, favorites = [];
+let liveTimer = null, liveRouteFrom = null, colisSig = '', liveFitted = false, picking = null, me = null, tab = 'colis', current = null, lastSig = '', lastMsgId = 0, lastRouteFrom = null, favorites = [];
 
 export async function mount(el) {
   root = el;
@@ -90,8 +90,16 @@ function renderHome() {
   const body = $('#sheet-body');
   const tb = (k, l) => `<button data-act="tab" data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`;
   const tabs = `<div class="tabs">${tb('colis', '📦 ' + c('colis'))}${tb('sched', '🕘 ' + c('schedule_tab'))}${tb('home', 'Express')}${tb('history', t('history'))}${tb('fav', '⭐')}</div>`;
-  if (tab === 'colis') { body.innerHTML = tabs + '<div data-colis>…</div>'; return loadColis(); }
-  if (tab === 'sched') { body.innerHTML = tabs + '<div data-sched>…</div>'; return scheduleHtml(map).then((h) => { const el = $('[data-sched]'); if (el) el.innerHTML = h; }).catch(toastErr); }
+  liveTimer?.stop(); liveTimer = null; clearLive();
+  if (tab === 'colis') { body.innerHTML = tabs + '<div data-live></div><div data-colis>…</div>'; liveTimer = every(5000, () => loadColis()); return; }
+  if (tab === 'sched') {
+    body.innerHTML = tabs + '<div data-sched>…</div>';
+    liveTimer = every(5000, async () => {
+      const h = await scheduleHtml(map, (deps) => showOutCouriers(deps));
+      const el = $('[data-sched]'); if (el && el._h !== h) { el.innerHTML = h; el._h = h; }
+    });
+    return;
+  }
   if (tab === 'history') { body.innerHTML = tabs + '<div data-hist class="list"><p class="muted">…</p></div>'; return loadHistory(); }
   if (tab === 'fav') { body.innerHTML = tabs + favHtml(); return; }
   const q = form.quote;
@@ -125,9 +133,56 @@ function favHtml() {
     ${form.b ? `<button class="btn block" data-act="addfav" data-w="b">＋ ${t('add_favorite')} : ${esc(form.b.label)}</button>` : ''}</div>`;
 }
 
+function clearLive() { for (const k of Object.keys(mk)) if (/^(lc|lt|sc)/.test(k)) { mk[k].remove(); delete mk[k]; } routeLayer?.remove(); routeLayer = null; liveFitted = false; colisSig = ''; liveRouteFrom = null; }
+
+// Livreurs partis du centre (onglet heures & axes) : position en direct.
+function showOutCouriers(deps) {
+  const keep = new Set();
+  for (const d of deps.filter((x) => x.started && x.lat != null)) {
+    keep.add('sc' + d.courier_id);
+    upsertMarker(map, mk, 'sc' + d.courier_id, [d.lat, d.lng], icons.bike('', `${d.courier} · ${d.axe}`), { refreshIcon: true });
+  }
+  for (const k of Object.keys(mk)) if (k.startsWith('sc') && !keep.has(k)) { mk[k].remove(); delete mk[k]; }
+}
+
+// Colis en cours : le livreur apparaît sur la carte et se déplace toutes les 5 s, avec distance et temps estimé.
+async function showLiveParcels(list) {
+  const box = $('[data-live]'); if (!box) return;
+  const live = list.filter((x) => x.courier_live?.lat != null && !['delivered', 'refused', 'cancelled'].includes(x.status));
+  const keep = new Set(), pts = [];
+  box.innerHTML = live.map((x) => {
+    const cpos = [x.courier_live.lat, x.courier_live.lng];
+    const target = x.status === 'picked_up' ? x.recipient : x.sender;
+    const d = target.lat != null ? haversine(cpos[0], cpos[1], target.lat, target.lng) * 1.3 : null;
+    keep.add('lc' + x.id); keep.add('lt' + x.id);
+    upsertMarker(map, mk, 'lc' + x.id, cpos, icons.bike(x.status === 'picked_up' ? 'busy' : '', (x.courier?.name || '').split(' ')[0]), { zIndexOffset: 900, refreshIcon: true })?.off('click').on('click', () => shipDetail(x.id, { role: x.mine_as }));
+    if (target.lat != null) upsertMarker(map, mk, 'lt' + x.id, [target.lat, target.lng], x.status === 'picked_up' ? icons.b() : icons.a());
+    pts.push(cpos); if (target.lat != null) pts.push([target.lat, target.lng]);
+    const stale = Date.now() - x.courier_live.last_seen > 120e3;
+    return `<div class="live-card" data-act="ship" data-id="${x.id}"><div class="avatar">🚲</div><div class="grow">
+      <b>${esc((x.courier?.name || '').split(' ')[0])} · ${esc(stepLabel(x.step))}</b>
+      <div class="small muted">${esc(x.ref)} · ${d != null ? `${km(d)} · ~${etaMin(d)} ${t('min')}` : ''}${stale ? ` · ⚠ GPS ${time(x.courier_live.last_seen)}` : ''}</div>${stepBar(x)}</div>
+      <span class="small">${x.mine_as === 'recipient' ? ar(x.amount_to_collect) : ''}</span></div>`;
+  }).join('');
+  for (const k of Object.keys(mk)) if (/^(lc|lt)/.test(k) && !keep.has(k)) { mk[k].remove(); delete mk[k]; }
+  if (live.length === 1) {
+    const x = live[0], target = x.status === 'picked_up' ? x.recipient : x.sender;
+    const from = [x.courier_live.lat, x.courier_live.lng];
+    if (target.lat != null && (!liveRouteFrom || haversine(liveRouteFrom[0], liveRouteFrom[1], from[0], from[1]) > 0.08 || liveRouteFrom[2] !== x.step)) {
+      liveRouteFrom = [...from, x.step];
+      drawRoute(from, [target.lat, target.lng], false);
+    }
+  }
+  if (pts.length && !liveFitted && map) { map.fitBounds(L.latLngBounds(pts).pad(.35), { maxZoom: 16, paddingBottomRight: [0, window.innerWidth < 900 ? 300 : 0] }); liveFitted = true; }
+}
+
 async function loadColis() {
   const [list, bal] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/shipments/balance').catch(() => null)]);
+  await showLiveParcels(list.shipments);
   const el = $('[data-colis]'); if (!el) return;
+  const sig = JSON.stringify([list.shipments.map((x) => [x.id, x.step]), bal?.due, bal?.with_courier]);
+  if (sig === colisSig) return;
+  colisSig = sig;
   const sent = list.shipments.filter((x) => x.mine_as === 'sender'), recv = list.shipments.filter((x) => x.mine_as === 'recipient');
   el.innerHTML = `<button class="btn primary lg block" data-act="sendparcel">＋ ${c('send_parcel')}</button>
     ${bal && (bal.due || bal.with_courier) ? `<div class="card" style="margin-top:10px;background:var(--green-soft);border:0"><div class="small muted">${c('balance_vendor')}</div><div class="price">${ar(bal.due)}</div>${bal.with_courier ? `<div class="tiny muted">${c('with_courier')} : ${ar(bal.with_courier)}</div>` : ''}</div>` : ''}

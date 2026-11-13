@@ -91,35 +91,82 @@ const VIEWS = {
   },
 
   async live() {
-    main.innerHTML = head('Carte en direct', `<span class="small muted" data-live-info></span>`) + `<div class="live-wrap"><div class="livemap" id="livemap"></div><div class="live-list panel" data-live-list></div></div>`;
-    liveMap = makeMap($('#livemap'), { zoom: 13, zoomControl: true });
+    const win = sessionStorage.getItem('adm_trail') || '180';
+    main.innerHTML = head('Carte en direct', `<span class="small muted" data-live-info></span>`) + `
+      <div class="live-tools no-print" style="margin-bottom:10px">
+        <label class="row small"><input type="checkbox" data-tr ${sessionStorage.getItem('adm_trails') !== '0' ? 'checked' : ''}> Chemins parcourus</label>
+        <select class="input" data-win style="width:auto;padding:.35rem .6rem">${[['30', '30 min'], ['60', '1 h'], ['180', '3 h'], ['720', '12 h']].map(([v, l]) => `<option value="${v}" ${win === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <label class="row small"><input type="checkbox" data-pc ${sessionStorage.getItem('adm_parcels') !== '0' ? 'checked' : ''}> Colis</label>
+        <label class="row small"><input type="checkbox" data-fl checked> Suivre automatiquement</label>
+        <span class="small muted">🟢 disponible · 🟠 en course · ⚪ GPS perdu · 🟩 récupération · 🟧 livraison</span></div>
+      <div class="live-wrap"><div class="livemap" id="livemap"></div><div class="live-list panel" data-live-list></div></div>`;
+    liveMap = makeMap($('#livemap'), { zoom: 13, zoomControl: true, layers: true });
+    const trails = {}, links = {};
+    const COLORS = ['#0b6e4f', '#2563eb', '#c2410c', '#7c3aed', '#be123c', '#0891b2', '#a16207', '#4d7c0f'];
+    const colorOf = (id) => COLORS[id % COLORS.length];
     let fitted = false;
+    $('[data-win]').onchange = (e) => { sessionStorage.setItem('adm_trail', e.target.value); show(); };
+    $('[data-tr]').onchange = (e) => sessionStorage.setItem('adm_trails', e.target.checked ? '1' : '0');
+    $('[data-pc]').onchange = (e) => sessionStorage.setItem('adm_parcels', e.target.checked ? '1' : '0');
     liveTimer = every(5000, async () => {
-      const r = await api('GET', '/api/admin/live');
-      const keep = new Set();
-      if (liveMap && !axeLayers.length && r.axes.length) axeLayers = r.axes.map((a) => L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color, weight: 2, fillOpacity: .05, interactive: false }).addTo(liveMap).bindTooltip?.(esc(a.name)));
+      const r = await api('GET', `/api/admin/live?trail_minutes=${win}`);
+      if (!liveMap) return;
+      if (!axeLayers.length && r.axes.length) axeLayers = r.axes.map((a) => L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color, weight: 1.5, fillOpacity: .04, interactive: false }).addTo(liveMap));
+      const showTrails = $('[data-tr]')?.checked, showParcels = $('[data-pc]')?.checked;
+      const keep = new Set(), pos = {};
       for (const c of r.couriers) {
         const stale = r.server_time - c.last_seen > 2 * 60e3;
+        const busy = c.delivery_id || r.parcels.some((p) => p.courier_id === c.id && ['departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'returning'].includes(p.step));
+        if (!c.available && !busy && stale) continue;
+        pos[c.id] = [c.lat, c.lng];
         keep.add('c' + c.id);
-        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : c.delivery_id ? 'busy' : ''), { refreshIcon: true })
-          ?.bindTooltip(`<b>${esc(c.name)}</b><br>${c.delivery_id ? `Livraison #${c.delivery_id} (${t('st_' + c.delivery_status)})` : 'Disponible'}${c.axe ? `<br>🧭 ${esc(c.axe)}` : ''}<br>${stale ? '⚠ GPS perdu — ' : ''}Vu à ${time(c.last_seen)}`)
+        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : busy ? 'busy' : '', c.name.split(' ')[0]), { refreshIcon: true, zIndexOffset: 1000 })
+          ?.bindTooltip(`<b>${esc(c.name)}</b> · ${esc(phoneFmt(c.phone))}<br>${c.delivery_id ? `Course #${c.delivery_id}` : busy ? 'Colis en cours' : 'Disponible'}${c.axe ? ` · 🧭 ${esc(c.axe)}` : ''}<br>${stale ? '⚠ GPS perdu — ' : ''}Vu à ${time(c.last_seen)}`)
           .off('click').on('click', () => courierTrack(c));
+        // chemin parcouru (mis à jour en continu)
+        const tr = (r.trails[c.id] || []).map((p) => [p[0], p[1]]);
+        if (showTrails && tr.length > 1) {
+          if (!trails[c.id]) trails[c.id] = L.polyline(tr, { color: colorOf(c.id), weight: 4, opacity: .75 }).addTo(liveMap);
+          else trails[c.id].setLatLngs(tr);
+        } else if (trails[c.id]) { trails[c.id].remove(); delete trails[c.id]; }
       }
+      for (const id of Object.keys(trails)) if (!pos[id]) { trails[id].remove(); delete trails[id]; }
+      // colis : point de récupération / livraison + liaison avec le livreur
+      const keepLinks = new Set();
+      if (showParcels) for (const p of r.parcels) {
+        const toPickup = ['pending', 'scheduled', 'departed', 'at_pickup'].includes(p.step);
+        const target = toPickup ? p.pickup : p.drop;
+        if (!target) continue;
+        keep.add('p' + p.id);
+        upsertMarker(liveMap, liveMk, 'p' + p.id, target, icons.dot(toPickup ? '#0b6e4f' : '#e8890c', p.ref), { refreshIcon: true })
+          ?.bindTooltip(`<b>${esc(p.ref)}</b> · ${esc(p.step_label)}<br>${toPickup ? '🟢 Récupération' : '🟠 Livraison'} : ${esc(toPickup ? p.pickup_addr : p.drop_addr)}<br>${esc(p.sender)} → ${esc(p.recipient)} · ${ar(p.amount)}${p.courier ? `<br>🚲 ${esc(p.courier)}` : ''}`)
+          .off('click').on('click', () => parcelDetail(p.id));
+        if (p.courier_id && pos[p.courier_id] && p.step !== 'scheduled') {
+          keepLinks.add(p.id);
+          const ll = [pos[p.courier_id], target];
+          if (!links[p.id]) links[p.id] = L.polyline(ll, { color: toPickup ? '#0b6e4f' : '#e8890c', weight: 2, dashArray: '6 6', opacity: .8, interactive: false }).addTo(liveMap);
+          else links[p.id].setLatLngs(ll);
+        }
+      }
+      for (const id of Object.keys(links)) if (!keepLinks.has(Number(id))) { links[id].remove(); delete links[id]; }
       for (const d of r.deliveries.filter((x) => x.status === 'open')) {
         keep.add('d' + d.id);
-        upsertMarker(liveMap, liveMk, 'd' + d.id, [d.pickup_lat, d.pickup_lng], icons.req(`#${d.id} · ${(d.proposed_price / 1000).toFixed(1)}k`), { refreshIcon: true })
-          ?.off('click').on('click', () => deliveryDetail(d.id));
+        upsertMarker(liveMap, liveMk, 'd' + d.id, [d.pickup_lat, d.pickup_lng], icons.req(`#${d.id} · ${(d.proposed_price / 1000).toFixed(1)}k`), { refreshIcon: true })?.off('click').on('click', () => deliveryDetail(d.id));
       }
       for (const s of r.sos) if (s.lat != null) { keep.add('s' + s.id); upsertMarker(liveMap, liveMk, 's' + s.id, [s.lat, s.lng], icons.sos())?.bindTooltip(esc(s.body)); }
       pruneMarkers(liveMk, keep);
-      if (!fitted && liveMap && keep.size) { const pts = Object.values(liveMk).map((m) => m.getLatLng()); liveMap.fitBounds(L.latLngBounds(pts).pad(.3), { maxZoom: 15 }); fitted = true; }
-      $('[data-live-info]').textContent = `🟢 ${r.couriers.filter((c) => !c.delivery_id).length} disponibles · 🟠 ${r.couriers.filter((c) => c.delivery_id).length} en livraison · 🟡 ${r.deliveries.filter((d) => d.status === 'open').length} demandes · actualisé ${time(r.server_time)}`;
+      const all = Object.values(pos);
+      if (all.length && ($('[data-fl]')?.checked && !fitted)) { liveMap.fitBounds(L.latLngBounds(all).pad(.4), { maxZoom: 15 }); fitted = true; }
+      const out = r.couriers.filter((c) => pos[c.id]);
+      $('[data-live-info]').textContent = `🚲 ${out.length} livreurs en service · 📦 ${r.parcels.length} colis en cours · actualisé ${time(r.server_time)}`;
+      const icon = (k) => (k === 'shipment' ? '📦' : /sos/.test(k) ? '🚨' : /delivery|offer/.test(k) ? '🛵' : /courier/.test(k) ? '🚲' : /cash|vendor/.test(k) ? '💵' : '👤');
       $('[data-live-list]').innerHTML = `${r.sos.length ? `<h3 style="color:var(--red)">🚨 SOS (${r.sos.length})</h3>${r.sos.map((s) => `<div class="small card" style="border-color:var(--red);margin-bottom:6px">${esc(s.body)}<div class="muted">${dt(s.at)}</div></div>`).join('')}` : ''}
-        <h3>Livraisons actives (${r.deliveries.length})</h3>
-        <div class="list">${r.deliveries.map((d) => `<div class="small" data-act="delivery" data-id="${d.id}" style="cursor:pointer"><div class="row between"><b>#${d.id} ${esc(d.client_name)}</b>${statusPill(d.status)}</div>
-          <div class="muted ellipsis">${esc(d.pickup_addr || '')} → ${esc(d.drop_addr || '')}</div><div>${d.courier_name ? '🚲 ' + esc(d.courier_name) : '—'} · ${ar(d.final_price ?? d.proposed_price)}</div></div>`).join('') || '<p class="muted small">Aucune</p>'}</div>
-        <h3 style="margin-top:14px">Livreurs (${r.couriers.length})</h3>
-        ${r.couriers.map((c) => `<div class="row between small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:4px 0"><span>${c.delivery_id ? '🟠' : '🟢'} ${esc(c.name)}${c.axe ? ` <span class="tiny muted">🧭 ${esc(c.axe)}</span>` : ''}</span><span class="muted">${time(c.last_seen)}</span></div>`).join('')}`;
+        <h3>🚲 Livreurs en service (${out.length})</h3>
+        ${out.map((c) => { const mine = r.parcels.filter((p) => p.courier_id === c.id && p.step !== 'scheduled'); return `<div class="small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:5px 0;border-bottom:1px solid var(--line)">
+          <div class="row between"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorOf(c.id)}"></span> ${esc(c.name)}</b><span class="muted">${time(c.last_seen)}</span></div>
+          <div class="muted">${c.delivery_id ? `🛵 course #${c.delivery_id}` : ''}${mine.map((p) => `📦 ${esc(p.ref)} ${esc(p.step_label)}`).join(' · ') || (c.axe ? `🧭 ${esc(c.axe)}` : 'disponible')}</div></div>`; }).join('') || '<p class="muted small">Aucun livreur en service.</p>'}
+        <h3 style="margin-top:12px">⚡ Mouvements</h3>
+        <div class="feed">${r.feed.slice(0, 40).map((f) => `<div><time>${time(f.at)}</time><span>${icon(f.kind)} <b>${esc(f.who)}</b>${f.role ? ` <span class="muted tiny">${{ client: 'client', courier: 'livreur', admin: 'centre' }[f.role] || ''}</span>` : ''} — ${esc(f.text)}</span></div>`).join('') || '<p class="muted small">—</p>'}</div>`;
       $('[data-live-list]')._couriers = r.couriers;
     });
   },

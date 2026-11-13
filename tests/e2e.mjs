@@ -21,10 +21,10 @@ const LEAFLET_STUB = `
   const b = (pts) => ({ pad() { return this; }, pts });
   window.L = {
     map(el, o) { const m = { _c: o.center, _layers: new Set(), setView(c) { m._c = Array.isArray(c) ? c : [c.lat, c.lng]; return m; }, getCenter() { return { lat: m._c[0], lng: m._c[1] }; },
-      fitBounds() { return m; }, invalidateSize() {}, remove() {}, on() { return m; }, off() { return m; }, attributionControl: { setPrefix() {} } }; el.dataset.stubmap = '1'; window.__maps = (window.__maps || []).concat(m); return m; },
+      fitBounds() { return m; }, invalidateSize() {}, remove() {}, on() { return m; }, off() { return m; }, hasLayer() { return true; }, removeLayer() { return m; }, attributionControl: { setPrefix() {} } }; el.dataset.stubmap = '1'; window.__maps = (window.__maps || []).concat(m); return m; },
     tileLayer() { return mkLayer(); }, divIcon(o) { return o; },
     marker(ll, o) { let p = ll; const mk = mkLayer({ setLatLng(x) { p = x; return mk; }, getLatLng() { return { lat: p[0] ?? p.lat, lng: p[1] ?? p.lng }; }, setIcon() { return mk; }, icon: o.icon }); return mk; },
-    polyline(c) { return mkLayer({ getBounds: () => b(c) }); }, layerGroup(a) { return mkLayer(); }, latLngBounds: b,
+    polyline(c) { return mkLayer({ getBounds: () => b(c), setLatLngs() {} }); }, layerGroup(a) { return mkLayer(); }, latLngBounds: b,
     circle() { return mkLayer({ setLatLng() {}, setRadius() {}, setStyle() {} }); }, featureGroup() { return { getBounds: () => b([]) }; },
   };
 })();`;

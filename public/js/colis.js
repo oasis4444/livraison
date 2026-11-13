@@ -29,24 +29,37 @@ const L_MG = {
   rname: 'Anaran\'ny mpandray', rphone: 'Findain\'ny mpandray', desc: 'Inona ao anatiny (tsy voatery)', create: 'Alefa', my_position: 'Toerana misy ahy',
   pay_info: 'Ny mpandray no mandoa ny vidin\'entana + saran-dalana. Raha lavina, ny saran-dalana ihany no aloany; raha foanana rehefa voaray, miverina aminao ny entana ary ianao no mandoa ny saran-dalana.',
 };
+const STEP = {
+  fr: { pending: 'À programmer', scheduled: 'Programmé', departed: 'Parti du centre', at_pickup: 'Chez l\'expéditeur', picked_up: 'Récupéré', en_route: 'En route',
+    nearby: 'Tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour expéditeur', returned: 'Rendu à l\'expéditeur', fee: 'Frais modifiés', assigned: 'Programmé' },
+  mg: { pending: 'Mbola tsy voalahatra', scheduled: 'Voalahatra', departed: 'Lasa (niala centre)', at_pickup: 'Tonga eo amin\'ny mpandefa', picked_up: 'Voaray', en_route: 'An-dalana',
+    nearby: 'Efa akaiky', delivered: 'Tonga', refused: 'Nolavina', cancelled: 'Nofoanana', returning: 'Haverina amin\'ny mpandefa', returned: 'Naverina tamin\'ny mpandefa', fee: 'Saran-dalana novaina', assigned: 'Voalahatra' },
+};
+export const stepLabel = (k) => (STEP[state.lang] || STEP.fr)[k] || STEP.fr[k] || k;
+export const STEPS_FLOW = ['scheduled', 'departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'delivered'];
+export const stepBar = (s) => { const i = STEPS_FLOW.indexOf(s.step); return i < 0 ? '' : `<div class="steps">${STEPS_FLOW.map((_, j) => `<i class="${j <= i ? 'on' : ''}"></i>`).join('')}</div>`; };
 export const c = (k) => (state.lang === 'mg' ? L_MG : L_FR)[k] ?? L_FR[k] ?? k;
 
-const PILL = { pending: 'pending', assigned: 'assigned', picked_up: 'picked_up', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled' };
-export const shipPill = (s) => `<span class="status-pill st-${PILL[s.status]}">${esc(c('sh_' + s.status))}${s.to_return ? ' · ' + esc(c('to_return')) : s.returned ? ' · ' + esc(c('returned')) : ''}</span>`;
+const PILL = { pending: 'pending', scheduled: 'assigned', departed: 'assigned', at_pickup: 'assigned', picked_up: 'picked_up', en_route: 'picked_up', nearby: 'picked_up', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled', returning: 'cancelled', returned: 'cancelled' };
+export const shipPill = (s) => `<span class="status-pill st-${PILL[s.step] || 'pending'}">${esc(stepLabel(s.step))}</span>`;
 const dayLabel = (ms) => { const d0 = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10), d = new Date(ms + 3 * 3600e3).toISOString().slice(0, 10); return d === d0 ? c('today') : c('tomorrow'); };
 
 export function shipCard(s, extra = '') {
   return `<div class="card" data-act="ship" data-id="${s.id}" style="cursor:pointer">
     <div class="row between"><span class="small"><b>${esc(s.ref)}</b>${s.external_ref ? ` <span class="muted">· ${esc(s.external_ref)}</span>` : ''}</span>${shipPill(s)}</div>
     <div class="route-line" style="margin:6px 0"><span class="dot"></span><span class="small ellipsis">${esc(s.sender.name)} — ${esc(s.sender.address)}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small ellipsis">${esc(s.recipient.name)} — ${esc(s.recipient.address)}</span></div>
-    <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${ar(s.amount_to_collect)}</b></div>${extra}</div>`;
+    <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
 }
 
 // ---------------------------------------------------------------- heures & axes (visibles par tous les clients)
 let axeLayers = [];
-export async function scheduleHtml(map) {
+let axeSig = '';
+export async function scheduleHtml(map, onDeps) {
   const r = await api('GET', '/api/schedule');
-  if (map && window.L) {
+  onDeps?.(r.departures);
+  const sig = JSON.stringify(r.axes);
+  if (map && window.L && (sig !== axeSig || !axeLayers.length || !map.hasLayer(axeLayers[0]))) {
+    axeSig = sig;
     axeLayers.forEach((l) => l.remove());
     axeLayers = r.axes.map((a) => L.circle([a.center_lat, a.center_lng], { radius: a.radius_km * 1000, color: a.color, weight: 2, fillOpacity: .06, interactive: false }).addTo(map));
   }
@@ -171,7 +184,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     </div>
     ${s.courier ? `<div class="small">🚲 <b>${esc(s.courier.name || '')}</b>${s.departure_at ? ` · ${c('departure')} ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : ''} ${s.courier.phone && !isCourier ? call(s.courier.phone) : ''}</div>` : ''}
     ${s.has_photo ? `<img data-ph alt="${c('photo')}" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;background:var(--bg)">` : ''}
-    <div class="small"><b>Suivi</b>${s.events.map((e) => `<div class="row between" style="border-bottom:1px solid var(--line);padding:3px 0"><span>${esc(c('sh_' + e.status) !== 'sh_' + e.status ? c('sh_' + e.status) : e.status)}${e.note ? ` <span class="muted">— ${esc(e.note)}</span>` : ''}</span><span class="muted tiny">${dt(e.at)}</span></div>`).join('')}</div>
+    ${stepBar(s)}
+    <div class="small"><b>Suivi</b>${s.events.map((e) => `<div class="row between" style="border-bottom:1px solid var(--line);padding:3px 0"><span>${esc(e.status === 'assigned' ? stepLabel('scheduled') : stepLabel(e.status))}${e.note ? ` <span class="muted">— ${esc(e.note)}</span>` : ''}</span><span class="muted tiny">${dt(e.at)}</span></div>`).join('')}</div>
     <div class="stack" data-actions></div></div>`);
   const el = m.el;
   if (s.has_photo) photoUrl(s.id).then((u) => { const im = el.querySelector('[data-ph]'); if (u && im) im.src = u; });

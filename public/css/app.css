@@ -255,3 +255,20 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .gps-card { background: #fff; border-radius: 22px; padding: 26px 20px; max-width: 400px; width: 100%; text-align: center; box-shadow: var(--shadow); }
 .gps-card h2 { margin-top: 10px; }
 .courier-auth { background: radial-gradient(circle at 20% 0%, #2b3d36 0, #14211c 55%, #070d0b 100%); }
+
+/* Repères plus lisibles */
+.mk { position: relative; }
+.mk-label { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 2px; background: rgba(20, 33, 28, .88); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 8px; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.mk-dot { width: 16px; height: 16px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+.mk-bike { width: 42px; height: 42px; font-size: 21px; }
+.leaflet-control-layers { border-radius: 12px !important; border: 0 !important; box-shadow: var(--shadow) !important; }
+.live-card { display: flex; gap: 12px; align-items: center; background: var(--ink); color: #fff; border-radius: 16px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
+.live-card .avatar { background: var(--sun); color: #3d2c00; }
+.live-card .muted { color: #b9c8c1; }
+.steps { display: flex; gap: 4px; margin: 6px 0 2px; }
+.steps i { flex: 1; height: 5px; border-radius: 3px; background: var(--line); }
+.steps i.on { background: var(--green); }
+.feed { font-size: .82rem; }
+.feed > div { padding: 6px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 44px 1fr; gap: 6px; }
+.feed time { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.live-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .85rem; }

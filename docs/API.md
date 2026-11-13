@@ -27,6 +27,25 @@ L'API permet à un logiciel de vente (caisse, boutique en ligne, ERP) d'envoyer 
 | `refused` | Refusé par le destinataire (frais payés) ; `returned: true` quand rendu à l'expéditeur |
 | `cancelled` | Annulé. Si `picked_at` est renseigné : retour à l'expéditeur avec `return_fee` |
 
+## Étapes détaillées (`step`)
+
+En plus de `status`, chaque colis expose `step` (et `step_label` en français), mis à jour automatiquement par le GPS du livreur :
+
+| `step` | Signification |
+| --- | --- |
+| `pending` | À programmer |
+| `scheduled` | Programmé sur un départ |
+| `departed` | Le livreur est parti du centre |
+| `at_pickup` | Le livreur est arrivé chez l'expéditeur (< 150 m) |
+| `picked_up` | Colis récupéré |
+| `en_route` | En route vers le destinataire |
+| `nearby` | Livreur à moins de 300 m du destinataire |
+| `delivered` | Livré |
+| `refused` / `cancelled` | Refusé / annulé avant récupération |
+| `returning` / `returned` | Retour vers l'expéditeur / rendu |
+
+Chaque changement d'étape déclenche aussi le webhook.
+
 ## Endpoints
 
 ### `GET /schedule` — heures de départ et axes

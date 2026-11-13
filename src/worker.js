@@ -4,7 +4,7 @@ import {
   HttpError, fail, json, withSecurityHeaders, readJson, str, int, coord, normalizePhone,
   randomHex, randomPin, hashPassword, safeEqual, haversineKm, bbox, suggestPrice, csv, fmtDate, now,
 } from './lib.js';
-import { registerShipmentRoutes, authenticateMerchant } from './shipments.js';
+import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
 // Sans position GPS reçue depuis 2 minutes, le livreur n'est plus proposé aux clients ni notifié.
@@ -449,7 +449,9 @@ async function postLocation(ctx, env) {
   const [lat, lng] = coord(ctx.body.lat, ctx.body.lng);
   const t = now();
   const active = await one(env, "SELECT id FROM deliveries WHERE courier_id = ? AND status IN ('assigned','picked_up')", u.id);
-  if (!c.available && !active) return json({ ok: true, ignored: 'offline' }); // pas de suivi hors service
+  const parcels = await courierOpenShipments(env, u.id);
+  // Suivi pendant le service : disponible, course express en cours, ou colis en cours (parti du centre / récupéré).
+  if (!c.available && !active && !parcels) return json({ ok: true, ignored: 'offline' });
   if (c.last_seen && t - c.last_seen < 2500) return json({ ok: true, throttled: true });
   if (c.lat != null && c.last_seen) {
     const km = haversineKm(c.lat, c.lng, lat, lng), h = (t - c.last_seen) / 3600e3;
@@ -461,7 +463,8 @@ async function postLocation(ctx, env) {
     q(env, 'UPDATE couriers SET lat = ?, lng = ?, last_seen = ? WHERE user_id = ?', lat, lng, t, u.id),
     q(env, 'INSERT INTO positions (courier_id, delivery_id, lat, lng, at) VALUES (?,?,?,?,?)', u.id, active?.id ?? null, lat, lng, t),
   ]);
-  return json({ ok: true, active_delivery: active?.id ?? null });
+  const stages = parcels ? await onCourierMove(env, u, lat, lng) : [];
+  return json({ ok: true, active_delivery: active?.id ?? null, stages });
 }
 
 async function courierRequests(ctx, env) {
@@ -649,8 +652,7 @@ async function adminLive(ctx, env) {
       (SELECT d.id FROM deliveries d WHERE d.courier_id = u.id AND d.status IN ('assigned','picked_up') LIMIT 1) AS delivery_id,
       (SELECT d.status FROM deliveries d WHERE d.courier_id = u.id AND d.status IN ('assigned','picked_up') LIMIT 1) AS delivery_status
     FROM users u JOIN couriers c ON c.user_id = u.id
-    WHERE u.status = 'active' AND c.lat IS NOT NULL AND (c.available = 1 OR EXISTS (SELECT 1 FROM deliveries d WHERE d.courier_id = u.id AND d.status IN ('assigned','picked_up')))
-      AND c.last_seen > ?`, now() - 24 * 3600e3);
+    WHERE u.status = 'active' AND c.lat IS NOT NULL AND c.last_seen > ?`, now() - 12 * 3600e3);
   const deliveries = await all(env, `SELECT d.id, d.status, d.pickup_lat, d.pickup_lng, d.pickup_addr, d.drop_lat, d.drop_lng, d.drop_addr, d.proposed_price, d.final_price,
       d.courier_id, d.created_at, cl.name AS client_name, cu.name AS courier_name
     FROM deliveries d JOIN users cl ON cl.id = d.client_id LEFT JOIN users cu ON cu.id = d.courier_id
@@ -661,7 +663,16 @@ async function adminLive(ctx, env) {
     const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id IN (${couriers.map(() => '?').join(',')})`, ...couriers.map((c) => c.id));
     for (const c of couriers) { const st = axeState(slots.filter((x) => x.courier_id === c.id)); c.axe = st.free ? null : st.current?.name || 'hors horaires'; }
   }
-  return json({ couriers, deliveries, sos, axes, server_time: now() });
+  // Trajets des 3 dernières heures (allégés à ~300 points par livreur) pour voir le chemin parcouru en direct.
+  const since = Number(ctx.url.searchParams.get('trail_minutes') || 180) * 60e3;
+  const pts = couriers.length ? await all(env, `SELECT courier_id, lat, lng, at FROM positions WHERE at > ? AND courier_id IN (${couriers.map(() => '?').join(',')}) ORDER BY at`, now() - since, ...couriers.map((c) => c.id)) : [];
+  const trails = {};
+  for (const c of couriers) {
+    const mine = pts.filter((p) => p.courier_id === c.id);
+    const step = Math.max(1, Math.ceil(mine.length / 300));
+    trails[c.id] = mine.filter((_, i) => i % step === 0 || i === mine.length - 1).map((p) => [p.lat, p.lng, p.at]);
+  }
+  return json({ couriers, deliveries, sos, axes, trails, parcels: await liveShipments(env), feed: await liveFeed(env), server_time: now() });
 }
 
 async function adminUsers(ctx, env) {

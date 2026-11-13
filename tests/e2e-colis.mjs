@@ -21,10 +21,10 @@ const LEAFLET_STUB = `
   const b = (pts) => ({ pad() { return this; }, pts });
   window.L = {
     map(el, o) { const m = { _c: o.center, _layers: new Set(), setView(c) { m._c = Array.isArray(c) ? c : [c.lat, c.lng]; return m; }, getCenter() { return { lat: m._c[0], lng: m._c[1] }; },
-      fitBounds() { return m; }, invalidateSize() {}, remove() {}, on() { return m; }, off() { return m; }, attributionControl: { setPrefix() {} } }; el.dataset.stubmap = '1'; window.__maps = (window.__maps || []).concat(m); return m; },
+      fitBounds() { return m; }, invalidateSize() {}, remove() {}, on() { return m; }, off() { return m; }, hasLayer() { return true; }, removeLayer() { return m; }, attributionControl: { setPrefix() {} } }; el.dataset.stubmap = '1'; window.__maps = (window.__maps || []).concat(m); return m; },
     tileLayer() { return mkLayer(); }, divIcon(o) { return o; },
     marker(ll, o) { let p = ll; const mk = mkLayer({ setLatLng(x) { p = x; return mk; }, getLatLng() { return { lat: p[0] ?? p.lat, lng: p[1] ?? p.lng }; }, setIcon() { return mk; }, icon: o.icon }); return mk; },
-    polyline(c) { return mkLayer({ getBounds: () => b(c) }); }, layerGroup(a) { return mkLayer(); }, latLngBounds: b,
+    polyline(c) { return mkLayer({ getBounds: () => b(c), setLatLngs() {} }); }, layerGroup(a) { return mkLayer(); }, latLngBounds: b,
     circle() { return mkLayer({ setLatLng() {}, setRadius() {}, setStyle() {} }); }, featureGroup() { return { getBounds: () => b([]) }; },
   };
 })();`;
@@ -103,8 +103,17 @@ try {
     await client.screenshot({ path: 'tests/screens/24-client-envoi.png' });
     await client.click('[data-ok]'); await client.waitForSelector('text=Programmé');
   });
-  await step('livreur : récupère (photo + valeur) puis livre', async () => {
+  await step('livreur part du centre → le client le voit en direct (statut + carte)', async () => {
     await courier.click('[data-t=colis]'); await courier.waitForSelector('text=CMD-1042');
+    await courier.click('[data-act=depart]'); await courier.waitForSelector('text=Chez l\'expéditeur', { timeout: 15000 });
+    await client.click('[data-t=colis]'); await client.waitForSelector('.live-card', { timeout: 15000 });
+    await client.waitForSelector('.live-card >> text=Chez l\'expéditeur');
+    await client.screenshot({ path: 'tests/screens/29-client-suivi-direct.png' });
+    await admin.click('[data-v=live]'); await admin.waitForSelector('text=Mouvements'); await admin.waitForSelector('.feed >> text=Parti du centre');
+    await admin.screenshot({ path: 'tests/screens/30-admin-carte-direct.png' });
+  });
+  await step('livreur : récupère (photo + valeur) puis livre', async () => {
+    await courier.waitForSelector('text=CMD-1042');
     await courier.click('[data-act=ship] >> text=CMD-1042');
     await courier.click('text=📦 Récupérer');
     await courier.setInputFiles('[data-file]', 'tests/fixture-colis.jpg');
