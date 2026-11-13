@@ -4,6 +4,7 @@ import {
   HttpError, fail, json, withSecurityHeaders, readJson, str, int, coord, normalizePhone,
   randomHex, randomPin, hashPassword, safeEqual, haversineKm, bbox, suggestPrice, csv, fmtDate, now,
 } from './lib.js';
+import { registerTsenaRoutes, syncTsena } from './tsena.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -751,7 +752,8 @@ async function adminPayment(ctx, env) {
 }
 
 async function adminSettingsGet(ctx, env) {
-  return json({ settings: await settings(env), zones: await all(env, 'SELECT * FROM zones ORDER BY id'), promos: await all(env, 'SELECT * FROM promos ORDER BY code') });
+  const st = Object.fromEntries(Object.entries(await settings(env)).filter(([k]) => !k.startsWith('tsena_'))); // jetons Tsena jamais renvoyés
+  return json({ settings: st, zones: await all(env, 'SELECT * FROM zones ORDER BY id'), promos: await all(env, 'SELECT * FROM promos ORDER BY code') });
 }
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
@@ -760,7 +762,7 @@ async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
   for (const [k, v] of Object.entries(ctx.body.settings || {})) {
-    if (!(k in cur)) continue;
+    if (!(k in cur) || k.startsWith('tsena_')) continue;
     let val = String(v ?? '').trim().slice(0, 200);
     if (NUMERIC.includes(k)) { const n = Number(val); if (!Number.isFinite(n) || n < 0) fail(400, 'invalid', `Valeur invalide pour ${k}`); val = String(n); }
     if (k === 'commission_mode' && !['percent', 'subscription'].includes(val)) fail(400, 'invalid', 'Mode de commission invalide');
@@ -1030,6 +1032,7 @@ route('PUT', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesPut);
 route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
 
 registerShipmentRoutes(route);
+registerTsenaRoutes(route);
 
 // API publique v1 : appelée par les logiciels de vente (souvent côté serveur, CORS ouvert pour les intégrations web).
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };
@@ -1080,7 +1083,9 @@ export default {
     const res = await env.ASSETS.fetch(req);
     return withSecurityHeaders(res);
   },
-  async scheduled(_event, env, ctx) {
-    ctx.waitUntil(maintenance(env));
+  // Chaque minute : synchronisation Tsena ; une fois par heure : maintenance.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(syncTsena(env).catch((e) => console.error('tsena', e)));
+    if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() === 17) ctx.waitUntil(maintenance(env));
   },
 };

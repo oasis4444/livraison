@@ -149,3 +149,10 @@ curl -X POST https://livraison.oasismdg3434.workers.dev/api/v1/shipments \
 
 curl https://livraison.oasismdg3434.workers.dev/api/v1/shipments/CMD-1042 -H "X-API-Key: ak_VOTRE_CLE"
 ```
+
+## Tsena Ampandrana : synchronisation automatique
+
+Admin → 🔌 Logiciels de vente → **Connecter Tsena**. Saisir l'e-mail et le mot de passe d'un compte Tsena (utilisés une seule fois ; seul un jeton Firebase est conservé), le nom et le téléphone de la boutique.
+
+- Chaque minute, les documents `deliveries` de Tsena au statut `attente` deviennent des colis Alefa (`external_ref` = n° `L-00001`, valeur = `amount`, frais = `fee` ou 3 000 Ar par défaut). Pas de doublon.
+- En retour, Alefa écrit dans le document Tsena : `status` = `cours` (livreur parti / colis récupéré) puis `livree` + `doneAt`, `driver` = livreur, et `alefaRef`, `alefaStep`, `alefaPin`.

@@ -303,9 +303,20 @@ const VIEWS = {
   },
 
   async api() {
-    const r = await api('GET', '/api/admin/merchants');
+    const [r, ts] = await Promise.all([api('GET', '/api/admin/merchants'), api('GET', '/api/admin/tsena')]);
     const base = location.origin;
+    const res = ts.last_result || {};
     main.innerHTML = head('Relier un logiciel de vente', '<button class="btn primary" data-act="newmerchant">＋ Clé API</button>') + `
+      <div class="panel stack" style="margin-bottom:16px;border:2px solid ${ts.connected ? 'var(--green)' : 'var(--line)'}">
+        <div class="row between wrap"><h3>🛒 Tsena Ampandrana — synchronisation automatique</h3>
+          ${ts.connected ? '<span class="status-pill st-delivered">● Connecté</span>' : '<span class="status-pill st-suspended">Non connecté</span>'}</div>
+        <p class="small">Chaque livraison <b>« En attente »</b> saisie dans Tsena arrive ici toute seule comme colis (en moins d'une minute). En retour, Alefa met à jour Tsena : <b>En cours</b> dès que le livreur part, <b>Livrée</b> à la remise, avec le nom du livreur et le code de réception.</p>
+        ${ts.connected ? `<div class="small">Compte : <b>${esc(ts.email)}</b> · Boutique : <b>${esc(ts.shop_name)}</b> ${esc(phoneFmt(ts.shop_phone))} · ${ts.linked} livraison(s) reliée(s)<br>
+          Dernière synchro : ${ts.last_sync ? dt(ts.last_sync) : '—'}${res.imported != null ? ` · ${res.imported} importée(s), ${res.updated} mise(s) à jour` : ''}</div>
+          ${ts.last_error ? `<div class="small" style="color:var(--red)">⚠ ${esc(ts.last_error)}</div>` : ''}
+          <div class="row"><button class="btn sm primary" data-act="tsenasync">⟳ Synchroniser maintenant</button><button class="btn sm" data-act="tsenaconnect">Changer de compte</button><button class="btn sm danger" data-act="tsenaoff">Déconnecter</button></div>`
+        : '<div class="row"><button class="btn primary" data-act="tsenaconnect">Connecter Tsena</button></div>'}
+      </div>
       <div class="grid2" style="margin-bottom:16px"><div class="panel stack">
         <h3>① Le plus simple : le lien « Alefa » (aucun développement)</h3>
         <p class="small">Dans le logiciel de vente, ajoutez un bouton <b>« Livrer avec Alefa »</b> qui ouvre ce lien en remplaçant les valeurs par celles de la commande. Le vendeur (connecté à Alefa) voit le formulaire déjà rempli et appuie sur <b>Envoyer</b>.</p>
@@ -516,6 +527,9 @@ const actions = {
     toast(`${ar(r.amount)} payés (${r.shipments} colis)`, 'ok'); show();
   },
   newmerchant: () => merchantForm(),
+  tsenaconnect: () => tsenaForm(),
+  tsenasync: async () => { const r = await api('POST', '/api/admin/tsena/sync'); toast(r.errors?.length ? r.errors[0] : `${r.imported} importée(s), ${r.updated} mise(s) à jour`, r.errors?.length ? 'err' : 'ok'); show(); },
+  tsenaoff: async () => { if (!(await confirmBox('Arrêter la synchronisation avec Tsena ?', 'Déconnecter', true))) return; await api('POST', '/api/admin/tsena/disconnect'); show(); },
   mhook: async (el) => { const v = await promptBox('Webhook (https://…)', { value: el.dataset.url, placeholder: 'https://mon-logiciel.mg/webhooks/alefa' }); if (v == null) return; await api('POST', `/api/admin/merchants/${el.dataset.id}`, { webhook_url: v }); show(); },
   mkey: async (el) => {
     if (!(await confirmBox('Générer une nouvelle clé ? L\'ancienne cessera de fonctionner immédiatement.', 'Générer', true))) return;
@@ -679,4 +693,26 @@ function merchantForm() {
       show();
     } catch (e) { toastErr(e); }
   };
+}
+
+// Connexion au compte Tsena : le mot de passe part une seule fois vers Firebase, il n'est pas conservé.
+function tsenaForm() {
+  const m = modal('Connecter Tsena Ampandrana', `<form class="stack" data-f>
+    <label class="field"><span>Adresse du logiciel</span><input class="input" name="url" value="https://tsena-ampandrana.web.app" required></label>
+    <label class="field"><span>E-mail du compte Tsena</span><input class="input" name="email" type="email" autocomplete="off" required></label>
+    <label class="field"><span>Mot de passe Tsena</span><input class="input" name="password" type="password" autocomplete="off" required></label>
+    <p class="tiny muted">Utilisé une seule fois pour obtenir l'autorisation ; Alefa ne garde pas le mot de passe.</p>
+    <label class="field"><span>Nom de la boutique (expéditeur des colis)</span><input class="input" name="shop_name" value="Tsena Ampandrana" required></label>
+    <label class="field"><span>Téléphone de la boutique</span><input class="input" name="shop_phone" required placeholder="034 00 000 00"></label>
+    <label class="field"><span>Adresse de récupération</span><input class="input" name="pickup_addr" placeholder="Ampandrana, Antananarivo"></label>
+    <button class="btn primary" data-go>Connecter et importer</button></form>`);
+  const f = m.el.querySelector('[data-f]');
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const b = f.querySelector('[data-go]'); b.disabled = true; b.textContent = 'Connexion…';
+    try {
+      const r = await api('POST', '/api/admin/tsena/connect', Object.fromEntries(new FormData(f)));
+      m.close(); toast(`Tsena connecté : ${r.imported} livraison(s) importée(s)`, 'ok'); show();
+    } catch (err) { toastErr(err); b.disabled = false; b.textContent = 'Connecter et importer'; }
+  });
 }

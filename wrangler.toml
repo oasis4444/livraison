@@ -22,6 +22,6 @@ database_name = "alefa-livraison-prod"
 database_id = "07f57312-6db2-4887-9b13-960ce5ab2c3b"
 migrations_dir = "migrations"
 
-# Maintenance horaire : purge des trajets GPS anciens, expiration des demandes, sessions périmées.
+# Chaque minute : synchronisation avec Tsena ; maintenance à hh:17 (purge GPS, demandes expirées, sessions).
 [triggers]
-crons = ["17 * * * *"]
+crons = ["* * * * *"]

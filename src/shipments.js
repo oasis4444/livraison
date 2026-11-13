@@ -150,7 +150,7 @@ async function assignTo(env, s, dep, user) {
 }
 
 // ---------------------------------------------------------------- création (application, admin, API)
-async function createShipment(env, b, { sender, source, merchant = null, actor }) {
+export async function createShipment(env, b, { sender, source, merchant = null, actor }) {
   const recipient_phone = normalizePhone(b.recipient?.phone ?? b.recipient_phone);
   const [plat, plng] = optCoord(b.sender?.lat ?? b.pickup_lat, b.sender?.lng ?? b.pickup_lng);
   const [dlat, dlng] = optCoord(b.recipient?.lat ?? b.drop_lat, b.recipient?.lng ?? b.drop_lng);
