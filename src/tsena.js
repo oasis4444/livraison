@@ -56,7 +56,7 @@ const docsBase = (s) => `https://firestore.googleapis.com/v1/projects/${s.tsena_
 async function waitingDeliveries(s, token) {
   const j = await http(`${docsBase(s)}:runQuery`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'deliveries' }], where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'attente' } } }, limit: 200 } }),
+    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'deliveries' }], where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'IN', value: { arrayValue: { values: [{ stringValue: 'attente' }, { stringValue: 'cours' }] } } } }, limit: 300 } }),
   });
   return (Array.isArray(j) ? j : []).filter((x) => x.document).map((x) => ({
     docId: x.document.name.split('/').pop(),
@@ -106,7 +106,12 @@ export async function syncTsena(env) {
     // 1. Tsena → Alefa : nouvelles livraisons « En attente ».
     const docs = await waitingDeliveries(s, token);
     const known = new Set((await all(env, 'SELECT doc_id FROM tsena_links')).map((x) => x.doc_id));
-    const fresh = docs.filter((d) => !known.has(d.docId) && d.phone);
+    // Livraisons déjà présentes dans Alefa (import manuel, même n°) : on les relie simplement.
+    for (const d of docs.filter((x) => !known.has(x.docId) && x.no)) {
+      const ex = await one(env, 'SELECT id FROM shipments WHERE external_ref = ? AND id NOT IN (SELECT shipment_id FROM tsena_links) ORDER BY id DESC LIMIT 1', d.no);
+      if (ex) { await run(env, 'INSERT OR IGNORE INTO tsena_links (shipment_id, doc_id, last_step, synced_at) VALUES (?,?,?,?)', ex.id, d.docId, null, now()); known.add(d.docId); out.linked = (out.linked || 0) + 1; }
+    }
+    const fresh = docs.filter((d) => !known.has(d.docId) && d.phone && d.status === 'attente');
     if (fresh.length) {
       const sender = await shopAccount(env, s);
       for (const d of fresh) {
@@ -176,7 +181,7 @@ async function connect(ctx, env) {
   await setMany(env, { ...s, tsena_url: cfg.base, tsena_email: email, tsena_shop_name: str(b.shop_name || 'Tsena Ampandrana', { max: 80 }), tsena_shop_phone: shopPhone, tsena_pickup_addr: str(b.pickup_addr, { max: 200 }), tsena_last_error: '' });
   await audit(env, ctx, 'tsena_connect', { url: cfg.base, email });
   const first = await syncTsena(env);
-  return json({ ok: true, waiting: waiting.length, ...first });
+  return json({ ok: true, waiting: waiting.filter((d) => d.status === 'attente').length, ...first });
 }
 
 async function syncNow(ctx, env) { return json(await syncTsena(env)); }

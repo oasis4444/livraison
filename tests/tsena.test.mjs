@@ -22,7 +22,8 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.includes('securetoken')) return J({ id_token: 'tok', refresh_token: 'ref2' });
   if (u.includes(':runQuery')) {
     assert.equal(init.headers.Authorization, 'Bearer tok');
-    return J(Object.entries(fs).filter(([, d]) => d.status === 'attente').map(([id, d]) => ({ document: { name: `projects/p/databases/(default)/documents/deliveries/${id}`, fields: Object.fromEntries(Object.entries(d).map(([k, v]) => [k, val(v)])) } })));
+    const want = JSON.parse(init.body).structuredQuery.where.fieldFilter.value.arrayValue.values.map((v) => v.stringValue);
+    return J(Object.entries(fs).filter(([, d]) => want.includes(d.status)).map(([id, d]) => ({ document: { name: `projects/p/databases/(default)/documents/deliveries/${id}`, fields: Object.fromEntries(Object.entries(d).map(([k, v]) => [k, val(v)])) } })));
   }
   if (init.method === 'PATCH' && u.includes('/documents/deliveries/')) {
     const id = u.split('/deliveries/')[1].split('?')[0];
@@ -70,4 +71,16 @@ test('pas de doublon, et l\'avancement Alefa est réécrit dans Tsena', async ()
   assert.equal(r.imported, 1);
   const s3 = (await call('GET', '/api/admin/shipments?q=L-00003', null, admin)).data.shipments[0];
   assert.equal(s3.fee, 3000, 'frais Alefa par défaut quand Tsena n\'en indique pas');
+});
+
+test('une livraison déjà importée à la main (même n°) est reliée et suivie', async () => {
+  const { createShipment } = await import('../src/shipments.js');
+  const sender = env.DB.raw.prepare("SELECT * FROM users WHERE phone='+261321112233'").get();
+  fs.d4 = { no: 'L-00004', status: 'cours', clientName: 'Bema', phone: '034 55 666 77', address: 'Isotry', amount: 5000 };
+  await createShipment(env, { external_ref: 'L-00004', recipient_name: 'Bema', recipient_phone: '0345566677', drop_addr: 'Isotry', pickup_addr: 'Ampandrana', declared_value: 5000 }, { sender, source: 'admin', actor: { role: 'admin', id: null } });
+  const r = await syncTsena(env);
+  assert.equal(r.linked, 1); assert.equal(r.imported, 0, 'pas recréée');
+  env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00004'").run(Date.now());
+  await syncTsena(env);
+  assert.equal(fs.d4.status, 'livree');
 });
