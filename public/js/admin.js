@@ -3,7 +3,7 @@ import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA,
 } from './core.js';
-import { c, shipPill, sendForm, shipDetail } from './colis.js';
+import { c, shipPill, sendForm, shipDetail, importForm, templateCsv } from './colis.js';
 
 let root, main, view = location.hash.replace('#', '') || 'dash', liveTimer = null, liveMap = null, counts = {};
 const liveMk = {};
@@ -12,7 +12,7 @@ let trackLayer = null, axeLayers = [];
 const NAV = [
   ['dash', '📊', 'Tableau de bord'], ['live', '🗺️', 'Carte en direct'], ['parcels', '📦', 'Colis (centre)'], ['cash', '💵', 'Caisse & vendeurs'], ['deliveries', '🛵', 'Courses express'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
   ['clients', '👥', 'Clients'], ['payments', '💰', 'Paiements & soldes'], ['complaints', '⚠️', 'Réclamations & SOS'], ['reports', '📈', 'Rapports'],
-  ['api', '🔌', 'API marchands'], ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
+  ['api', '🔌', 'Logiciels de vente'], ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
 ];
 
 export async function mount(el) {
@@ -279,7 +279,7 @@ const VIEWS = {
   async parcels() {
     const st = sessionStorage.getItem('adm_pst') ?? 'open', qv = sessionStorage.getItem('adm_pq') || '';
     const r = await api('GET', `/api/admin/shipments?status=${st}&q=${encodeURIComponent(qv)}`);
-    main.innerHTML = head('Colis (centre)', `<button class="btn sm primary" data-act="newparcel">＋ Colis</button><a class="btn sm" href="#" data-act="pexport">⬇ Excel</a>`) + `
+    main.innerHTML = head('Colis (centre)', `<button class="btn sm primary" data-act="newparcel">＋ Colis</button><button class="btn sm" data-act="importparcels">⬆ Import Excel</button><a class="btn sm" href="#" data-act="pexport">⬇ Excel</a>`) + `
       <div class="filters"><select class="input" data-pf="status">${[['open', 'En cours'], ['pending', '⏳ À programmer'], ['assigned', 'Programmés'], ['picked_up', 'Récupérés'], ['return', '↩️ À rendre'], ['delivered', 'Livrés'], ['refused', 'Refusés'], ['cancelled', 'Annulés'], ['', 'Tous']].map(([v, l]) => `<option value="${v}" ${st === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <input class="input" data-pf="q" placeholder="Réf, nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Réf</th><th>Créé</th><th>Source</th><th>Expéditeur</th><th>Destinataire</th><th>Livreur / départ</th><th class="num">Valeur</th><th class="num">Frais</th><th class="num">Encaissé</th><th>Statut</th></tr></thead><tbody>
@@ -305,7 +305,19 @@ const VIEWS = {
   async api() {
     const r = await api('GET', '/api/admin/merchants');
     const base = location.origin;
-    main.innerHTML = head('API marchands', '<button class="btn primary" data-act="newmerchant">＋ Connecter un logiciel de vente</button>') + `
+    main.innerHTML = head('Relier un logiciel de vente', '<button class="btn primary" data-act="newmerchant">＋ Clé API</button>') + `
+      <div class="grid2" style="margin-bottom:16px"><div class="panel stack">
+        <h3>① Le plus simple : le lien « Alefa » (aucun développement)</h3>
+        <p class="small">Dans le logiciel de vente, ajoutez un bouton <b>« Livrer avec Alefa »</b> qui ouvre ce lien en remplaçant les valeurs par celles de la commande. Le vendeur (connecté à Alefa) voit le formulaire déjà rempli et appuie sur <b>Envoyer</b>.</p>
+        <pre style="background:#0f1a16;color:#cfe3da;padding:12px;border-radius:12px;white-space:pre-wrap;word-break:break-all;font-size:.8rem">${esc(base)}/envoyer?ref=<b style="color:#ffc83d">N°COMMANDE</b>&nom=<b style="color:#ffc83d">NOM</b>&tel=<b style="color:#ffc83d">TELEPHONE</b>&adresse=<b style="color:#ffc83d">ADRESSE</b>&valeur=<b style="color:#ffc83d">MONTANT</b>&desc=<b style="color:#ffc83d">ARTICLE</b></pre>
+        <div class="row wrap">${[['ref', 'CMD-1042'], ['nom', 'Rasoa'], ['tel', '0341234567'], ['adresse', 'Behoririka'], ['valeur', '25000'], ['desc', 'Robe']].map(([k, ph]) => `<input class="input" data-gl="${k}" placeholder="${k}" value="${ph}" style="width:130px">`).join('')}<button class="btn sm primary" data-act="genlink">Générer</button></div>
+        <div class="small" style="word-break:break-all"><code data-glout></code></div><a class="btn sm" data-gltest target="_blank" rel="noopener" href="#">Tester le lien ↗</a>
+        <p class="tiny muted">Paramètres facultatifs : <code>lat</code>, <code>lng</code> (position du destinataire), <code>depart</code> (adresse de récupération). Une même référence n'est jamais créée deux fois.</p></div>
+      <div class="panel stack"><h3>② Import Excel / CSV (aucun développement)</h3>
+        <p class="small">Exportez les commandes du jour depuis le logiciel de vente, puis <b>Colis → ⬆ Import Excel</b> (centre) ou <b>Entana → ⬆ Excel</b> (vendeur). Colonnes reconnues : ref, nom, telephone, adresse, valeur, description. Les positions GPS sont recherchées automatiquement.</p>
+        <div class="row"><button class="btn sm" data-act="tpl">⬇ Modèle de fichier</button><button class="btn sm primary" data-act="importparcels">⬆ Importer maintenant</button></div>
+        <h3 style="margin-top:8px">③ Connexion automatique (API, pour un développeur)</h3>
+        <p class="small">Le logiciel envoie lui-même chaque commande et reçoit les statuts (webhook). Créez une clé ci-dessous et transmettez la <a href="https://github.com/oasis4444/livraison/blob/main/docs/API.md" target="_blank" rel="noopener">documentation</a>.</p></div></div>
       <p class="small muted">Chaque logiciel de vente (ou boutique) reçoit une clé API. Ses commandes arrivent ici comme colis, sont programmées sur le prochain départ couvrant l'adresse, et son webhook est prévenu à chaque changement de statut.</p>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Logiciel / boutique</th><th>Compte vendeur</th><th>Clé</th><th>Webhook</th><th class="num">Colis</th><th>Dernier appel</th><th></th></tr></thead><tbody>
       ${r.merchants.map((m) => `<tr><td><b>${esc(m.name)}</b> ${m.active ? '' : '<span class="status-pill st-suspended">désactivé</span>'}</td><td class="small">${esc(m.vendor_name)}<div class="tiny muted">${esc(phoneFmt(m.vendor_phone))}</div></td>
@@ -483,6 +495,13 @@ const actions = {
     const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = `alefa-colis-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
   },
   newparcel: () => sendForm({ adminMode: true, onDone: () => show() }),
+  importparcels: () => importForm({ adminMode: true, onDone: () => show() }),
+  tpl: (el, e) => templateCsv(),
+  genlink: () => {
+    const v = (k) => encodeURIComponent($(`[data-gl=${k}]`).value.trim());
+    const url = `${location.origin}/envoyer?ref=${v('ref')}&nom=${v('nom')}&tel=${v('tel')}&adresse=${v('adresse')}&valeur=${v('valeur')}&desc=${v('desc')}`;
+    $('[data-glout]').textContent = url; $('[data-gltest]').href = url;
+  },
   parcel: (el) => parcelDetail(+el.dataset.id),
   settle: async (el) => {
     const v = await promptBox(`Encaisser — ${el.dataset.name}`, { label: 'Montant reçu du livreur (Ar)', type: 'number', value: el.dataset.amt });

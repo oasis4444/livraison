@@ -155,8 +155,11 @@ async function createShipment(env, b, { sender, source, merchant = null, actor }
   const [plat, plng] = optCoord(b.sender?.lat ?? b.pickup_lat, b.sender?.lng ?? b.pickup_lng);
   const [dlat, dlng] = optCoord(b.recipient?.lat ?? b.drop_lat, b.recipient?.lng ?? b.drop_lng);
   const declared = int(b.declared_value ?? b.value ?? 0, { min: 0, max: 50_000_000, name: 'Valeur de la marchandise' });
-  if (merchant && b.external_ref) {
-    const dup = await one(env, 'SELECT id FROM shipments WHERE merchant_id = ? AND external_ref = ?', merchant.id, String(b.external_ref));
+  if (b.external_ref) {
+    // Une même commande (référence) n'est jamais créée deux fois pour le même vendeur.
+    const dup = merchant
+      ? await one(env, 'SELECT id FROM shipments WHERE merchant_id = ? AND external_ref = ?', merchant.id, String(b.external_ref))
+      : await one(env, "SELECT id FROM shipments WHERE sender_id = ? AND external_ref = ? AND status != 'cancelled'", sender.id, String(b.external_ref));
     if (dup) return { duplicate: true, shipment: await loadShipment(env, dup.id) };
   }
   let fee = await feeFor(env, dlat, dlng);
@@ -215,8 +218,30 @@ async function appCreate(ctx, env) {
     sender = await one(env, 'SELECT * FROM users WHERE phone = ?', phone) || fail(404, 'not_found', 'Expéditeur introuvable : créez d\'abord son compte client');
   }
   const r = await createShipment(env, ctx.body, { sender, source: u.role === 'admin' ? 'admin' : 'app', actor: u });
-  await audit(env, ctx, 'shipment_create', { ref: r.shipment.ref });
-  return json({ shipment: publicShipment(r.shipment) }, 201);
+  if (!r.duplicate) await audit(env, ctx, 'shipment_create', { ref: r.shipment.ref });
+  return json({ duplicate: !!r.duplicate, shipment: { ...publicShipment(r.shipment), delivery_pin: r.shipment.pin } }, r.duplicate ? 200 : 201);
+}
+
+// Import en masse (fichier Excel / CSV exporté du logiciel de vente) : une ligne = un colis.
+async function bulkCreate(ctx, env) {
+  const u = ctx.user;
+  const rows = Array.isArray(ctx.body.rows) ? ctx.body.rows : fail(400, 'invalid', 'Aucune ligne');
+  if (rows.length > 200) fail(400, 'too_many', '200 lignes maximum par import');
+  const st = await settings(env);
+  let sender = u;
+  if (u.role === 'admin') {
+    sender = await one(env, 'SELECT * FROM users WHERE phone = ?', normalizePhone(ctx.body.sender_phone)) || fail(404, 'not_found', 'Expéditeur introuvable : créez d\'abord son compte client');
+  }
+  const out = [];
+  for (const [i, r] of rows.entries()) {
+    try {
+      const b = { ...r, pickup_addr: r.pickup_addr || ctx.body.pickup_addr || st.centre_addr, pickup_lat: r.pickup_lat ?? ctx.body.pickup_lat, pickup_lng: r.pickup_lng ?? ctx.body.pickup_lng };
+      const res = await createShipment(env, b, { sender, source: u.role === 'admin' ? 'admin' : 'app', actor: u });
+      out.push({ line: i + 1, ok: true, duplicate: !!res.duplicate, ref: res.shipment.ref, external_ref: res.shipment.external_ref, status: res.shipment.status, step: stepOf(res.shipment), pin: res.shipment.pin, recipient: res.shipment.recipient_name, recipient_phone: res.shipment.recipient_phone });
+    } catch (e) { out.push({ line: i + 1, ok: false, error: e.message }); }
+  }
+  await audit(env, ctx, 'shipment_import', { rows: rows.length, ok: out.filter((x) => x.ok && !x.duplicate).length });
+  return json({ results: out, created: out.filter((x) => x.ok && !x.duplicate).length, duplicates: out.filter((x) => x.duplicate).length, errors: out.filter((x) => !x.ok).length });
 }
 
 async function listMine(ctx, env) {
@@ -706,6 +731,7 @@ export function registerShipmentRoutes(route) {
   route('POST', '/api/shipments/quote', ANY, quoteShipment);
   route('GET', '/api/shipments', ANY, listMine);
   route('POST', '/api/shipments', ['client', 'admin'], appCreate);
+  route('POST', '/api/shipments/bulk', ['client', 'admin'], bulkCreate);
   route('GET', '/api/shipments/balance', ['client'], myBalance);
   route('GET', '/api/shipments/:id', ANY, getOne);
   route('GET', '/api/shipments/:id/photo', ANY, photo);

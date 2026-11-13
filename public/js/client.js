@@ -4,7 +4,7 @@ import {
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications,
   profileForm, sendSOS, complaintForm, chatHtml, TANA, haversine,
 } from './core.js';
-import { c, shipCard, scheduleHtml, sendForm, shipDetail, stepLabel, stepBar } from './colis.js';
+import { c, shipCard, scheduleHtml, sendForm, shipDetail, stepLabel, stepBar, importForm } from './colis.js';
 
 let root, map, sheet, poller, nearbyTimer;
 const mk = {};
@@ -45,6 +45,9 @@ export async function mount(el) {
   const active = list.find((d) => ['open', 'assigned', 'picked_up'].includes(d.status))
     || list.find((d) => d.status === 'delivered' && !d.rating && Date.now() - d.delivered_at < 3 * 3600e3);
   if (active) track(active.id); else renderHome();
+  // Lien « Alefa » ouvert depuis le logiciel de vente : formulaire déjà rempli.
+  const pending = sessionStorage.getItem('alefa_send');
+  if (pending) { sessionStorage.removeItem('alefa_send'); tab = 'colis'; renderHome(); sendForm({ me: true, prefill: Object.fromEntries(new URLSearchParams(pending)), onDone: () => { colisSig = ''; renderHome(); } }); }
   nearbyTimer = every(5000, showNearby);
 }
 
@@ -184,7 +187,7 @@ async function loadColis() {
   if (sig === colisSig) return;
   colisSig = sig;
   const sent = list.shipments.filter((x) => x.mine_as === 'sender'), recv = list.shipments.filter((x) => x.mine_as === 'recipient');
-  el.innerHTML = `<button class="btn primary lg block" data-act="sendparcel">＋ ${c('send_parcel')}</button>
+  el.innerHTML = `<div class="row"><button class="btn primary lg grow" data-act="sendparcel">＋ ${c('send_parcel')}</button><button class="btn lg" data-act="importparcels" title="Excel / CSV">⬆ Excel</button></div>
     ${bal && (bal.due || bal.with_courier) ? `<div class="card" style="margin-top:10px;background:var(--green-soft);border:0"><div class="small muted">${c('balance_vendor')}</div><div class="price">${ar(bal.due)}</div>${bal.with_courier ? `<div class="tiny muted">${c('with_courier')} : ${ar(bal.with_courier)}</div>` : ''}</div>` : ''}
     ${recv.length ? `<h3 style="margin-top:14px">📥 ${c('recipient')}</h3><div class="list">${recv.map((x) => shipCard(x)).join('')}</div>` : ''}
     <h3 style="margin-top:14px">📤 ${c('my_parcels')}</h3><div class="list">${sent.map((x) => shipCard(x)).join('') || `<p class="muted small">${c('empty')}</p>`}</div>`;
@@ -312,7 +315,8 @@ const actions = {
     track(r.id);
   },
   histdetail: (el) => historyDetail(+el.dataset.id),
-  sendparcel: () => sendForm({ me: true, onDone: () => { tab = 'colis'; renderHome(); } }),
+  sendparcel: () => sendForm({ me: true, onDone: () => { tab = 'colis'; colisSig = ''; renderHome(); } }),
+  importparcels: () => importForm({ onDone: () => { colisSig = ''; renderHome(); } }),
   ship: (el) => {
     const s = ($('[data-colis]')?._list || []).find((x) => x.id === +el.dataset.id);
     shipDetail(+el.dataset.id, { role: s?.mine_as === 'sender' ? 'sender' : 'recipient', onChange: () => renderHome(),

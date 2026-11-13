@@ -103,6 +103,25 @@ try {
     await client.screenshot({ path: 'tests/screens/24-client-envoi.png' });
     await client.click('[data-ok]'); await client.waitForSelector('text=Programmé');
   });
+  await step('lien « Alefa » depuis le logiciel de vente : formulaire prérempli', async () => {
+    await client.goto(BASE + '/envoyer?ref=L-77&nom=Koto&tel=0347777777&adresse=Behoririka&valeur=15000&desc=Sac');
+    await client.waitForSelector('text=Commande reçue du logiciel de vente');
+    await client.waitForSelector('[data-s=drop] button');
+    await client.click('[data-s=drop] button >> nth=0'); await client.waitForSelector('[data-dep]');
+    await client.screenshot({ path: 'tests/screens/32-lien-alefa.png' });
+    await client.click('.modal [data-ok]'); await client.waitForSelector('.pin-box');
+    await client.click('.modal-back [data-x]');
+  });
+  await step('import Excel/CSV : une ligne = un colis', async () => {
+    await client.click('[data-act=importparcels]');
+    await client.fill('.modal [data-pk]', 'Chez moi, Behoririka');
+    await client.setInputFiles('.modal [data-file]', 'tests/fixture-import.csv');
+    await client.waitForSelector('text=IMP-2');
+    await client.click('.modal [data-ok]');
+    await client.waitForSelector('text=✅ 2 colis', { timeout: 20000 });
+    await client.screenshot({ path: 'tests/screens/33-import-resultat.png' });
+    await client.click('.modal-back [data-x]');
+  });
   await step('livreur part du centre → le client le voit en direct (statut + carte)', async () => {
     await courier.click('[data-t=colis]'); await courier.waitForSelector('text=CMD-1042');
     await courier.click('[data-act=depart]'); await courier.waitForSelector('text=Chez l\'expéditeur', { timeout: 15000 });

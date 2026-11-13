@@ -77,14 +77,17 @@ export async function scheduleHtml(map, onDeps) {
 }
 
 // ---------------------------------------------------------------- formulaire d'envoi (client ou centre)
-export function sendForm({ me, onDone, adminMode = false }) {
+export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
   const f = { pickup: null, drop: null, slot: '' };
+  const P = prefill || {};
   const m = modal(c('send_parcel'), `<div class="stack">
-    ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel"></label>` : ''}
+    ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel" value="${esc(P.vendeur || '')}"></label>` : ''}
+    ${P.ref ? `<div class="card small" style="background:var(--sun-soft);border:0">🔗 ${state.lang === 'mg' ? 'Baiko avy amin\'ny logiciel de vente' : 'Commande reçue du logiciel de vente'} : <b>${esc(P.ref)}</b></div>` : ''}
     <label class="field"><span>🟢 ${c('pickup_addr')}</span><div class="addr"><span class="ic"></span><input class="input" data-a="pickup" autocomplete="off" placeholder="Quartier, rue, repère…"><div class="act">${me ? '<button data-gps>◎</button>' : ''}</div><div class="suggest hidden" data-s="pickup"></div></div></label>
-    <div class="row"><label class="field grow"><span>${c('rname')}</span><input class="input" data-rn></label><label class="field grow"><span>${c('rphone')}</span><input class="input" data-rp type="tel" placeholder="034 12 345 67"></label></div>
-    <label class="field"><span>🟠 ${c('drop_addr')}</span><div class="addr"><span class="ic b"></span><input class="input" data-a="drop" autocomplete="off" placeholder="Quartier, rue, repère…"><div class="suggest hidden" data-s="drop"></div></div></label>
-    <div class="row"><label class="field grow"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000"></label><label class="field grow"><span>${c('desc')}</span><input class="input" data-d></label></div>
+    <div class="row"><label class="field grow"><span>${c('rname')}</span><input class="input" data-rn value="${esc(P.nom || '')}"></label><label class="field grow"><span>${c('rphone')}</span><input class="input" data-rp type="tel" placeholder="034 12 345 67" value="${esc(P.tel || '')}"></label></div>
+    <label class="field"><span>🟠 ${c('drop_addr')}</span><div class="addr"><span class="ic b"></span><input class="input" data-a="drop" autocomplete="off" placeholder="Quartier, rue, repère…" value="${esc(P.adresse || '')}"><div class="suggest hidden" data-s="drop"></div></div></label>
+    <div class="row"><label class="field grow"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label><label class="field grow"><span>${c('desc')}</span><input class="input" data-d value="${esc(P.desc || P.description || '')}"></label></div>
+    <label class="field"><span>${state.lang === 'mg' ? 'Laharan\'ny baiko (tsy voatery)' : 'N° de commande (facultatif)'}</span><input class="input" data-ref value="${esc(P.ref || '')}" placeholder="CMD-1042"></label>
     <div class="card" style="background:var(--bg);border:0" data-q><span class="small muted">${c('fee')} : —</span></div>
     <p class="tiny muted">${c('pay_info')}</p>
     <button class="btn primary lg block" data-ok>${c('create')}</button></div>`);
@@ -129,6 +132,11 @@ export function sendForm({ me, onDone, adminMode = false }) {
       try { const [lat, lng] = await getPosition(); const label = await reverse(lat, lng); f.pickup = { label, lat, lng }; el.querySelector('[data-a=pickup]').value = label; } catch (err) { toastErr(err); }
     }
   });
+  // Préremplissage : adresse de départ fournie, coordonnées de livraison fournies, sinon recherche de l'adresse.
+  if (P.depart) el.querySelector('[data-a=pickup]').value = P.depart;
+  if (P.lat && P.lng) { f.drop = { label: P.adresse || '', lat: Number(P.lat), lng: Number(P.lng) }; quote(); }
+  else if (P.adresse) setTimeout(() => el.querySelector('[data-a=drop]').dispatchEvent(new Event('input', { bubbles: true })), 50);
+  if (me && !P.depart) setTimeout(() => el.querySelector('[data-gps]')?.click(), 100);
   el.querySelector('[data-ok]').onclick = async () => {
     const txt = (s) => el.querySelector(s).value.trim();
     const pk = f.pickup || { label: txt('[data-a=pickup]') }, dr = f.drop || { label: txt('[data-a=drop]') };
@@ -138,9 +146,15 @@ export function sendForm({ me, onDone, adminMode = false }) {
         sender_phone: adminMode ? txt('[data-sp]') : undefined,
         pickup_addr: pk.label, pickup_lat: pk.lat, pickup_lng: pk.lng, recipient_name: txt('[data-rn]'), recipient_phone: txt('[data-rp]'),
         drop_addr: dr.label, drop_lat: dr.lat, drop_lng: dr.lng, declared_value: Number(txt('[data-v]').replace(/\D/g, '')) || 0, description: txt('[data-d]'),
-        slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined,
+        slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
       });
-      m.close(); toast(`${r.shipment.ref} · ${c('sh_' + r.shipment.status)}`, 'ok'); onDone?.(r.shipment);
+      m.close();
+      modal(r.duplicate ? (state.lang === 'mg' ? 'Efa nalefa io baiko io' : 'Commande déjà envoyée') : '✅ ' + r.shipment.ref, `<div class="stack" style="text-align:center">
+        <div>${esc(stepLabel(r.shipment.step))}${r.shipment.departure_at ? ` · ${dayLabel(r.shipment.departure_at)} ${time(r.shipment.departure_at)}` : ''}</div>
+        <div class="small muted">${state.lang === 'mg' ? 'Kaody homena ny mpandray' : 'Code à transmettre au destinataire'} (${esc(r.shipment.recipient.name)} · ${esc(phoneFmt(r.shipment.recipient.phone))})</div>
+        <div class="pin-box">${[...(r.shipment.delivery_pin || '')].map((x) => `<span>${x}</span>`).join('')}</div>
+        <a class="btn block" href="sms:${esc(r.shipment.recipient.phone)}?body=${encodeURIComponent(`Alefa : votre colis ${r.shipment.ref} arrive. Montant ${r.shipment.amount_to_collect} Ar. Code de réception : ${r.shipment.delivery_pin}`)}">💬 SMS</a></div>`);
+      onDone?.(r.shipment);
     } catch (err) { toastErr(err); }
   };
   return m;
@@ -327,5 +341,113 @@ export async function courierScheduleEditor(container, onSaved) {
     if (row && d) { const x = slots[+row.dataset.i]; x.days = String(x.days).includes(d) ? String(x.days).replace(d, '') : [...String(x.days) + d].sort().join(''); return render(); }
     if (e.target.closest('[data-add]')) { const last = slots[slots.length - 1]; const st = last ? Math.min(1380, last.end_min) : 480; slots.push({ axe_id: axes[0].id, start_min: st, end_min: Math.min(1440, st + 120), days: '1234567' }); return render(); }
     if (e.target.closest('[data-save]')) { try { await api('PUT', '/api/courier/schedule', { slots }); toast(c('save') + ' ✓', 'ok'); onSaved?.(); } catch (err) { toastErr(err); } }
+  };
+}
+
+// ---------------------------------------------------------------- import Excel / CSV (une ligne = un colis)
+const COLS = {
+  external_ref: ['ref', 'reference', 'référence', 'commande', 'n° commande', 'no commande', 'order', 'facture', 'id'],
+  recipient_name: ['nom', 'destinataire', 'client', 'name', 'anarana', 'mpandray'],
+  recipient_phone: ['telephone', 'téléphone', 'tel', 'tél', 'phone', 'contact', 'finday', 'numero', 'numéro'],
+  drop_addr: ['adresse', 'adresse de livraison', 'address', 'quartier', 'lieu', 'adiresy', 'livraison'],
+  declared_value: ['valeur', 'montant', 'prix', 'total', 'value', 'vidiny', 'somme'],
+  description: ['description', 'article', 'produit', 'contenu', 'designation', 'désignation', 'entana'],
+  drop_lat: ['lat', 'latitude'], drop_lng: ['lng', 'lon', 'longitude'],
+};
+const norm = (h) => String(h || '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '');
+function mapHeader(h) {
+  const n = norm(h);
+  for (const [k, list] of Object.entries(COLS)) if (list.some((x) => norm(x) === n)) return k;
+  for (const [k, list] of Object.entries(COLS)) if (list.some((x) => n.includes(norm(x)))) return k;
+  return null;
+}
+function parseCsv(text) {
+  const first = text.split(/\r?\n/)[0] || '';
+  const sep = (first.match(/;/g) || []).length >= (first.match(/,/g) || []).length ? ';' : first.includes('\t') ? '\t' : ',';
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === sep) { row.push(cur); cur = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; }
+    else cur += ch;
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter((r) => r.some((x) => String(x).trim()));
+}
+function loadScript(src) {
+  return new Promise((res, rej) => { if (window.XLSX) return res(); const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Lecture Excel indisponible : enregistrez le fichier en CSV')); document.head.append(s); });
+}
+async function readTable(file) {
+  if (/\.(xlsx|xls|ods)$/i.test(file.name)) {
+    await loadScript('https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js');
+    const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    return window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+  }
+  return parseCsv((await file.text()).replace(/^﻿/, ''));
+}
+export function templateCsv() {
+  const csv = '﻿ref;nom;telephone;adresse;valeur;description\r\nCMD-1042;Rasoa Rakoto;034 12 345 67;Behoririka, près de la pharmacie;25000;Robe taille M\r\nCMD-1043;Hery;033 11 222 33;Ankorondrano, immeuble Fitaratra;12000;Chaussures\r\n';
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'alefa-modele-colis.csv'; a.click();
+}
+
+export function importForm({ adminMode = false, onDone } = {}) {
+  const mg = state.lang === 'mg';
+  let rows = [];
+  const m = modal(mg ? 'Hampiditra Excel / CSV' : 'Importer un fichier Excel / CSV', `<div class="stack">
+    <p class="small muted">${mg ? 'Avoahy avy amin\'ny logiciel de vente ny lisitry ny baiko (Excel na CSV). Andalana iray = colis iray.' : 'Exportez la liste des commandes depuis votre logiciel de vente (Excel ou CSV). Une ligne = un colis.'}
+      ${mg ? 'Tsanganana' : 'Colonnes'} : <b>ref · nom · telephone · adresse · valeur · description</b>. <a href="#" data-tpl>⬇ ${mg ? 'Modely' : 'Modèle'}</a></p>
+    ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel"></label>` : ''}
+    <label class="field"><span>🟢 ${c('pickup_addr')} (${mg ? 'ho an\'ny colis rehetra' : 'pour tous les colis'})</span><div class="row"><input class="input grow" data-pk placeholder="Boutique, quartier…"><button class="btn" data-gps>◎</button></div></label>
+    <label class="btn sun lg block" style="cursor:pointer">📄 ${mg ? 'Safidio ny rakitra' : 'Choisir le fichier'}<input type="file" accept=".csv,.txt,.xlsx,.xls,.ods" data-file hidden></label>
+    <div data-prev></div>
+    <label class="row small"><input type="checkbox" data-geo checked> ${mg ? 'Hitady ho azy ny toerana GPS amin\'ny adiresy (1 segondra isaky ny adiresy)' : 'Rechercher automatiquement la position GPS des adresses (≈ 1 s par adresse)'}</label>
+    <button class="btn primary lg block" data-ok disabled>${mg ? 'Alefa daholo' : 'Envoyer tous les colis'}</button></div>`, { wide: true });
+  const el = m.el;
+  let pk = null;
+  el.querySelector('[data-tpl]').onclick = (e) => { e.preventDefault(); templateCsv(); };
+  el.querySelector('[data-gps]').onclick = async () => { try { const [lat, lng] = await getPosition(); pk = { lat, lng }; el.querySelector('[data-pk]').value = await reverse(lat, lng); } catch (e) { toastErr(e); } };
+  el.querySelector('[data-file]').onchange = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    try {
+      const table = await readTable(file);
+      const hi = table.findIndex((r) => r.filter((h) => mapHeader(h)).length >= 2);
+      if (hi < 0) throw new Error(mg ? 'Tsy hita ny tsanganana (nom, telephone, adresse…)' : 'Colonnes introuvables (nom, telephone, adresse…) : utilisez le modèle');
+      const keys = table[hi].map(mapHeader);
+      rows = table.slice(hi + 1).map((r) => { const o = {}; keys.forEach((k, i) => { if (k && String(r[i] ?? '').trim()) o[k] = String(r[i]).trim(); }); return o; })
+        .filter((o) => o.recipient_phone || o.recipient_name)
+        .map((o) => ({ ...o, declared_value: Number(String(o.declared_value || '0').replace(/[^\d]/g, '')) || 0, drop_lat: o.drop_lat ? Number(String(o.drop_lat).replace(',', '.')) : undefined, drop_lng: o.drop_lng ? Number(String(o.drop_lng).replace(',', '.')) : undefined }));
+      el.querySelector('[data-prev]').innerHTML = `<div class="small"><b>${rows.length}</b> ${c('parcels')} · ${mg ? 'tsanganana hita' : 'colonnes reconnues'} : ${keys.filter(Boolean).join(', ')}</div>
+        <div class="tbl-wrap" style="max-height:220px;overflow:auto;margin-top:6px"><table class="tbl"><thead><tr><th>Réf</th><th>${c('rname')}</th><th>Tél</th><th>${c('drop_addr')}</th><th class="num">${c('value')}</th></tr></thead><tbody>
+        ${rows.slice(0, 50).map((r) => `<tr><td>${esc(r.external_ref || '')}</td><td>${esc(r.recipient_name || '')}</td><td>${esc(r.recipient_phone || '')}</td><td class="small">${esc(r.drop_addr || '')}</td><td class="num">${ar(r.declared_value)}</td></tr>`).join('')}</tbody></table></div>`;
+      el.querySelector('[data-ok]').disabled = !rows.length;
+    } catch (err) { toastErr(err); }
+  };
+  el.querySelector('[data-ok]').onclick = async (e) => {
+    const btn = e.target; btn.disabled = true;
+    try {
+      if (el.querySelector('[data-geo]').checked) {
+        for (const [i, r] of rows.entries()) {
+          if (r.drop_lat || !r.drop_addr) continue;
+          btn.textContent = `📍 ${i + 1}/${rows.length}…`;
+          const g = await geocode(r.drop_addr + ', Antananarivo').catch(() => []);
+          if (g[0]) { r.drop_lat = g[0].lat; r.drop_lng = g[0].lng; }
+          await new Promise((res) => setTimeout(res, 1100));
+        }
+      }
+      btn.textContent = '…';
+      const res = await api('POST', '/api/shipments/bulk', { rows, pickup_addr: el.querySelector('[data-pk]').value.trim() || undefined, pickup_lat: pk?.lat, pickup_lng: pk?.lng, sender_phone: adminMode ? el.querySelector('[data-sp]').value : undefined });
+      m.close();
+      const r = modal(`✅ ${res.created} ${c('parcels')}${res.duplicates ? ` · ${res.duplicates} ${mg ? 'efa nalefa' : 'déjà envoyés'}` : ''}${res.errors ? ` · ⚠ ${res.errors}` : ''}`, `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Réf</th><th>${c('rname')}</th><th>Code</th><th>Statut</th></tr></thead><tbody>
+        ${res.results.map((x) => `<tr><td>${x.line}</td><td>${x.ok ? `<b>${esc(x.ref)}</b> <span class="muted tiny">${esc(x.external_ref || '')}</span>` : ''}</td><td>${esc(x.recipient || '')}</td><td>${x.pin ? `<b>${esc(x.pin)}</b>` : ''}</td>
+        <td class="small">${x.ok ? esc(x.duplicate ? (mg ? 'efa nalefa' : 'déjà envoyé') : stepLabel(x.step)) : `<span style="color:var(--red)">${esc(x.error)}</span>`}</td></tr>`).join('')}</tbody></table></div>
+        <button class="btn block" data-dl style="margin-top:10px">⬇ ${mg ? 'Hampidina (misy kaody)' : 'Télécharger (avec les codes)'}</button>`, { wide: true });
+      r.el.querySelector('[data-dl]').onclick = () => {
+        const csv = '﻿ligne;ref_alefa;ref_commande;destinataire;telephone;code;statut\r\n' + res.results.map((x) => [x.line, x.ref || '', x.external_ref || '', x.recipient || '', x.recipient_phone || '', x.pin || '', x.ok ? (x.duplicate ? 'doublon' : x.step) : 'ERREUR ' + x.error].join(';')).join('\r\n');
+        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'alefa-import-resultat.csv'; a.click();
+      };
+      onDone?.();
+    } catch (err) { toastErr(err); btn.disabled = false; btn.textContent = mg ? 'Alefa daholo' : 'Envoyer tous les colis'; }
   };
 }

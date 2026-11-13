@@ -5,6 +5,11 @@ setLang(state.lang);
 const app = $('#app');
 // Espace livreur séparé : /livreur (connexion livreur uniquement, application installable à part).
 const COURIER_SPACE = location.pathname.replace(/\/+$/, '') === '/livreur';
+// Lien « Alefa » depuis un logiciel de vente : /envoyer?ref=…&nom=…&tel=…&adresse=…&valeur=…
+if (location.pathname.replace(/\/+$/, '') === '/envoyer') {
+  sessionStorage.setItem('alefa_send', location.search.slice(1));
+  history.replaceState(null, '', '/');
+}
 if (COURIER_SPACE) {
   $('#manifest').href = '/manifest-livreur.webmanifest';
   document.title = 'Alefa Livreur';

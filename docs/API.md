@@ -7,6 +7,14 @@ L'API permet à un logiciel de vente (caisse, boutique en ligne, ERP) d'envoyer 
 - **Format** : JSON (UTF-8). Montants en **Ariary entiers**. Dates en **millisecondes Unix** (UTC).
 - Appelez l'API **depuis votre serveur** : ne mettez jamais la clé dans une page web publique.
 
+## Trois façons de relier un logiciel de vente (du plus simple au plus complet)
+
+1. **Lien « Alefa » — aucun développement.** Ajoutez dans le logiciel de vente un bouton qui ouvre :
+   `https://livraison.oasismdg3434.workers.dev/envoyer?ref=CMD-1042&nom=Rasoa&tel=0341234567&adresse=Behoririka&valeur=25000&desc=Robe`
+   Le vendeur, connecté à Alefa, voit le formulaire déjà rempli et appuie sur **Envoyer**. Paramètres facultatifs : `lat`, `lng`, `depart`. Une même référence n'est jamais créée deux fois.
+2. **Import Excel / CSV — aucun développement.** Exportez les commandes (colonnes `ref`, `nom`, `telephone`, `adresse`, `valeur`, `description`) puis *Entana → ⬆ Excel* (vendeur) ou *Colis → ⬆ Import Excel* (centre). Les codes de réception sont fournis dans le fichier résultat.
+3. **API (ci-dessous) — pour un développeur.** Envoi automatique de chaque commande et retour des statuts par webhook.
+
 ## Principe
 
 1. Votre logiciel crée un colis : expéditeur (lieu de récupération), destinataire, valeur de la marchandise.

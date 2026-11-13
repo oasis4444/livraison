@@ -166,3 +166,18 @@ test('centre : attribution manuelle, frais, export', async () => {
   assert.equal(dp.data.delivered, true, 'PIN du destinataire = double confirmation immédiate');
   assert.equal((await call('GET', `/api/shipments/${sid}`, null, admin)).data.shipment.confirmed_by, 'pin');
 });
+
+test('import Excel/CSV et lien : une ligne = un colis, sans doublon', async () => {
+  const rows = [
+    { external_ref: 'F-001', recipient_name: 'Naina', recipient_phone: '0341000001', drop_addr: 'Behoririka', drop_lat: BEHORIRIKA.lat, drop_lng: BEHORIRIKA.lng, declared_value: 12000, description: 'Chaussures' },
+    { external_ref: 'F-002', recipient_name: 'Tiana', recipient_phone: '0341000002', drop_addr: 'Isotry', declared_value: 8000 },
+    { external_ref: 'F-003', recipient_name: 'X', recipient_phone: '12', drop_addr: 'Nulle part' },
+  ];
+  const r = await call('POST', '/api/shipments/bulk', { rows, pickup_addr: 'Boutique Soa, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng }, vendorTok);
+  assert.equal(r.data.created, 2); assert.equal(r.data.errors, 1); assert.match(r.data.results[0].pin, /^\d{4}$/);
+  assert.equal(r.data.results[0].status, 'assigned'); assert.equal(r.data.results[1].status, 'pending', 'sans GPS → programmé par le centre');
+  const again = await call('POST', '/api/shipments/bulk', { rows: rows.slice(0, 2), pickup_addr: 'Boutique Soa' }, vendorTok);
+  assert.equal(again.data.duplicates, 2, 'réimport sans doublon');
+  const link = await call('POST', '/api/shipments', { external_ref: 'F-001', recipient_name: 'Naina', recipient_phone: '0341000001', drop_addr: 'Behoririka', pickup_addr: 'Boutique' }, vendorTok);
+  assert.equal(link.data.duplicate, true);
+});
