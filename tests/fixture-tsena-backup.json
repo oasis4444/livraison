@@ -1,0 +1,3 @@
+{"app":"tsena-ampandrana","version":2,"exportedAt":"2026-11-13T12:00:00.000Z","data":{"products":[],"deliveries":[
+{"id":"d1","no":"L-00001","date":"2026-11-13T12:10:00.000Z","status":"attente","clientName":"Hotely Mamy","phone":"033 45 678 90","address":"Andravoahangy","driver":"Fidy","fee":3000,"amount":45000,"note":"Livrer avant 11h"},
+{"id":"d2","no":"L-00002","date":"2026-11-13T12:10:00.000Z","status":"cours","clientName":"Rasoa Hanta","phone":"034 12 345 67","address":"Lot II M 45 Ampandrana","driver":"Fidy","fee":2000,"amount":0}]}}

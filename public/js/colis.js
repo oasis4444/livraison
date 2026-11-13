@@ -391,6 +391,19 @@ async function readTable(file) {
   }
   return parseCsv((await file.text()).replace(/^﻿/, ''));
 }
+// Sauvegarde copiée depuis Tsena Ampandrana (Paramètres → Copier la sauvegarde) : livraisons « En attente ».
+export function rowsFromBackup(text) {
+  let j; try { j = JSON.parse(String(text).trim()); } catch { return null; }
+  const d = j?.data || j;
+  const list = Array.isArray(d?.deliveries) ? d.deliveries : d?.deliveries ? Object.values(d.deliveries) : null;
+  if (!list) return null;
+  const waiting = list.filter((x) => !x.status || x.status === 'attente');
+  return { total: list.length, rows: waiting.map((x) => ({
+    external_ref: x.no || x.id, recipient_name: x.clientName || x.name || 'Client', recipient_phone: x.phone || '',
+    drop_addr: x.address || '', declared_value: Math.max(0, Math.round(Number(x.amount) || 0)), description: x.note || '',
+  })).filter((r) => r.recipient_phone) };
+}
+
 export function templateCsv() {
   const csv = '﻿ref;nom;telephone;adresse;valeur;description\r\nCMD-1042;Rasoa Rakoto;034 12 345 67;Behoririka, près de la pharmacie;25000;Robe taille M\r\nCMD-1043;Hery;033 11 222 33;Ankorondrano, immeuble Fitaratra;12000;Chaussures\r\n';
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'alefa-modele-colis.csv'; a.click();
@@ -404,7 +417,10 @@ export function importForm({ adminMode = false, onDone } = {}) {
       ${mg ? 'Tsanganana' : 'Colonnes'} : <b>ref · nom · telephone · adresse · valeur · description</b>. <a href="#" data-tpl>⬇ ${mg ? 'Modely' : 'Modèle'}</a></p>
     ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel"></label>` : ''}
     <label class="field"><span>🟢 ${c('pickup_addr')} (${mg ? 'ho an\'ny colis rehetra' : 'pour tous les colis'})</span><div class="row"><input class="input grow" data-pk placeholder="Boutique, quartier…"><button class="btn" data-gps>◎</button></div></label>
-    <label class="btn sun lg block" style="cursor:pointer">📄 ${mg ? 'Safidio ny rakitra' : 'Choisir le fichier'}<input type="file" accept=".csv,.txt,.xlsx,.xls,.ods" data-file hidden></label>
+    <div class="card" style="background:var(--bg);border:0"><b>📋 Tsena Ampandrana</b>
+      <div class="small muted" style="margin:4px 0 6px">${mg ? 'Ao amin\'ny Tsena: Paramètres → Copier la sauvegarde → Copier. Avy eo apetaho (coller) eto:' : 'Dans Tsena : Paramètres → Copier la sauvegarde → Copier. Puis collez ici :'}</div>
+      <textarea class="input" data-paste rows="3" placeholder="${mg ? 'Apetaho eto (Ctrl+V / ⌘V)' : 'Collez ici (Ctrl+V / ⌘V)'}" style="font-size:.8rem"></textarea></div>
+    <label class="btn sun lg block" style="cursor:pointer">📄 ${mg ? 'Na safidio rakitra Excel / CSV' : 'Ou choisir un fichier Excel / CSV'}<input type="file" accept=".csv,.txt,.xlsx,.xls,.ods,.json" data-file hidden></label>
     <div data-prev></div>
     <label class="row small"><input type="checkbox" data-geo checked> ${mg ? 'Hitady ho azy ny toerana GPS amin\'ny adiresy (1 segondra isaky ny adiresy)' : 'Rechercher automatiquement la position GPS des adresses (≈ 1 s par adresse)'}</label>
     <button class="btn primary lg block" data-ok disabled>${mg ? 'Alefa daholo' : 'Envoyer tous les colis'}</button></div>`, { wide: true });
@@ -412,8 +428,20 @@ export function importForm({ adminMode = false, onDone } = {}) {
   let pk = null;
   el.querySelector('[data-tpl]').onclick = (e) => { e.preventDefault(); templateCsv(); };
   el.querySelector('[data-gps]').onclick = async () => { try { const [lat, lng] = await getPosition(); pk = { lat, lng }; el.querySelector('[data-pk]').value = await reverse(lat, lng); } catch (e) { toastErr(e); } };
+  const showBackup = (b) => {
+    rows = b.rows;
+    el.querySelector('[data-prev]').innerHTML = `<div class="card small" style="background:var(--green-soft);border:0">✅ Tsena : <b>${rows.length}</b> ${mg ? 'livraison « En attente » amin\'ny' : 'livraison(s) « En attente » sur'} ${b.total}</div>
+      <div class="tbl-wrap" style="max-height:220px;overflow:auto;margin-top:6px"><table class="tbl"><thead><tr><th>N°</th><th>${c('rname')}</th><th>Tél</th><th>${c('drop_addr')}</th><th class="num">${c('value')}</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${esc(r.external_ref || '')}</td><td>${esc(r.recipient_name)}</td><td>${esc(r.recipient_phone)}</td><td class="small">${esc(r.drop_addr)}</td><td class="num">${ar(r.declared_value)}</td></tr>`).join('')}</tbody></table></div>`;
+    el.querySelector('[data-ok]').disabled = !rows.length;
+  };
+  el.querySelector('[data-paste]').addEventListener('input', (e) => {
+    const b = rowsFromBackup(e.target.value);
+    if (b) showBackup(b); else if (e.target.value.trim().length > 20) toast(mg ? 'Tsy fantatra ilay soratra: adikao indray avy amin\'ny Tsena' : 'Texte non reconnu : recopiez la sauvegarde depuis Tsena', 'err');
+  });
   el.querySelector('[data-file]').onchange = async (e) => {
     const file = e.target.files?.[0]; if (!file) return;
+    if (/\.json$/i.test(file.name)) { const b = rowsFromBackup(await file.text()); return b ? showBackup(b) : toast('JSON non reconnu', 'err'); }
     try {
       const table = await readTable(file);
       const hi = table.findIndex((r) => r.filter((h) => mapHeader(h)).length >= 2);
