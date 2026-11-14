@@ -4,7 +4,7 @@ import {
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, getPosition, hm, every, startNotifications, showNotifications, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
-import { c, shipCard, shipDetail, courierScheduleEditor, scheduleHtml, stepLabel } from './colis.js';
+import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel } from './colis.js';
 
 let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null;
 const mk = {};
@@ -163,7 +163,11 @@ function render() {
   const body = $('#sheet-body');
   if (tab === 'wallet') { body.innerHTML = header() + '<div data-wallet>…</div>'; return loadWallet(); }
   if (tab === 'colis') { body.innerHTML = header() + '<div data-colis>…</div>'; return loadMissions(); }
-  if (tab === 'plan') { body.innerHTML = header() + '<div data-plan>…</div><h3 style="margin-top:16px">' + c('from_centre') + '</h3><div data-allsched class="small">…</div>'; const all = () => scheduleHtml(null).then((h) => { const el = $('[data-allsched]'); if (el) el.innerHTML = h; });
+  if (tab === 'plan') {
+    body.innerHTML = header() + `<h3>🛣 ${state.lang === 'mg' ? 'Ny diako' : 'Mes trajets'}</h3><div data-trips>…</div>`
+      + `<h3 style="margin-top:16px">🕘 ${c('my_schedule')} (axes)</h3><div data-plan>…</div><h3 style="margin-top:16px">${c('from_centre')}</h3><div data-allsched class="small">…</div>`;
+    const all = () => scheduleHtml(null).then((h) => { const el = $('[data-allsched]'); if (el) el.innerHTML = h; });
+    courierTripsEditor($('[data-trips]'), { map, bikeRoute, onChange: all }).catch(toastErr);
     courierScheduleEditor($('[data-plan]'), all).catch(toastErr); all(); return; }
   if (tab === 'hist') { body.innerHTML = header() + '<div data-hist class="list">…</div>'; return loadHistory(); }
   body.innerHTML = header() + (available
@@ -307,7 +311,8 @@ async function loadMissions() {
   const { shipments } = await api('GET', '/api/shipments');
   const el = $('[data-colis]'); if (!el) return;
   const grp = [
-    [c('to_pickup'), shipments.filter((x) => x.status === 'assigned')],
+    [state.lang === 'mg' ? '🔔 Iraka vaovao hekena' : '🔔 Nouvelles missions à accepter', shipments.filter((x) => x.status === 'assigned' && !x.accepted_at)],
+    [c('to_pickup'), shipments.filter((x) => x.status === 'assigned' && x.accepted_at)],
     [c('to_deliver'), shipments.filter((x) => x.status === 'picked_up')],
     [c('to_return'), shipments.filter((x) => x.to_return)],
     [c('done_today'), shipments.filter((x) => ['delivered', 'refused', 'cancelled'].includes(x.status) && !x.to_return)],

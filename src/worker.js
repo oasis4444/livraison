@@ -5,6 +5,7 @@ import {
   randomHex, randomPin, hashPassword, safeEqual, haversineKm, bbox, suggestPrice, csv, fmtDate, now,
 } from './lib.js';
 import { registerTsenaRoutes, syncTsena } from './tsena.js';
+import { registerTripRoutes, rateLimit, purgeLogs } from './trips.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -673,7 +674,9 @@ async function adminLive(ctx, env) {
     const step = Math.max(1, Math.ceil(mine.length / 300));
     trails[c.id] = mine.filter((_, i) => i % step === 0 || i === mine.length - 1).map((p) => [p.lat, p.lng, p.at]);
   }
-  return json({ couriers, deliveries, sos, axes, trails, parcels: await liveShipments(env), feed: await liveFeed(env), server_time: now() });
+  const { upcomingTrips } = await import('./trips.js');
+  const trips = (await upcomingTrips(env)).filter((t) => t.depart_at < now() + 12 * 3600e3);
+  return json({ couriers, deliveries, sos, axes, trails, trips, parcels: await liveShipments(env), feed: await liveFeed(env), server_time: now() });
 }
 
 async function adminUsers(ctx, env) {
@@ -963,6 +966,7 @@ export async function maintenance(env) {
     q(env, "UPDATE deliveries SET status = 'expired' WHERE status = 'open' AND scheduled_at IS NOT NULL AND scheduled_at < ?", now() - 3600e3),
     q(env, 'UPDATE couriers SET available = 0 WHERE available = 1 AND last_seen < ?', now() - 30 * 60e3),
   ]);
+  await import('./trips.js').then((m) => m.purgeLogs(env)).catch(() => {});
 }
 
 // ---------------------------------------------------------------- routeur
@@ -1033,9 +1037,10 @@ route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
 
 registerShipmentRoutes(route);
 registerTsenaRoutes(route);
+registerTripRoutes(route);
 
 // API publique v1 : appelée par les logiciels de vente (souvent côté serveur, CORS ouvert pour les intégrations web).
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, Idempotency-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };
 
 export async function handleApi(req, env) {
   const isV1 = new URL(req.url).pathname.startsWith('/api/v1/');
@@ -1063,6 +1068,8 @@ async function handleApiInner(req, env) {
     if (r.roles === 'merchant') {
       ctx.merchant = await authenticateMerchant(req, env);
       if (!ctx.merchant) fail(401, 'bad_api_key', 'Clé API invalide ou désactivée');
+      await rateLimit(env, 'm' + ctx.merchant.id);
+      ctx.idempotencyKey = (req.headers.get('idempotency-key') || '').slice(0, 60) || null;
     } else if (r.roles) {
       ctx.user = await authenticate(req, env);
       if (!ctx.user) fail(401, 'unauthenticated', 'Session expirée, reconnectez-vous');
@@ -1085,7 +1092,8 @@ export default {
   },
   // Chaque minute : synchronisation Tsena ; une fois par heure : maintenance.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(syncTsena(env).catch((e) => console.error('tsena', e)));
+    ctx.waitUntil(syncTsena(env).catch((e) => console.error('tsena', e))
+      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env)).catch((e) => console.error('reassign', e)));
     if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() === 17) ctx.waitUntil(maintenance(env));
   },
 };

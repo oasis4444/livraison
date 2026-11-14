@@ -18,7 +18,38 @@ if (COURIER_SPACE) {
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
+// Suivi public d'un colis : /suivi/<jeton> (sans compte, position du livreur visible uniquement pendant la livraison).
+const TRACK = location.pathname.match(/^\/suivi\/([A-Za-z0-9_-]{8,40})\/?$/);
+async function trackView(token) {
+  const core = await import('./core.js');
+  const mg = state.lang === 'mg';
+  app.className = '';
+  app.innerHTML = `<div style="display:flex;flex-direction:column;height:100dvh;width:100%">
+    <div style="padding:12px 16px;display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--line);background:var(--card)"><img src="/icon.svg" alt="" style="width:34px"><div class="grow"><b>Alefa</b> <span class="muted small">${mg ? 'Fanarahana entana' : 'Suivi de colis'}</span><div class="small" data-h>…</div></div>${langSwitch()}</div>
+    <div data-map style="flex:1;min-height:300px"></div>
+    <div style="padding:12px 16px;background:var(--card);border-top:1px solid var(--line)" data-info>…</div></div>`;
+  bind(app, { lang: (el) => { setLang(el.dataset.l); trackView(token); } });
+  const map = core.makeMap(app.querySelector('[data-map]'), { zoom: 13, zoomControl: true });
+  const mk = {}; let fitted = false;
+  const tick = async () => {
+    let r; try { r = await api('GET', `/api/track/${token}`); } catch (e) { app.querySelector('[data-info]').textContent = e.message; return; }
+    app.querySelector('[data-h]').innerHTML = `<b>${esc(r.ref)}</b>${r.external_ref ? ` · ${esc(r.external_ref)}` : ''}`;
+    const eta = r.eta ? Math.max(1, Math.round((r.eta - Date.now()) / 60e3)) : null;
+    app.querySelector('[data-info]').innerHTML = `<div style="font-size:1.15rem"><b>${esc(r.step_label || r.step)}</b></div>
+      <div class="small muted">${r.courier ? `🚲 ${esc(r.courier)}` : ''}${eta ? ` · ${mg ? 'Tonga ao anatin\'ny' : 'Arrivée dans'} ~${eta} min` : ''}${!r.position && r.courier && !r.done_at ? ` · ${mg ? 'Mbola tsy hita ny toerany' : 'Position visible pendant la livraison'}` : ''}</div>`;
+    if (!map) return;
+    const pts = [];
+    if (r.pickup) { core.upsertMarker(map, mk, 'a', r.pickup, core.icons.a()); pts.push(r.pickup); }
+    if (r.drop) { core.upsertMarker(map, mk, 'b', r.drop, core.icons.b()); pts.push(r.drop); }
+    if (r.position) { core.upsertMarker(map, mk, 'c', r.position, core.icons.bike('', r.courier || '')); pts.push(r.position); }
+    else if (mk.c) { mk.c.remove(); delete mk.c; }
+    if (!fitted && pts.length) { fitted = true; pts.length === 1 ? map.setView(pts[0], 15) : map.fitBounds(pts, { padding: [40, 40] }); }
+  };
+  await tick(); setInterval(tick, 8000);
+}
+
 async function boot() {
+  if (TRACK) return trackView(TRACK[1]);
   state.config = await api('GET', '/api/config').catch(() => ({ zones: [] }));
   if (state.token) {
     try {

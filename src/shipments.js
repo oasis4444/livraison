@@ -3,6 +3,7 @@
 // le centre reverse la valeur à l'expéditeur une fois l'argent remis par le livreur.
 import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
 import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL } from './worker.js';
+import { matchTrip, logSync } from './trips.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
 const H3 = 3 * 3600e3;
@@ -48,7 +49,9 @@ export function stepOf(s) {
 const STEP_FR = { pending: 'À programmer', scheduled: 'Programmé', departed: 'Parti du centre', at_pickup: 'Arrivé chez l\'expéditeur', picked_up: 'Récupéré',
   en_route: 'En route vers le destinataire', nearby: 'Livreur tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour vers l\'expéditeur', returned: 'Rendu à l\'expéditeur', assigned: 'Programmé', fee: 'Frais modifiés',
   awaiting_recipient: 'Remis — attente confirmation du destinataire', awaiting_courier: 'Reçu — attente confirmation du livreur', courier_confirmed: 'Remise déclarée par le livreur',
-  recipient_confirmed: 'Réception confirmée par le destinataire', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée' };
+  recipient_confirmed: 'Réception confirmée par le destinataire', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée',
+  accepted: 'Mission acceptée par le livreur', declined: 'Mission refusée par le livreur', released: 'Trajet annulé — colis réaffecté' };
+export const STEP_LABELS = STEP_FR;
 
 const toPay = (s) => (s.value ?? s.declared_value) + s.fee; // montant à encaisser auprès du destinataire
 
@@ -61,13 +64,14 @@ export function publicShipment(s) {
     collected: s.collected, return_fee: s.return_fee, outcome_note: s.outcome_note, has_photo: !!s.photo,
     courier_confirmed_at: s.courier_confirmed_at, recipient_confirmed_at: s.recipient_confirmed_at, confirmed_by: s.confirmed_by,
     courier: s.courier_id ? { id: s.courier_id, name: s.courier_name ?? null } : null,
-    axe: s.axe_name ?? null, departure_at: s.departure_at,
+    axe: s.axe_name ?? s.trip_label ?? null, departure_at: s.departure_at, trip_id: s.trip_id ?? null, accepted_at: s.accepted_at ?? null, track_token: s.track_token ?? null,
     returned: !!s.returned_at, created_at: s.created_at, assigned_at: s.assigned_at, picked_at: s.picked_at, done_at: s.done_at, returned_at: s.returned_at,
   };
 }
 
-const SHIP_SQL = `SELECT s.*, cu.name AS courier_name, a.name AS axe_name FROM shipments s
-  LEFT JOIN users cu ON cu.id = s.courier_id LEFT JOIN axes a ON a.id = s.axe_id`;
+const SHIP_SQL = `SELECT s.*, cu.name AS courier_name, a.name AS axe_name,
+  CASE WHEN tr.id IS NOT NULL THEN substr(tr.from_addr, 1, instr(tr.from_addr || ',', ',') - 1) || ' → ' || substr(tr.to_addr, 1, instr(tr.to_addr || ',', ',') - 1) END AS trip_label
+  FROM shipments s LEFT JOIN users cu ON cu.id = s.courier_id LEFT JOIN axes a ON a.id = s.axe_id LEFT JOIN courier_trips tr ON tr.id = s.trip_id`;
 
 async function loadShipment(env, id) {
   const s = await one(env, `${SHIP_SQL} WHERE s.id = ?`, id);
@@ -100,9 +104,10 @@ async function broadcast(env, s, title, body) {
       const payload = JSON.stringify({ event: 'shipment.updated', at: now(), shipment: publicShipment(fresh) });
       try {
         const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 5000);
-        await fetch(m.webhook_url, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', 'X-Alefa-Event': 'shipment.updated', 'X-Alefa-Signature': await hmacHex(m.webhook_secret, payload) }, body: payload });
+        const r = await fetch(m.webhook_url, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', 'X-Alefa-Event': 'shipment.updated', 'X-Alefa-Signature': await hmacHex(m.webhook_secret, payload) }, body: payload });
         clearTimeout(tm);
-      } catch (e) { console.warn('webhook', m.id, e?.message); }
+        await logSync(env, `webhook:${m.name}`, 'out', fresh.external_ref || fresh.ref, r.ok, `${stepOf(fresh)} → HTTP ${r.status}`);
+      } catch (e) { await logSync(env, `webhook:${m.name}`, 'out', fresh.external_ref || fresh.ref, false, e?.message); }
     }
   }
   return fresh;
@@ -134,18 +139,50 @@ export async function departures(env, { days = 2, includePast = false } = {}) {
   return out.sort((a, b) => a.departure_at - b.departure_at);
 }
 
-// Premier départ à venir dont l'axe couvre la destination (et si possible le point de récupération).
-async function pickDeparture(env, s) {
+const refusedBy = (s) => String(s.refused_by || '').split(',').filter(Boolean).map(Number);
+
+// 1) Trajet d'un livreur qui passe par la récupération puis la livraison (sens, horaires, capacité, plus petit détour) ;
+// 2) sinon, premier départ à venir dont l'axe couvre la destination (et si possible la récupération).
+// Les livreurs qui ont déjà refusé ce colis sont écartés.
+export async function pickDeparture(env, s) {
   if (s.drop_lat == null) return null;
-  const deps = (await departures(env)).filter((d) => !d.started && inAxe(d, s.drop_lat, s.drop_lng));
+  const exclude = refusedBy(s);
+  const trip = await matchTrip(env, s, { exclude });
+  if (trip) return trip;
+  const deps = (await departures(env)).filter((d) => !d.started && !exclude.includes(d.courier_id) && inAxe(d, s.drop_lat, s.drop_lng));
   return deps.find((d) => s.pickup_lat == null || inAxe(d, s.pickup_lat, s.pickup_lng)) || deps[0] || null;
 }
 
+// Remet un colis « à programmer » puis cherche un autre livreur compatible.
+async function unassignAndRepick(env, s, user, why) {
+  await run(env, "UPDATE shipments SET courier_id = NULL, slot_id = NULL, axe_id = NULL, trip_id = NULL, departure_at = NULL, status = 'pending', stage = NULL, accepted_at = NULL WHERE id = ?", s.id);
+  const fresh = await loadShipment(env, s.id);
+  const dep = await pickDeparture(env, fresh);
+  if (dep) return assignTo(env, fresh, dep, user);
+  await alertAdmins(env, 'alert', `Colis ${s.ref} à réattribuer manuellement (${why})`);
+  return broadcast(env, fresh, 'Colis en attente d\'un livreur', why);
+}
+
+// Colis encore « à programmer » : on retente l'affectation (nouveau trajet déclaré, nouvelle position…).
+export async function reassignPending(env) {
+  const rows = await all(env, `${SHIP_SQL} WHERE s.status = 'pending' AND s.drop_lat IS NOT NULL AND s.created_at > ? ORDER BY s.created_at LIMIT 50`, now() - 3 * 864e5);
+  let n = 0;
+  for (const s of rows) { const dep = await pickDeparture(env, s); if (dep) { await assignTo(env, s, dep, null); n += 1; } }
+  return n;
+}
+
+// Trajet annulé : ses colis non encore récupérés repartent vers un autre livreur.
+export async function releaseTrip(env, tripId, user) {
+  const rows = await all(env, `${SHIP_SQL} WHERE s.trip_id = ? AND s.status = 'assigned'`, tripId);
+  for (const s of rows) { await logEvent(env, s, 'released', null, user); await unassignAndRepick(env, s, user, 'trajet du livreur annulé'); }
+  return rows.length;
+}
+
 async function assignTo(env, s, dep, user) {
-  await run(env, "UPDATE shipments SET courier_id = ?, slot_id = ?, axe_id = ?, departure_at = ?, status = 'assigned', assigned_at = ? WHERE id = ?",
-    dep.courier_id, dep.slot_id ?? null, dep.axe_id ?? null, dep.departure_at ?? null, now(), s.id);
-  await logEvent(env, s, 'assigned', dep.axe ? `${dep.courier} · ${dep.axe}` : null, user);
-  await notify(env, [dep.courier_id], 'shipment_assigned', '📦 Nouveau colis', `${s.ref} · ${s.pickup_addr} → ${s.drop_addr}${dep.departure_at ? ' · départ ' + fmtDate(dep.departure_at).slice(11) : ''}`);
+  await run(env, "UPDATE shipments SET courier_id = ?, slot_id = ?, axe_id = ?, trip_id = ?, departure_at = ?, status = 'assigned', assigned_at = ?, accepted_at = NULL WHERE id = ?",
+    dep.courier_id, dep.slot_id ?? null, dep.axe_id ?? null, dep.trip_id ?? null, dep.departure_at ?? null, now(), s.id);
+  await logEvent(env, s, 'assigned', dep.axe ? `${dep.courier} · ${dep.axe}${dep.detour_m != null ? ` · détour ~${dep.detour_m} m` : ''}` : null, user);
+  await notify(env, [dep.courier_id], 'shipment_assigned', '📦 Nouvelle mission à accepter', `${s.ref} · ${s.pickup_addr} → ${s.drop_addr}${dep.departure_at ? ' · départ ' + fmtDate(dep.departure_at).slice(11) : ''}`);
   return broadcast(env, s, 'Colis programmé', dep.departure_at ? `Départ ${fmtDate(dep.departure_at)} (${dep.axe})` : 'Livreur attribué');
 }
 
@@ -176,6 +213,7 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
     str(b.recipient?.name ?? b.recipient_name, { min: 2, max: 80, name: 'Nom du destinataire' }), recipient_phone,
     str(b.recipient?.address ?? b.drop_addr, { min: 3, max: 200, name: 'Adresse de livraison' }), dlat, dlng,
     str(b.description, { max: 300 }), declared, fee, now(), String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0'));
+  await run(env, 'UPDATE shipments SET track_token = ? WHERE id = ?', randomHex(12), res.meta.last_row_id);
   let s = await loadShipment(env, res.meta.last_row_id);
   await logEvent(env, s, 'pending', source === 'api' ? `API ${merchant?.name}` : null, actor);
   // Départ choisi explicitement, sinon attribution automatique au prochain départ couvrant la destination.
@@ -200,7 +238,10 @@ async function canSee(env, u, s) {
 async function schedule(ctx, env) {
   const st = await settings(env);
   const axes = await all(env, 'SELECT id, name, color, center_lat, center_lng, radius_km, fee FROM axes WHERE active = 1 ORDER BY name');
-  return json({ departures: await departures(env, { days: 2, includePast: false }), axes, default_fee: Number(st.default_fee || 3000), centre: { name: st.centre_name, address: st.centre_addr } });
+  const { upcomingTrips } = await import('./trips.js');
+  const trips = (await upcomingTrips(env)).filter((t) => t.depart_at < now() + 2 * 864e5)
+    .map((t) => ({ id: t.id, courier: t.courier, departure_at: t.depart_at, return_at: t.end_at, from: t.from.address, to: t.to.address, load: t.load, capacity: t.capacity, started: t.depart_at <= now() }));
+  return json({ departures: await departures(env, { days: 2, includePast: false }), trips, axes, default_fee: Number(st.default_fee || 3000), centre: { name: st.centre_name, address: st.centre_addr } });
 }
 
 async function quoteShipment(ctx, env) {
@@ -329,6 +370,22 @@ async function assign(ctx, env) {
   return json({ shipment: publicShipment(fresh) });
 }
 
+// Le livreur accepte ou refuse une mission qui lui est proposée. Un refus la confie au livreur compatible suivant.
+async function acceptMission(ctx, env) {
+  const s = await courierGuardShip(ctx, env, ['assigned']);
+  if (!s.accepted_at) { await run(env, 'UPDATE shipments SET accepted_at = ? WHERE id = ?', now(), s.id); await logEvent(env, s, 'accepted', null, ctx.user); await broadcast(env, s, '✅ Mission acceptée', `Livreur : ${ctx.user.name.split(' ')[0]}`); }
+  return json({ ok: true });
+}
+async function declineMission(ctx, env) {
+  const s = await courierGuardShip(ctx, env, ['assigned']);
+  if (s.stage === 'at_pickup') fail(409, 'bad_status', 'Vous êtes déjà chez l\'expéditeur');
+  const reason = str(ctx.body.reason, { max: 200 });
+  await run(env, 'UPDATE shipments SET refused_by = ? WHERE id = ?', [...refusedBy(s), ctx.user.id].join(','), s.id);
+  await logEvent(env, s, 'declined', reason || null, ctx.user);
+  const fresh = await unassignAndRepick(env, await loadShipment(env, s.id), ctx.user, `refusé par ${ctx.user.name.split(' ')[0]}${reason ? ' : ' + reason : ''}`);
+  return json({ ok: true, reassigned_to: fresh.courier_id && fresh.courier_id !== ctx.user.id ? (fresh.courier_name || '').split(' ')[0] : null });
+}
+
 async function courierGuardShip(ctx, env, statuses) {
   const s = await loadShipment(env, ctx.params.id);
   if (s.courier_id !== ctx.user.id) fail(403, 'forbidden', 'Ce colis ne vous est pas attribué');
@@ -351,7 +408,7 @@ async function pickup(ctx, env) {
   }
   await env.DB.batch([
     q(env, 'INSERT OR REPLACE INTO shipment_photos (shipment_id, mime, data, at) VALUES (?,?,?,?)', s.id, m[1], m[2], now()),
-    q(env, "UPDATE shipments SET status = 'picked_up', picked_at = ?, value = ?, fee = ?, photo = 1, stage = NULL, stage_at = ? WHERE id = ?", now(), value, fee, now(), s.id),
+    q(env, "UPDATE shipments SET status = 'picked_up', picked_at = ?, value = ?, fee = ?, photo = 1, stage = NULL, stage_at = ?, accepted_at = COALESCE(accepted_at, ?) WHERE id = ?", now(), value, fee, now(), now(), s.id),
   ]);
   await logEvent(env, s, 'picked_up', `Valeur ${value} Ar · frais ${fee} Ar`, ctx.user, b.lat ?? null, b.lng ?? null);
   if (s.declared_value && Math.abs(value - s.declared_value) > Math.max(1000, s.declared_value * 0.2))
@@ -630,7 +687,12 @@ const byRef = async (env, m, ref) => {
 async function v1Create(ctx, env) {
   const m = ctx.merchant;
   const sender = await one(env, 'SELECT * FROM users WHERE id = ?', m.user_id);
-  const r = await createShipment(env, ctx.body, { sender, source: 'api', merchant: m, actor: null });
+  // Clé d'idempotence : external_ref, ou à défaut l'en-tête Idempotency-Key.
+  const body = { ...ctx.body, external_ref: ctx.body.external_ref || ctx.idempotencyKey || undefined };
+  let r;
+  try { r = await createShipment(env, body, { sender, source: 'api', merchant: m, actor: null }); }
+  catch (e) { await logSync(env, `api:${m.name}`, 'in', body.external_ref, false, e.message); throw e; }
+  await logSync(env, `api:${m.name}`, 'in', body.external_ref || r.shipment.ref, true, r.duplicate ? 'doublon ignoré' : `colis ${r.shipment.ref} créé`);
   return json({ duplicate: !!r.duplicate, shipment: { ...publicShipment(r.shipment), delivery_pin: r.shipment.pin } }, r.duplicate ? 200 : 201);
 }
 async function v1List(ctx, env) {
@@ -747,6 +809,8 @@ export function registerShipmentRoutes(route) {
   route('POST', '/api/shipments/:id/fee', ['courier', 'admin'], setFee);
   route('POST', '/api/shipments/:id/assign', ['admin'], assign);
   route('POST', '/api/shipments/:id/pickup', ['courier'], pickup);
+  route('POST', '/api/shipments/:id/accept', ['courier'], acceptMission);
+  route('POST', '/api/shipments/:id/decline', ['courier'], declineMission);
   route('POST', '/api/shipments/:id/deliver', ['courier'], deliver);
   route('POST', '/api/shipments/:id/confirm', ['client', 'admin'], recipientConfirm);
   route('POST', '/api/shipments/:id/refuse', ['courier'], refuse);

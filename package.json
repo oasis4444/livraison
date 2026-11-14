@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "node --no-warnings tools/dev-server.mjs",
-    "test": "node --no-warnings --test tests/api.test.mjs tests/shipments.test.mjs tests/tsena.test.mjs",
+    "test": "node --no-warnings --test tests/api.test.mjs tests/shipments.test.mjs tests/tsena.test.mjs tests/trips.test.mjs",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply alefa-livraison-prod --remote",
     "admin": "node tools/create-admin.mjs"

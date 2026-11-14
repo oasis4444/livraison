@@ -39,7 +39,9 @@ async function ctx(geo, vw = { width: 400, height: 860 }) {
   await c.route('https://unpkg.com/**', (r) => r.request().url().endsWith('.js') ? r.fulfill({ contentType: 'text/javascript', body: LEAFLET_STUB }) : r.fulfill({ contentType: 'text/css', body: '' }));
   await c.route('https://nominatim.openstreetmap.org/**', (r) => r.request().url().includes('/reverse')
     ? r.fulfill({ json: { address: { road: 'Rue Andrianampoinimerina', suburb: 'Analakely' } } })
-    : r.fulfill({ json: [{ display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
+    : r.fulfill({ json: [/ivandry/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Ivandry, Antananarivo, Madagascar', lat: '-18.8752', lon: '47.5328' }
+      : /analakely/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Analakely, Antananarivo, Madagascar', lat: '-18.9055', lon: '47.5255' }
+      : { display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
   return c;
 }
@@ -186,6 +188,24 @@ try {
     await admin.screenshot({ path: 'tests/screens/28-admin-caisse.png' });
     const d = await api('GET', '/api/v1/shipments/CMD-1042', null, { 'X-API-Key': apiKey });
     if (d.data.shipment.status !== 'delivered' || !d.data.shipment.has_photo) throw new Error(JSON.stringify(d.data));
+  });
+  await step('livreur : déclare un trajet Analakely → Ivandry, un colis sur le chemin lui est proposé et il l\'accepte', async () => {
+    await courier.click('[data-t=plan]'); await courier.waitForSelector('[data-tadd]');
+    await courier.fill('[data-from]', 'Analakely'); await courier.fill('[data-to]', 'Ivandry');
+    await courier.click('[data-tadd]'); await courier.waitForSelector('[data-trip]');
+    await courier.screenshot({ path: 'tests/screens/30-livreur-trajet.png' });
+    const r = await api('POST', '/api/v1/shipments', { external_ref: 'TRAJET-1', declared_value: 5000, sender: { address: 'Analakely', lat: -18.9055, lng: 47.5255 },
+      recipient: { name: 'Fara', phone: '0345556677', address: 'Ivandry', lat: -18.8752, lng: 47.5328 } }, { 'X-API-Key': apiKey });
+    if (r.data.shipment?.status !== 'assigned' || !r.data.shipment.trip_id) throw new Error('non affecté au trajet : ' + JSON.stringify(r.data));
+    globalThis.__track = r.data.shipment.track_token;
+    await courier.click('[data-t=colis]'); await courier.waitForSelector('text=Nouvelles missions à accepter');
+    await courier.click(`[data-act=ship][data-id="${r.data.shipment.id}"]`);
+    await courier.click('text=Accepter la mission'); await courier.waitForSelector('text=Mission acceptée');
+  });
+  await step('suivi public sans compte : /suivi/<jeton>', async () => {
+    const p = await (await ctx(null)).newPage(); watch(p, 'suivi');
+    await p.goto(BASE + '/suivi/' + globalThis.__track); await p.waitForSelector('text=TRAJET-1');
+    await p.screenshot({ path: 'tests/screens/31-suivi-public.png' });
   });
   if (errors.length) { console.log('\nErreurs JS :\n' + errors.join('\n')); process.exitCode = 1; } else console.log('\nAucune erreur JavaScript ✔');
 } catch (e) {

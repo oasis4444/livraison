@@ -156,3 +156,12 @@ Admin → 🔌 Logiciels de vente → **Connecter Tsena**. Saisir l'e-mail et le
 
 - Chaque minute, les documents `deliveries` de Tsena au statut `attente` deviennent des colis Alefa (`external_ref` = n° `L-00001`, valeur = `amount`, frais = `fee` ou 3 000 Ar par défaut). Pas de doublon.
 - En retour, Alefa écrit dans le document Tsena : `status` = `cours` (livreur parti / colis récupéré) puis `livree` + `doneAt`, `driver` = livreur, et `alefaRef`, `alefaStep`, `alefaPin`.
+
+## Trajets, acceptation, suivi et sécurité (v1.4)
+
+- **Affectation sur le trajet** : chaque livreur déclare ses trajets (départ, destination, heure, itinéraire vélo, capacité). Un colis est confié au livreur dont l'itinéraire passe à moins de 700 m (réglage `trip_corridor_m`) de la récupération **puis** de la livraison (sens respecté), dans ses horaires, sans dépasser sa capacité, avec le plus petit détour. À défaut : départ par axe. Deux trajets d'un même livreur ne peuvent pas se chevaucher.
+- **Acceptation** : le livreur accepte ou refuse chaque mission ; un refus la confie automatiquement au livreur compatible suivant (jamais de nouveau à celui qui a refusé). Les colis non attribués sont retentés chaque minute.
+- **Suivi public** : `GET /api/track/{jeton}` et la page `/suivi/{jeton}` (champ `track_token` du colis). La position du livreur n'y est visible que pendant la mission.
+- **Idempotence** : `external_ref` ou en-tête `Idempotency-Key` → jamais de doublon.
+- **Limitation** : 120 requêtes / minute / clé (réglage `api_rate_per_min`), réponse `429` au-delà.
+- **Journal des échanges** : chaque commande reçue, statut envoyé et webhook est journalisé (Admin → Logiciels de vente → Journal), erreurs relancées automatiquement.

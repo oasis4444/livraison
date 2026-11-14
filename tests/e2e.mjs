@@ -173,7 +173,7 @@ try {
     await admin.click('[data-v=live]'); await admin.waitForSelector('text=🧭');
     await admin.click('[data-v=dash]'); await admin.waitForSelector('.kpis');
     await admin.screenshot({ path: 'tests/screens/08-admin-dashboard.png' });
-    await admin.click('[data-v=live]'); await admin.waitForSelector('text=Livreurs (');
+    await admin.click('[data-v=live]'); await admin.waitForSelector('text=Livreurs en service (');
     await admin.click('[data-v=deliveries]'); await admin.selectOption('[data-f=status]', ''); await admin.click('[data-act=dfilter]');
     await admin.waitForSelector('tr.click'); await admin.click('tr.click'); await admin.waitForSelector('text=Livraison #1');
     await admin.screenshot({ path: 'tests/screens/09-admin-livraison.png' });

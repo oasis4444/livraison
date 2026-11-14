@@ -101,7 +101,7 @@ const VIEWS = {
         <span class="small muted">🟢 disponible · 🟠 en course · ⚪ GPS perdu · 🟩 récupération · 🟧 livraison</span></div>
       <div class="live-wrap"><div class="livemap" id="livemap"></div><div class="live-list panel" data-live-list></div></div>`;
     liveMap = makeMap($('#livemap'), { zoom: 13, zoomControl: true, layers: true });
-    const trails = {}, links = {};
+    const trails = {}, links = {}, tripLayers = {};
     const COLORS = ['#0b6e4f', '#2563eb', '#c2410c', '#7c3aed', '#be123c', '#0891b2', '#a16207', '#4d7c0f'];
     const colorOf = (id) => COLORS[id % COLORS.length];
     let fitted = false;
@@ -131,6 +131,14 @@ const VIEWS = {
         } else if (trails[c.id]) { trails[c.id].remove(); delete trails[c.id]; }
       }
       for (const id of Object.keys(trails)) if (!pos[id]) { trails[id].remove(); delete trails[id]; }
+      // trajets déclarés (12 prochaines heures) : itinéraire en pointillés de la couleur du livreur
+      const tk = new Set();
+      for (const t of r.trips || []) {
+        tk.add(String(t.id));
+        const tip = `<b>${esc(t.courier)}</b> · ${time(t.depart_at)}<br>${esc(t.from.address)} → ${esc(t.to.address)}<br>${t.load}/${t.capacity} colis`;
+        if (!tripLayers[t.id]) tripLayers[t.id] = L.polyline(t.route, { color: colorOf(t.courier_id), weight: 3, dashArray: '2 8', opacity: .9 }).bindTooltip(tip, { sticky: true }).addTo(liveMap);
+      }
+      for (const id of Object.keys(tripLayers)) if (!tk.has(id)) { tripLayers[id].remove(); delete tripLayers[id]; }
       // colis : point de récupération / livraison + liaison avec le livreur
       const keepLinks = new Set();
       if (showParcels) for (const p of r.parcels) {
@@ -165,6 +173,7 @@ const VIEWS = {
         ${out.map((c) => { const mine = r.parcels.filter((p) => p.courier_id === c.id && p.step !== 'scheduled'); return `<div class="small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:5px 0;border-bottom:1px solid var(--line)">
           <div class="row between"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorOf(c.id)}"></span> ${esc(c.name)}</b><span class="muted">${time(c.last_seen)}</span></div>
           <div class="muted">${c.delivery_id ? `🛵 course #${c.delivery_id}` : ''}${mine.map((p) => `📦 ${esc(p.ref)} ${esc(p.step_label)}`).join(' · ') || (c.axe ? `🧭 ${esc(c.axe)}` : 'disponible')}</div></div>`; }).join('') || '<p class="muted small">Aucun livreur en service.</p>'}
+        ${(r.trips || []).length ? `<h3 style="margin-top:12px">🛣 Trajets prévus (${r.trips.length})</h3>${r.trips.map((t) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorOf(t.courier_id)}"></span> ${esc(t.courier)}</b> · ${time(t.depart_at)} <span class="muted">${esc(t.from.address.split(',')[0])} → ${esc(t.to.address.split(',')[0])} · ${t.load}/${t.capacity}</span></div>`).join('')}` : ''}
         <h3 style="margin-top:12px">⚡ Mouvements</h3>
         <div class="feed">${r.feed.slice(0, 40).map((f) => `<div><time>${time(f.at)}</time><span>${icon(f.kind)} <b>${esc(f.who)}</b>${f.role ? ` <span class="muted tiny">${{ client: 'client', courier: 'livreur', admin: 'centre' }[f.role] || ''}</span>` : ''} — ${esc(f.text)}</span></div>`).join('') || '<p class="muted small">—</p>'}</div>`;
       $('[data-live-list]')._couriers = r.couriers;
@@ -303,7 +312,7 @@ const VIEWS = {
   },
 
   async api() {
-    const [r, ts] = await Promise.all([api('GET', '/api/admin/merchants'), api('GET', '/api/admin/tsena')]);
+    const [r, ts, lg] = await Promise.all([api('GET', '/api/admin/merchants'), api('GET', '/api/admin/tsena'), api('GET', '/api/admin/sync-log')]);
     const base = location.origin;
     const res = ts.last_result || {};
     main.innerHTML = head('Relier un logiciel de vente', '<button class="btn primary" data-act="newmerchant">＋ Clé API</button>') + `
@@ -317,6 +326,11 @@ const VIEWS = {
           <div class="row"><button class="btn sm primary" data-act="tsenasync">⟳ Synchroniser maintenant</button><button class="btn sm" data-act="tsenaconnect">Changer de compte</button><button class="btn sm danger" data-act="tsenaoff">Déconnecter</button></div>`
         : '<div class="row"><button class="btn primary" data-act="tsenaconnect">Connecter Tsena</button></div>'}
       </div>
+      <details class="panel" style="margin-bottom:16px" ${lg.log.some((x) => !x.ok) ? 'open' : ''}><summary><b>🧾 Journal des échanges</b> <span class="small muted">(${lg.log.length} derniers · ${lg.log.filter((x) => !x.ok).length} erreur(s))</span></summary>
+        <div class="tbl-wrap" style="margin-top:8px"><table class="tbl"><thead><tr><th>Heure</th><th>Logiciel</th><th>Sens</th><th>Réf.</th><th>Résultat</th></tr></thead><tbody>
+        ${lg.log.slice(0, 60).map((x) => `<tr><td class="small">${dt(x.at)}</td><td class="small">${esc(x.partner)}</td><td>${x.direction === 'in' ? '⬅ reçu' : '➡ envoyé'}</td><td class="small"><code>${esc(x.ref || '—')}</code></td>
+          <td class="small" style="color:${x.ok ? 'inherit' : 'var(--red)'}">${x.ok ? '✓' : '⚠'} ${esc(x.message || '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Aucun échange pour le moment.</td></tr>'}</tbody></table></div>
+        <p class="tiny muted">Les opérations en échec sont relancées automatiquement chaque minute.</p></details>
       <div class="grid2" style="margin-bottom:16px"><div class="panel stack">
         <h3>① Le plus simple : le lien « Alefa » (aucun développement)</h3>
         <p class="small">Dans le logiciel de vente, ajoutez un bouton <b>« Livrer avec Alefa »</b> qui ouvre ce lien en remplaçant les valeurs par celles de la commande. Le vendeur (connecté à Alefa) voit le formulaire déjà rempli et appuie sur <b>Envoyer</b>.</p>

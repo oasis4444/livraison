@@ -5,6 +5,7 @@
 import { fail, json, str, normalizePhone, randomHex, hashPassword, now } from './lib.js';
 import { one, all, run, settings, audit, alertAdmins } from './worker.js';
 import { createShipment, stepOf } from './shipments.js';
+import { logSync } from './trips.js';
 
 const KEYS = ['tsena_url', 'tsena_project', 'tsena_api_key', 'tsena_refresh', 'tsena_email', 'tsena_shop_name', 'tsena_shop_phone', 'tsena_pickup_addr', 'tsena_last_sync', 'tsena_last_result', 'tsena_last_error'];
 const setMany = (env, obj) => env.DB.batch(Object.entries(obj).map(([k, v]) => env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, String(v ?? ''))));
@@ -80,6 +81,17 @@ async function ensureSchema(env) {
   schemaOk = true;
 }
 
+// Adresse Tsena (texte libre) → position GPS, pour pouvoir trouver un livreur dont le trajet y passe.
+export async function geocodeTana(addr) {
+  if (!addr || addr.length < 3) return null;
+  try {
+    const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mg&viewbox=47.40,-18.80,47.65,-19.02&bounded=1&q=${encodeURIComponent(addr + ', Antananarivo')}`;
+    const r = await fetch(u, { headers: { 'User-Agent': 'Alefa-livraison/1.0 (centre de livraison Antananarivo)', 'Accept-Language': 'fr' } });
+    const j = await r.json();
+    return j[0] ? [Number(j[0].lat), Number(j[0].lon)] : null;
+  } catch { return null; }
+}
+
 // ---------------------------------------------------------------- synchronisation
 async function shopAccount(env, s) {
   const phone = normalizePhone(s.tsena_shop_phone);
@@ -116,14 +128,17 @@ export async function syncTsena(env) {
       const sender = await shopAccount(env, s);
       for (const d of fresh) {
         try {
+          const drop = await geocodeTana(d.address);
           const r = await createShipment(env, {
+            drop_lat: drop?.[0], drop_lng: drop?.[1], pickup_lat: s.tsena_pickup_lat || undefined, pickup_lng: s.tsena_pickup_lng || undefined,
             external_ref: d.no || d.docId, recipient_name: d.clientName || 'Client', recipient_phone: d.phone, drop_addr: d.address || 'Adresse à confirmer',
             pickup_addr: s.tsena_pickup_addr || s.tsena_shop_name || 'Boutique', declared_value: Math.max(0, Math.round(Number(d.amount) || 0)),
             description: d.note || '', fee: Number(d.fee) > 0 ? Math.round(Number(d.fee)) : undefined,
           }, { sender, source: 'api', actor: { role: 'admin', id: null } });
           await run(env, 'INSERT OR IGNORE INTO tsena_links (shipment_id, doc_id, last_step, synced_at) VALUES (?,?,?,?)', r.shipment.id, d.docId, null, now());
           out.imported += 1;
-        } catch (e) { out.errors.push(`${d.no || d.docId} : ${e.message}`); }
+          await logSync(env, 'tsena', 'in', d.no || d.docId, true, `colis ${r.shipment.ref} créé${drop ? '' : ' (adresse à localiser)'}${r.shipment.courier_id ? ' · ' + (r.shipment.courier_name || '').split(' ')[0] : ''}`);
+        } catch (e) { out.errors.push(`${d.no || d.docId} : ${e.message}`); await logSync(env, 'tsena', 'in', d.no || d.docId, false, e.message); }
       }
     }
     // 2. Alefa → Tsena : avancement, livreur et code de réception.
@@ -132,7 +147,7 @@ export async function syncTsena(env) {
     for (const x of links) {
       const step = stepOf(x);
       if (step === x.last_step) continue;
-      const fields = { alefaRef: x.ref, alefaStep: step, alefaPin: x.pin || '' };
+      const fields = { alefaRef: x.ref, alefaStep: step, alefaPin: x.pin || '', alefaTrack: x.track_token && s.app_url ? `${s.app_url}/suivi/${x.track_token}` : '' };
       if (TSENA_STATUS[step]) fields.status = TSENA_STATUS[step];
       if (x.courier_name) fields.driver = `${x.courier_name.split(' ')[0]} (Alefa)`;
       if (step === 'delivered') fields.doneAt = new Date(x.done_at || now()).toISOString();
@@ -141,11 +156,13 @@ export async function syncTsena(env) {
         await patchDelivery(s, token, x.doc_id, fields);
         await run(env, 'UPDATE tsena_links SET last_step = ?, synced_at = ? WHERE shipment_id = ?', step, now(), x.shipment_id);
         out.updated += 1;
-      } catch (e) { out.errors.push(`${x.ref} → Tsena : ${e.message}`); }
+        await logSync(env, 'tsena', 'out', x.external_ref || x.ref, true, `${step}${fields.status ? ' → ' + fields.status : ''}`);
+      } catch (e) { out.errors.push(`${x.ref} → Tsena : ${e.message}`); await logSync(env, 'tsena', 'out', x.external_ref || x.ref, false, e.message); }
     }
     await setMany(env, { tsena_last_sync: now(), tsena_last_result: JSON.stringify(out), tsena_last_error: out.errors.slice(0, 3).join(' | ') });
   } catch (e) {
     out.errors.push(e.message);
+    await logSync(env, 'tsena', 'in', null, false, e.message);
     const prev = s.tsena_last_error;
     await setMany(env, { tsena_last_sync: now(), tsena_last_result: JSON.stringify(out), tsena_last_error: e.message });
     if (prev !== e.message) await alertAdmins(env, 'alert', `Synchronisation Tsena en échec : ${e.message}`);
@@ -178,7 +195,9 @@ async function connect(ctx, env) {
   const s = { tsena_project: cfg.project, tsena_api_key: cfg.apiKey, tsena_refresh: auth.refreshToken };
   let waiting;
   try { waiting = await waitingDeliveries(s, auth.idToken); } catch (e) { fail(400, 'tsena_read', `Lecture des livraisons Tsena impossible : ${e.message}`); }
-  await setMany(env, { ...s, tsena_url: cfg.base, tsena_email: email, tsena_shop_name: str(b.shop_name || 'Tsena Ampandrana', { max: 80 }), tsena_shop_phone: shopPhone, tsena_pickup_addr: str(b.pickup_addr, { max: 200 }), tsena_last_error: '' });
+  const pickupAddr = str(b.pickup_addr, { max: 200 });
+  const pk = await geocodeTana(pickupAddr);
+  await setMany(env, { ...s, app_url: ctx.url.origin, tsena_pickup_lat: pk?.[0] ?? '', tsena_pickup_lng: pk?.[1] ?? '', tsena_url: cfg.base, tsena_email: email, tsena_shop_name: str(b.shop_name || 'Tsena Ampandrana', { max: 80 }), tsena_shop_phone: shopPhone, tsena_pickup_addr: pickupAddr, tsena_last_error: '' });
   await audit(env, ctx, 'tsena_connect', { url: cfg.base, email });
   const first = await syncTsena(env);
   return json({ ok: true, waiting: waiting.filter((d) => d.status === 'attente').length, ...first });

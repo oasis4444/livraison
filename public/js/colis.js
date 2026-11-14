@@ -33,11 +33,13 @@ const STEP = {
   fr: { pending: 'À programmer', scheduled: 'Programmé', departed: 'Parti du centre', at_pickup: 'Chez l\'expéditeur', picked_up: 'Récupéré', en_route: 'En route',
     nearby: 'Tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour expéditeur', returned: 'Rendu à l\'expéditeur', fee: 'Frais modifiés', assigned: 'Programmé',
     awaiting_recipient: 'Remis · à confirmer par le destinataire', awaiting_courier: 'Reçu · à confirmer par le livreur', courier_confirmed: 'Remise déclarée par le livreur',
-    recipient_confirmed: 'Réception confirmée', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée' },
+    recipient_confirmed: 'Réception confirmée', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée',
+    accepted: 'Mission acceptée', declined: 'Mission refusée par un livreur', released: 'Trajet annulé — réaffecté' },
   mg: { pending: 'Mbola tsy voalahatra', scheduled: 'Voalahatra', departed: 'Lasa (niala centre)', at_pickup: 'Tonga eo amin\'ny mpandefa', picked_up: 'Voaray', en_route: 'An-dalana',
     nearby: 'Efa akaiky', delivered: 'Tonga', refused: 'Nolavina', cancelled: 'Nofoanana', returning: 'Haverina amin\'ny mpandefa', returned: 'Naverina tamin\'ny mpandefa', fee: 'Saran-dalana novaina', assigned: 'Voalahatra',
     awaiting_recipient: 'Natolotra · miandry fanamarinan\'ny mpandray', awaiting_courier: 'Voaray · miandry fanamarinan\'ny livreur', courier_confirmed: 'Nambaran\'ny livreur fa natolotra',
-    recipient_confirmed: 'Nohamafisin\'ny mpandray fa voaray', pin_fail: 'Kaody PIN diso', disputed: 'Nolavin\'ny mpandray fa tsy voaray' },
+    recipient_confirmed: 'Nohamafisin\'ny mpandray fa voaray', pin_fail: 'Kaody PIN diso', disputed: 'Nolavin\'ny mpandray fa tsy voaray',
+    accepted: 'Neken\'ny livreur', declined: 'Nolavin\'ny livreur iray', released: 'Nofoanana ny dia — natolotra livreur hafa' },
 };
 export const stepLabel = (k) => (STEP[state.lang] || STEP.fr)[k] || STEP.fr[k] || k;
 export const STEPS_FLOW = ['scheduled', 'departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'awaiting_recipient', 'delivered'];
@@ -46,7 +48,10 @@ export const c = (k) => (state.lang === 'mg' ? L_MG : L_FR)[k] ?? L_FR[k] ?? k;
 
 const PILL = { pending: 'pending', scheduled: 'assigned', departed: 'assigned', at_pickup: 'assigned', picked_up: 'picked_up', en_route: 'picked_up', nearby: 'picked_up', awaiting_recipient: 'pending', awaiting_courier: 'pending', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled', returning: 'cancelled', returned: 'cancelled' };
 export const shipPill = (s) => `<span class="status-pill st-${PILL[s.step] || 'pending'}">${esc(stepLabel(s.step))}</span>`;
-const dayLabel = (ms) => { const d0 = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10), d = new Date(ms + 3 * 3600e3).toISOString().slice(0, 10); return d === d0 ? c('today') : c('tomorrow'); };
+const dayLabel = (ms) => {
+  const iso = (x) => new Date(x + 3 * 3600e3).toISOString().slice(0, 10), d = iso(ms);
+  return d === iso(Date.now()) ? c('today') : d === iso(Date.now() + 864e5) ? c('tomorrow') : `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+};
 
 export function shipCard(s, extra = '') {
   return `<div class="card" data-act="ship" data-id="${s.id}" style="cursor:pointer">
@@ -69,10 +74,12 @@ export async function scheduleHtml(map, onDeps) {
   }
   const groups = {};
   for (const d of r.departures) (groups[dayLabel(d.departure_at)] ||= []).push(d);
+  for (const tr of r.trips || []) (groups[dayLabel(tr.departure_at)] ||= []).push({ ...tr, axe: `${tr.from.split(',')[0]} → ${tr.to.split(',')[0]}`, color: '#0f7a55', trip: true });
+  for (const k of Object.keys(groups)) groups[k].sort((a, b) => a.departure_at - b.departure_at);
   return `<div class="small muted" style="margin-bottom:8px">🏢 ${esc(r.centre?.name || '')} · ${esc(c('fee'))} : <b>${ar(r.default_fee)}</b></div>
     ${Object.entries(groups).map(([day, list]) => `<h3>${esc(day)}</h3><div class="list">${list.map((d) => `<div class="card row" style="padding:10px 12px">
       <div style="text-align:center;min-width:56px"><div style="font-size:1.25rem;font-weight:850">${time(d.departure_at)}</div><div class="tiny muted">${c('back_at')} ${time(d.return_at)}</div></div>
-      <div class="grow"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(d.color)}"></span> ${esc(d.axe)}</b><div class="small muted">🚲 ${esc(d.courier)} · ${d.load} ${c('parcels')}${d.started ? ' · 🟢' : ''}</div></div></div>`).join('')}</div>`).join('') || `<p class="muted">${c('no_schedule')}</p>`}
+      <div class="grow"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(d.color)}"></span> ${esc(d.axe)}</b><div class="small muted">${d.trip ? '🛣' : '🚲'} ${esc(d.courier)} · ${d.load}${d.capacity ? '/' + d.capacity : ''} ${c('parcels')}${d.started ? ' · 🟢' : ''}</div></div></div>`).join('')}</div>`).join('') || `<p class="muted">${c('no_schedule')}</p>`}
     ${r.axes.length ? `<h3 style="margin-top:12px">Axes</h3><div class="chips">${r.axes.map((a) => `<span class="chip" style="border-color:${esc(a.color)}">${esc(a.name)}${a.fee ? ` · ${ar(a.fee)}` : ''}</span>`).join('')}</div>` : ''}`;
 }
 
@@ -207,6 +214,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
       <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div>
       ${role === 'sender' ? `<div class="tiny muted" style="margin-top:6px">${state.lang === 'mg' ? 'Alefaso amin\'ny mpandray ity kaody ity (SMS, appel).' : 'Transmettez ce code au destinataire (SMS, appel).'}</div>` : ''}</div>` : ''}
     ${stepBar(s)}
+    ${s.track_token && !isCourier && ['pending', 'assigned', 'picked_up'].includes(s.status) ? `<div class="row wrap small">🔗 <a href="/suivi/${esc(s.track_token)}" target="_blank" rel="noopener">${state.lang === 'mg' ? 'Rohy fanarahana amin\'ny sarintany' : 'Lien de suivi sur la carte'}</a>
+      <a class="btn sm" href="sms:${esc(s.recipient.phone)}?body=${encodeURIComponent(`Alefa ${s.ref} : ${location.origin}/suivi/${s.track_token}`)}">✉ SMS</a></div>` : ''}
     <div class="small"><b>Suivi</b>${s.events.map((e) => `<div class="row between" style="border-bottom:1px solid var(--line);padding:3px 0"><span>${esc(e.status === 'assigned' ? stepLabel('scheduled') : stepLabel(e.status))}${e.note ? ` <span class="muted">— ${esc(e.note)}</span>` : ''}</span><span class="muted tiny">${dt(e.at)}</span></div>`).join('')}</div>
     <div class="stack" data-actions></div></div>`);
   const el = m.el;
@@ -220,7 +229,15 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     await api('POST', `/api/shipments/${s.id}/fee`, { fee: Number(v) }).then(done).catch(toastErr);
   });
   if (isCourier) {
-    if (s.status === 'assigned') btn(`📦 ${c('pickup_btn')}`, 'primary lg', () => { m.close(); pickupForm(s, () => onChange?.()); });
+    if (s.status === 'assigned' && !s.accepted_at) {
+      btn(state.lang === 'mg' ? '👍 Ekeko ity iraka ity' : '👍 Accepter la mission', 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/accept`, {}); toast(stepLabel('accepted'), 'ok'); done(); });
+      btn(state.lang === 'mg' ? '👎 Laviko' : '👎 Refuser', 'danger', async () => {
+        const reason = await promptBox(state.lang === 'mg' ? 'Nahoana?' : 'Pourquoi ?', { label: c('reason'), placeholder: state.lang === 'mg' ? 'Ohatra : feno, tsy eo amin\'ny lalako' : 'Ex : plein, pas sur mon chemin' }); if (reason === null) return;
+        const r = await api('POST', `/api/shipments/${s.id}/decline`, { reason });
+        toast(r.reassigned_to ? `→ ${r.reassigned_to}` : stepLabel('declined'), 'ok'); done();
+      });
+    }
+    if (s.status === 'assigned') btn(`📦 ${c('pickup_btn')}`, s.accepted_at ? 'primary lg' : '', () => { m.close(); pickupForm(s, () => onChange?.()); });
     if (s.status === 'picked_up') {
       if (!s.courier_confirmed_at) btn(`${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', () => { m.close(); deliverForm(s, () => onChange?.()); });
       else acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">⏳ ${esc(stepLabel('awaiting_recipient'))}</div>`);
@@ -499,5 +516,75 @@ export function importForm({ adminMode = false, onDone } = {}) {
       };
       onDone?.();
     } catch (err) { toastErr(err); btn.disabled = false; btn.textContent = mg ? 'Alefa daholo' : 'Envoyer tous les colis'; }
+  };
+}
+
+// ---------------------------------------------------------------- trajets du livreur (départ → destination, itinéraire, capacité)
+const L_TRIP = {
+  fr: { title: 'Mes trajets', help: 'Indiquez d\'où vous partez, où vous allez et à quelle heure : les colis à récupérer et livrer sur votre chemin vous seront proposés.',
+    from: 'Départ', to: 'Destination', when: 'Heure de départ', cap: 'Colis max', here: '📍 Ma position', add: '＋ Ajouter ce trajet', none: 'Aucun trajet prévu.', del: 'Annuler', route: 'Voir l\'itinéraire', day: 'Jour', load: 'colis' },
+  mg: { title: 'Ny diako', help: 'Ampidiro ny toerana iaingananao, ny alehanao ary ny ora : homena anao ny entana halaina sy haterina eo amin\'ny lalanao.',
+    from: 'Iaingana', to: 'Alehana', when: 'Ora iaingana', cap: 'Entana farafahabetsany', here: '📍 Toerana misy ahy', add: '＋ Ampidiro ity dia ity', none: 'Tsy misy dia voalahatra.', del: 'Foanana', route: 'Jereo ny lalana', day: 'Andro', load: 'entana' },
+};
+export async function courierTripsEditor(container, { map, bikeRoute, onChange } = {}) {
+  const T = L_TRIP[state.lang] || L_TRIP.fr;
+  let layer = null, from = null, to = null, route = null;
+  const draw = (coords) => { if (!map || !window.L) return; layer?.remove(); layer = L.polyline(coords, { color: '#0f7a55', weight: 5, opacity: .8 }).addTo(map); try { map.fitBounds(layer.getBounds(), { padding: [30, 30] }); } catch {} };
+  const load = async () => {
+    const { trips } = await api('GET', '/api/courier/trips');
+    const d0 = new Date(); const pad = (n) => String(n).padStart(2, '0');
+    container.innerHTML = `<div class="small muted" style="margin-bottom:8px">${T.help}</div>
+      <div class="card stack" style="padding:10px">
+        <label class="field"><span>${T.from}</span><div class="row"><input class="input grow" data-from placeholder="Analakely"><button class="btn sm" data-here>${T.here}</button></div></label>
+        <label class="field"><span>${T.to}</span><input class="input" data-to placeholder="Ivandry"></label>
+        <div class="row"><label class="field grow"><span>${T.day}</span><input class="input" type="date" data-tday value="${d0.getFullYear()}-${pad(d0.getMonth() + 1)}-${pad(d0.getDate())}"></label>
+          <label class="field grow"><span>${T.when}</span><input class="input" type="time" data-when value="${pad(Math.min(23, d0.getHours() + 1))}:00"></label>
+          <label class="field" style="width:90px"><span>${T.cap}</span><input class="input" type="number" min="1" max="60" value="10" data-cap></label></div>
+        <div class="small muted" data-info></div>
+        <div class="row"><button class="btn grow" data-preview>🗺 ${T.route}</button><button class="btn primary grow" data-tadd>${T.add}</button></div></div>
+      <div class="list" style="margin-top:10px">${trips.map((x) => `<div class="card" style="padding:10px" data-trip="${x.id}">
+        <div class="row between"><b>${dayLabel(x.depart_at)} ${time(x.depart_at)}</b><span class="small muted">${x.km ?? '?'} km · ${x.load}/${x.capacity} ${T.load}</span></div>
+        <div class="small">${esc(x.from.address)} → ${esc(x.to.address)}</div>
+        <div class="row" style="margin-top:6px"><button class="btn sm" data-show="${x.id}">🗺</button><button class="btn sm danger" data-cancel="${x.id}">${T.del}</button></div></div>`).join('') || `<p class="muted">${T.none}</p>`}</div>`;
+    container._trips = trips;
+  };
+  const resolve = async (input, cur) => {
+    const v = input.value.trim(); if (!v) return null;
+    if (cur && cur.address === v) return cur;
+    const r = await geocode(v); if (!r.length) throw new Error(`« ${v} » ?`);
+    return { address: v, lat: r[0].lat, lng: r[0].lng };
+  };
+  const compute = async () => {
+    from = await resolve(container.querySelector('[data-from]'), from);
+    to = await resolve(container.querySelector('[data-to]'), to);
+    if (!from || !to) throw new Error(state.lang === 'mg' ? 'Fenoy ny iaingana sy ny alehana' : 'Indiquez le départ et la destination');
+    const r = await bikeRoute([from.lat, from.lng], [to.lat, to.lng]);
+    route = r.coords; draw(route);
+    container.querySelector('[data-info]').textContent = `≈ ${r.km.toFixed(1)} km${r.approx ? ' (ligne droite)' : ''}`;
+  };
+  await load();
+  container.onclick = async (e) => {
+    try {
+      if (e.target.closest('[data-here]')) {
+        const [lat, lng] = await getPosition(); const label = await reverse(lat, lng);
+        from = { address: label || `${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng }; container.querySelector('[data-from]').value = from.address; return;
+      }
+      if (e.target.closest('[data-preview]')) return await compute();
+      if (e.target.closest('[data-tadd]')) {
+        const b = e.target.closest('[data-tadd]'); b.disabled = true;
+        try {
+          await compute();
+          const day = container.querySelector('[data-tday]').value, hhmm = container.querySelector('[data-when]').value;
+          const depart_at = new Date(`${day}T${hhmm}:00+03:00`).getTime();
+          const r = await api('POST', '/api/courier/trips', { from, to, route, depart_at, capacity: Number(container.querySelector('[data-cap]').value) || 10 });
+          toast(`✓ ${r.assigned ? `+${r.assigned} ${T.load}` : ''}`, 'ok'); from = to = route = null; await load(); onChange?.();
+        } finally { b.disabled = false; }
+        return;
+      }
+      const sh = e.target.closest('[data-show]')?.dataset.show;
+      if (sh) { const t = container._trips.find((x) => x.id === +sh); if (t) draw(t.route); return; }
+      const cn = e.target.closest('[data-cancel]')?.dataset.cancel;
+      if (cn && (await confirmBox(`${T.del} ?`, T.del, true))) { const r = await api('POST', `/api/courier/trips/${cn}/cancel`, {}); toast(r.moved ? `${r.moved} ${T.load} → ↺` : '✓', 'ok'); layer?.remove(); await load(); onChange?.(); }
+    } catch (err) { toastErr(err); }
   };
 }
