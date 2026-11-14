@@ -202,6 +202,16 @@ try {
     await courier.click(`[data-act=ship][data-id="${r.data.shipment.id}"]`);
     await courier.click('text=Accepter la mission'); await courier.waitForSelector('text=Mission acceptée');
   });
+  await step('même navigateur : admin et livreur connectés en même temps, l\'actualisation garde chaque espace', async () => {
+    const lp = await admin.context().newPage(); watch(lp, 'admin-livreur');
+    await lp.goto(BASE + '/livreur'); await lp.waitForSelector('text=Alefa Livreur');
+    await lp.fill('[name=phone]', '034 11 111 11'); await lp.fill('[name=password]', 'velo1234'); await lp.click('[type=submit]');
+    await lp.waitForSelector('[data-t=plan]');
+    await admin.reload(); await admin.waitForSelector('text=Logiciels de vente', { timeout: 15000 });
+    if (!admin.url().startsWith(BASE + '/') || admin.url().includes('/livreur')) throw new Error('admin renvoyé vers ' + admin.url());
+    await lp.reload(); await lp.waitForSelector('[data-t=plan]');
+    await lp.close();
+  });
   await step('suivi public sans compte : /suivi/<jeton>', async () => {
     const p = await (await ctx(null)).newPage(); watch(p, 'suivi');
     await p.goto(BASE + '/suivi/' + globalThis.__track); await p.waitForSelector('text=TRAJET-1');

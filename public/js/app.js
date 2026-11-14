@@ -1,5 +1,5 @@
 // Point d'entrée : authentification puis interface selon le rôle.
-import { state, t, setLang, api, esc, $, bind, toast, toastErr, langSwitch } from './core.js';
+import { state, t, setLang, api, esc, $, bind, toast, toastErr, langSwitch, TOKEN_KEY, tokenKeyFor } from './core.js';
 
 setLang(state.lang);
 const app = $('#app');
@@ -56,14 +56,16 @@ async function boot() {
       const r = await api('GET', '/api/me');
       state.user = r.user; state.courier = r.courier; state.axe = r.axe;
       if (r.user.lang && !localStorage.getItem('alefa_lang')) setLang(r.user.lang);
-    } catch { state.token = null; localStorage.removeItem('alefa_token'); }
+    } catch { state.token = null; localStorage.removeItem(TOKEN_KEY); }
   }
   app.className = '';
   if (!state.user) return COURIER_SPACE ? courierLoginView() : authView();
   const role = state.user.role;
   // Un seul lien pour tous : chacun est envoyé vers son espace selon son rôle.
-  if (COURIER_SPACE && role !== 'courier') { location.replace('/'); return; }
-  if (!COURIER_SPACE && role === 'courier') { location.replace('/livreur'); return; }
+  // La session est rangée avec l'espace de son rôle, puis on y va.
+  const move = (to) => { localStorage.setItem(tokenKeyFor(role), state.token); if (tokenKeyFor(role) !== TOKEN_KEY) localStorage.removeItem(TOKEN_KEY); location.replace(to); };
+  if (COURIER_SPACE && role !== 'courier') return move('/');
+  if (!COURIER_SPACE && role === 'courier') return move('/livreur');
   const mod = await import(role === 'admin' ? './admin.js' : role === 'courier' ? './courier.js' : './client.js');
   mod.mount(app);
 }
@@ -86,7 +88,7 @@ function courierLoginView() {
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
       const r = await api('POST', '/api/auth/login', Object.fromEntries(new FormData(form)));
-      localStorage.setItem('alefa_token', r.token); state.token = r.token;
+      localStorage.setItem(tokenKeyFor(r.user.role), r.token); state.token = r.token;
       boot();
     } catch (err) { toastErr(err); btn.disabled = false; }
   });
@@ -125,7 +127,7 @@ function authView(mode = 'login', role = 'client') {
     if (mode === 'register') data.role = 'client';
     try {
       const r = await api('POST', mode === 'register' ? '/api/auth/register' : '/api/auth/login', data);
-      localStorage.setItem('alefa_token', r.token);
+      localStorage.setItem(tokenKeyFor(r.user.role), r.token);
       state.token = r.token;
       toast(`Tonga soa, ${r.user.name} !`, 'ok');
       boot();

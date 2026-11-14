@@ -4,7 +4,7 @@
 // Le mot de passe Tsena n'est jamais conservé : seul un jeton de rafraîchissement Firebase est gardé.
 import { fail, json, str, normalizePhone, randomHex, hashPassword, now } from './lib.js';
 import { one, all, run, settings, audit, alertAdmins } from './worker.js';
-import { createShipment, stepOf } from './shipments.js';
+import { createShipment, stepOf, STEP_LABELS } from './shipments.js';
 import { logSync } from './trips.js';
 
 const KEYS = ['tsena_url', 'tsena_project', 'tsena_api_key', 'tsena_refresh', 'tsena_email', 'tsena_shop_name', 'tsena_shop_phone', 'tsena_pickup_addr', 'tsena_last_sync', 'tsena_last_result', 'tsena_last_error'];
@@ -67,7 +67,8 @@ async function waitingDeliveries(s, token) {
 
 async function patchDelivery(s, token, docId, fields) {
   const mask = Object.keys(fields).map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
-  await http(`${docsBase(s)}/deliveries/${encodeURIComponent(docId)}?${mask}`, {
+  // currentDocument.exists : une livraison supprimée dans Tsena n'est jamais recréée par Alefa.
+  await http(`${docsBase(s)}/deliveries/${encodeURIComponent(docId)}?${mask}&currentDocument.exists=true`, {
     method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, toFs(v)])) }),
   });
@@ -77,7 +78,7 @@ async function patchDelivery(s, token, docId, fields) {
 let schemaOk = false;
 async function ensureSchema(env) {
   if (schemaOk) return;
-  await env.DB.prepare('CREATE TABLE IF NOT EXISTS tsena_links (shipment_id INTEGER PRIMARY KEY REFERENCES shipments(id) ON DELETE CASCADE, doc_id TEXT NOT NULL UNIQUE, last_step TEXT, synced_at INTEGER)').run();
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS tsena_links (shipment_id INTEGER PRIMARY KEY REFERENCES shipments(id) ON DELETE CASCADE, doc_id TEXT NOT NULL UNIQUE, last_step TEXT, synced_at INTEGER, base_note TEXT)').run();
   schemaOk = true;
 }
 
@@ -96,6 +97,8 @@ export async function geocodeTana(addr) {
 async function shopAccount(env, s) {
   const phone = normalizePhone(s.tsena_shop_phone);
   let u = await one(env, 'SELECT * FROM users WHERE phone = ?', phone);
+  // Le numéro de la boutique ne doit pas être celui d'un admin ou d'un livreur (sinon les paiements iraient au mauvais compte).
+  if (u && u.role !== 'client') fail(400, 'shop_phone', `Le numéro ${s.tsena_shop_phone} est celui d'un compte ${u.role === 'admin' ? 'administrateur' : 'livreur'} : indiquez le numéro de la boutique`);
   if (!u) {
     const name = s.tsena_shop_name || 'Tsena Ampandrana', salt = randomHex(16);
     const r = await run(env, "INSERT INTO users (phone, name, role, pass_hash, pass_salt, status, is_business, company, created_at) VALUES (?,?,'client',?,?,'active',1,?,?)",
@@ -104,6 +107,12 @@ async function shopAccount(env, s) {
   }
   return u;
 }
+
+// Le statut Alefa est ajouté à la note Tsena (visible sur la carte de livraison), sans perdre la note d'origine.
+const MARK = '🚲 Alefa :';
+const baseNote = (note) => String(note ?? '').split(MARK)[0].replace(/\s*—\s*$/, '').trim();
+const noteWith = (base, text) => (base ? `${base} — ${MARK} ${text}` : `${MARK} ${text}`);
+const fmtMg = (ms) => { const d = new Date(ms + 3 * 3600e3).toISOString(); return `${d.slice(8, 10)}/${d.slice(5, 7)} ${d.slice(11, 16)}`; };
 
 // Étape Alefa → statut Tsena (attente / cours / livree).
 const TSENA_STATUS = { departed: 'cours', at_pickup: 'cours', picked_up: 'cours', en_route: 'cours', nearby: 'cours', awaiting_recipient: 'cours', awaiting_courier: 'cours', delivered: 'livree' };
@@ -144,20 +153,33 @@ export async function syncTsena(env) {
     // 2. Alefa → Tsena : avancement, livreur et code de réception.
     const links = await all(env, `SELECT l.*, s.*, cu.name AS courier_name FROM tsena_links l JOIN shipments s ON s.id = l.shipment_id
       LEFT JOIN users cu ON cu.id = s.courier_id WHERE s.created_at > ?`, now() - 14 * 864e5);
+    const byDoc = Object.fromEntries(docs.map((d) => [d.docId, d]));
     for (const x of links) {
       const step = stepOf(x);
+      const cur = byDoc[x.doc_id];
+      const base = cur ? baseNote(cur.note) : (x.base_note ?? '');
+      if (cur && base !== (x.base_note ?? '')) await run(env, 'UPDATE tsena_links SET base_note = ? WHERE shipment_id = ?', base, x.shipment_id);
       if (step === x.last_step) continue;
       const fields = { alefaRef: x.ref, alefaStep: step, alefaPin: x.pin || '', alefaTrack: x.track_token && s.app_url ? `${s.app_url}/suivi/${x.track_token}` : '' };
       if (TSENA_STATUS[step]) fields.status = TSENA_STATUS[step];
       if (x.courier_name) fields.driver = `${x.courier_name.split(' ')[0]} (Alefa)`;
       if (step === 'delivered') fields.doneAt = new Date(x.done_at || now()).toISOString();
-      if (['refused', 'cancelled', 'returning', 'returned'].includes(step)) fields.note = `Alefa ${x.ref} : ${step === 'refused' ? 'refusé par le client' : 'annulé'}${x.outcome_note ? ' — ' + x.outcome_note : ''}`;
+      const who = x.courier_name ? ` · ${x.courier_name.split(' ')[0]}` : '';
+      const when = step === 'scheduled' && x.departure_at ? ` · départ ${fmtMg(x.departure_at)}` : '';
+      fields.note = noteWith(base, `${STEP_LABELS[step] || step}${who}${when}${x.outcome_note && ['refused', 'cancelled', 'returning', 'returned'].includes(step) ? ' — ' + x.outcome_note : ''}`);
       try {
         await patchDelivery(s, token, x.doc_id, fields);
         await run(env, 'UPDATE tsena_links SET last_step = ?, synced_at = ? WHERE shipment_id = ?', step, now(), x.shipment_id);
         out.updated += 1;
         await logSync(env, 'tsena', 'out', x.external_ref || x.ref, true, `${step}${fields.status ? ' → ' + fields.status : ''}`);
-      } catch (e) { out.errors.push(`${x.ref} → Tsena : ${e.message}`); await logSync(env, 'tsena', 'out', x.external_ref || x.ref, false, e.message); }
+      } catch (e) {
+        if (/NOT_FOUND|No document to update/i.test(e.message)) {
+          // Livraison supprimée dans Tsena : on arrête de la mettre à jour (pas de relance infinie).
+          await run(env, 'UPDATE tsena_links SET last_step = ?, synced_at = ? WHERE shipment_id = ?', step, now(), x.shipment_id);
+          await logSync(env, 'tsena', 'out', x.external_ref || x.ref, false, 'livraison supprimée dans Tsena : plus mise à jour');
+        } else await logSync(env, 'tsena', 'out', x.external_ref || x.ref, false, e.message);
+        out.errors.push(`${x.ref} → Tsena : ${e.message}`);
+      }
     }
     await setMany(env, { tsena_last_sync: now(), tsena_last_result: JSON.stringify(out), tsena_last_error: out.errors.slice(0, 3).join(' | ') });
   } catch (e) {
@@ -185,6 +207,8 @@ async function connect(ctx, env) {
   const email = str(b.email, { min: 5, max: 120, name: 'E-mail du compte Tsena' });
   const password = str(b.password, { min: 1, max: 200, name: 'Mot de passe Tsena' });
   const shopPhone = normalizePhone(b.shop_phone);
+  const owner = await one(env, 'SELECT role FROM users WHERE phone = ?', shopPhone);
+  if (owner && owner.role !== 'client') fail(400, 'shop_phone', 'Ce numéro est celui d\'un compte administrateur ou livreur : indiquez le numéro de la boutique');
   const cfg = await readConfig(url);
   let auth;
   try {
@@ -205,6 +229,21 @@ async function connect(ctx, env) {
 
 async function syncNow(ctx, env) { return json(await syncTsena(env)); }
 
+// Modifier la boutique (nom, numéro, adresse de récupération) sans ressaisir le mot de passe Tsena.
+// Les colis Tsena encore non récupérés passent sur le compte de la boutique.
+async function updateShop(ctx, env) {
+  const b = ctx.body;
+  const next = { tsena_shop_name: str(b.shop_name, { min: 2, max: 80, name: 'Nom de la boutique' }), tsena_shop_phone: normalizePhone(b.shop_phone), tsena_pickup_addr: str(b.pickup_addr, { max: 200 }) };
+  const shop = await shopAccount(env, { ...(await settings(env)), ...next });
+  const pk = await geocodeTana(next.tsena_pickup_addr);
+  await setMany(env, { ...next, tsena_pickup_lat: pk?.[0] ?? '', tsena_pickup_lng: pk?.[1] ?? '' });
+  const r = await run(env, `UPDATE shipments SET sender_id = ?, sender_name = ?, sender_phone = ?, pickup_addr = COALESCE(NULLIF(?, ''), pickup_addr),
+      pickup_lat = COALESCE(?, pickup_lat), pickup_lng = COALESCE(?, pickup_lng)
+    WHERE id IN (SELECT shipment_id FROM tsena_links) AND status IN ('pending','assigned')`, shop.id, next.tsena_shop_name, shop.phone, next.tsena_pickup_addr, pk?.[0] ?? null, pk?.[1] ?? null);
+  await audit(env, ctx, 'tsena_shop', next);
+  return json({ ok: true, moved: r.meta.changes });
+}
+
 async function disconnect(ctx, env) {
   await setMany(env, { tsena_refresh: '', tsena_last_error: '' });
   await audit(env, ctx, 'tsena_disconnect');
@@ -215,6 +254,7 @@ export function registerTsenaRoutes(route) {
   route('GET', '/api/admin/tsena', ['admin'], status);
   route('POST', '/api/admin/tsena/connect', ['admin'], connect);
   route('POST', '/api/admin/tsena/sync', ['admin'], syncNow);
+  route('POST', '/api/admin/tsena/shop', ['admin'], updateShop);
   route('POST', '/api/admin/tsena/disconnect', ['admin'], disconnect);
 }
 export { KEYS as TSENA_KEYS };

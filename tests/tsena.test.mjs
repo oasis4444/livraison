@@ -27,6 +27,8 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (init.method === 'PATCH' && u.includes('/documents/deliveries/')) {
     const id = u.split('/deliveries/')[1].split('?')[0];
+    assert.match(u, /currentDocument\.exists=true/);
+    if (!fs[id]) return J({ error: { message: 'NOT_FOUND' } }, 404);
     const f = Object.fromEntries(Object.entries(JSON.parse(init.body).fields).map(([k, v]) => [k, v.stringValue ?? Number(v.integerValue)]));
     Object.assign(fs[id], f); patches.push([id, f]);
     return J({});
@@ -42,6 +44,8 @@ let admin;
 test('connexion à Tsena : mauvais mot de passe refusé, puis import automatique', async () => {
   env.DB.raw.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261340000000','Admin','admin',?,?,'active',0)").run(await hashPassword('a', 's', 1000), 's');
   admin = (await call('POST', '/api/auth/login', { phone: '0340000000', password: 'a' })).data.token;
+  const adminPhone = await call('POST', '/api/admin/tsena/connect', { email: 'x@y.mg', password: 'bon', shop_phone: '034 00 000 00' }, admin);
+  assert.equal(adminPhone.status, 400); assert.match(adminPhone.data.message, /administrateur/);
   const bad = await call('POST', '/api/admin/tsena/connect', { email: 'x@y.mg', password: 'faux', shop_phone: '0321112233' }, admin);
   assert.equal(bad.status, 400); assert.match(bad.data.message, /refusée/);
   const ok = await call('POST', '/api/admin/tsena/connect', { url: 'https://tsena-ampandrana.web.app', email: 'x@y.mg', password: 'bon', shop_name: 'Tsena Ampandrana', shop_phone: '0321112233', pickup_addr: 'Ampandrana' }, admin);
@@ -60,11 +64,13 @@ test('pas de doublon, et l\'avancement Alefa est réécrit dans Tsena', async ()
   env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00001'").run();
   r = await syncTsena(env);
   assert.equal(r.updated, 1); assert.equal(fs.d1.status, 'cours'); assert.match(fs.d1.alefaPin, /^\d{4}$/);
+  assert.equal(fs.d1.note, 'Livrer avant 11h — 🚲 Alefa : Récupéré', 'note d\'origine conservée + statut Alefa');
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00001'").run(Date.now());
   await syncTsena(env);
   assert.equal(fs.d1.status, 'livree'); assert.ok(fs.d1.doneAt); assert.equal(fs.d1.alefaStep, 'delivered');
   r = await syncTsena(env);
   assert.equal(r.updated, 0, 'rien de nouveau');
+  assert.equal(fs.d1.note, 'Livrer avant 11h — 🚲 Alefa : Livré');
   // nouvelle livraison saisie dans Tsena → arrive à la synchronisation suivante
   fs.d3 = { no: 'L-00003', status: 'attente', clientName: 'Koto', phone: '034 99 888 77', address: 'Behoririka', amount: 12000, fee: 0 };
   r = await syncTsena(env);
@@ -83,4 +89,30 @@ test('une livraison déjà importée à la main (même n°) est reliée et suivi
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00004'").run(Date.now());
   await syncTsena(env);
   assert.equal(fs.d4.status, 'livree');
+});
+
+test('statut visible dans Tsena dès la programmation, livraison supprimée dans Tsena jamais recréée', async () => {
+  fs.d5 = { no: 'L-00005', status: 'attente', clientName: 'Soa', phone: '034 77 888 99', address: 'Ampasika', amount: 6000, fee: 3000, note: '' };
+  await syncTsena(env); // import
+  await syncTsena(env); // statut renvoyé
+  assert.match(fs.d5.note, /^🚲 Alefa : À programmer$/);
+  // l'utilisateur modifie sa note dans Tsena : elle est conservée
+  fs.d5.note = 'Sonner 2 fois — ' + fs.d5.note;
+  env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00005'").run();
+  await syncTsena(env);
+  assert.equal(fs.d5.note, 'Sonner 2 fois — 🚲 Alefa : Récupéré');
+  delete fs.d5;
+  env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00005'").run(Date.now());
+  const r = await syncTsena(env);
+  assert.equal(fs.d5, undefined, 'pas recréée'); assert.ok(r.errors.some((e) => /NOT_FOUND/.test(e)));
+  assert.equal((await syncTsena(env)).errors.length, 0, 'pas de relance infinie');
+});
+
+test('modifier la boutique : les colis non récupérés passent sur son compte', async () => {
+  const bad = await call('POST', '/api/admin/tsena/shop', { shop_name: 'Tsena', shop_phone: '034 00 000 00' }, admin);
+  assert.equal(bad.status, 400);
+  const ok = await call('POST', '/api/admin/tsena/shop', { shop_name: 'Tsena Ampandrana', shop_phone: '033 46 261 16', pickup_addr: 'Ampandrana' }, admin);
+  assert.equal(ok.status, 200); assert.ok(ok.data.moved >= 1);
+  const s3 = (await call('GET', '/api/admin/shipments?q=L-00003', null, admin)).data.shipments[0];
+  assert.equal(s3.sender.phone, '+261334626116');
 });

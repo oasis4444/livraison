@@ -1,6 +1,10 @@
 // Noyau commun : API, session, traductions FR/MG, carte, notifications, interface.
 
-export const state = { token: localStorage.getItem('alefa_token'), user: null, courier: null, config: null, lang: localStorage.getItem('alefa_lang') || 'fr', lastNotif: 0 };
+// Une session par espace : l'administration/les clients (/) et les livreurs (/livreur) ne s'écrasent plus
+// quand on les ouvre dans le même navigateur.
+export const TOKEN_KEY = /^\/livreur\/?$/.test(location.pathname) ? 'alefa_token_livreur' : 'alefa_token';
+export const tokenKeyFor = (role) => (role === 'courier' ? 'alefa_token_livreur' : 'alefa_token');
+export const state = { token: localStorage.getItem(TOKEN_KEY), user: null, courier: null, config: null, lang: localStorage.getItem('alefa_lang') || 'fr', lastNotif: 0 };
 
 // ---------------------------------------------------------------- i18n
 const D = {
@@ -108,7 +112,7 @@ export async function api(method, path, body) {
 
 export function logout(silent) {
   if (!silent) api('POST', '/api/auth/logout').catch(() => {});
-  localStorage.removeItem('alefa_token');
+  localStorage.removeItem(TOKEN_KEY);
   state.token = null; state.user = null;
   stopAll();
   location.hash = '';

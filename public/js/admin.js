@@ -323,7 +323,7 @@ const VIEWS = {
         ${ts.connected ? `<div class="small">Compte : <b>${esc(ts.email)}</b> · Boutique : <b>${esc(ts.shop_name)}</b> ${esc(phoneFmt(ts.shop_phone))} · ${ts.linked} livraison(s) reliée(s)<br>
           Dernière synchro : ${ts.last_sync ? dt(ts.last_sync) : '—'}${res.imported != null ? ` · ${res.imported} importée(s), ${res.updated} mise(s) à jour` : ''}</div>
           ${ts.last_error ? `<div class="small" style="color:var(--red)">⚠ ${esc(ts.last_error)}</div>` : ''}
-          <div class="row"><button class="btn sm primary" data-act="tsenasync">⟳ Synchroniser maintenant</button><button class="btn sm" data-act="tsenaconnect">Changer de compte</button><button class="btn sm danger" data-act="tsenaoff">Déconnecter</button></div>`
+          <div class="row"><button class="btn sm primary" data-act="tsenasync">⟳ Synchroniser maintenant</button><button class="btn sm" data-act="tsenashop" data-n="${esc(ts.shop_name || '')}" data-p="${esc(ts.shop_phone || '')}" data-a="${esc(ts.pickup_addr || '')}">Modifier la boutique</button><button class="btn sm" data-act="tsenaconnect">Changer de compte</button><button class="btn sm danger" data-act="tsenaoff">Déconnecter</button></div>`
         : '<div class="row"><button class="btn primary" data-act="tsenaconnect">Connecter Tsena</button></div>'}
       </div>
       <details class="panel" style="margin-bottom:16px" ${lg.log.some((x) => !x.ok) ? 'open' : ''}><summary><b>🧾 Journal des échanges</b> <span class="small muted">(${lg.log.length} derniers · ${lg.log.filter((x) => !x.ok).length} erreur(s))</span></summary>
@@ -542,6 +542,15 @@ const actions = {
   },
   newmerchant: () => merchantForm(),
   tsenaconnect: () => tsenaForm(),
+  tsenashop: (el) => {
+    const m = modal('Boutique Tsena', `<form class="stack" data-f>
+      <label class="field"><span>Nom de la boutique (expéditeur)</span><input class="input" name="shop_name" value="${esc(el.dataset.n)}" required></label>
+      <label class="field"><span>Téléphone de la boutique (pas celui de l'admin)</span><input class="input" name="shop_phone" value="${esc(phoneFmt(el.dataset.p))}" required></label>
+      <label class="field"><span>Adresse de récupération</span><input class="input" name="pickup_addr" value="${esc(el.dataset.a)}" placeholder="Ampandrana, Antananarivo"></label>
+      <button class="btn primary">Enregistrer</button></form>`);
+    const f = m.el.querySelector('[data-f]');
+    f.addEventListener('submit', async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/admin/tsena/shop', Object.fromEntries(new FormData(f))); m.close(); toast(`Boutique enregistrée · ${r.moved} colis mis à jour`, 'ok'); show(); } catch (err) { toastErr(err); } });
+  },
   tsenasync: async () => { const r = await api('POST', '/api/admin/tsena/sync'); toast(r.errors?.length ? r.errors[0] : `${r.imported} importée(s), ${r.updated} mise(s) à jour`, r.errors?.length ? 'err' : 'ok'); show(); },
   tsenaoff: async () => { if (!(await confirmBox('Arrêter la synchronisation avec Tsena ?', 'Déconnecter', true))) return; await api('POST', '/api/admin/tsena/disconnect'); show(); },
   mhook: async (el) => { const v = await promptBox('Webhook (https://…)', { value: el.dataset.url, placeholder: 'https://mon-logiciel.mg/webhooks/alefa' }); if (v == null) return; await api('POST', `/api/admin/merchants/${el.dataset.id}`, { webhook_url: v }); show(); },
