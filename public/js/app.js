@@ -30,11 +30,8 @@ async function boot() {
   app.className = '';
   if (!state.user) return COURIER_SPACE ? courierLoginView() : authView();
   const role = state.user.role;
-  if (COURIER_SPACE && role !== 'courier') {
-    toastErr(new Error(state.lang === 'mg' ? 'Ho an\'ny mpitondra entana ihany ity pejy ity.' : 'Cet espace est réservé aux livreurs.'));
-    localStorage.removeItem('alefa_token'); state.token = null; state.user = null;
-    return courierLoginView();
-  }
+  // Un seul lien pour tous : chacun est envoyé vers son espace selon son rôle.
+  if (COURIER_SPACE && role !== 'courier') { location.replace('/'); return; }
   if (!COURIER_SPACE && role === 'courier') { location.replace('/livreur'); return; }
   const mod = await import(role === 'admin' ? './admin.js' : role === 'courier' ? './courier.js' : './client.js');
   mod.mount(app);
@@ -58,7 +55,6 @@ function courierLoginView() {
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
       const r = await api('POST', '/api/auth/login', Object.fromEntries(new FormData(form)));
-      if (r.user.role !== 'courier') { state.token = r.token; await api('POST', '/api/auth/logout', {}).catch(() => {}); state.token = null; throw new Error(state.lang === 'mg' ? 'Tsy kaonty mpitondra entana ity.' : 'Ce compte n\'est pas un compte livreur.'); }
       localStorage.setItem('alefa_token', r.token); state.token = r.token;
       boot();
     } catch (err) { toastErr(err); btn.disabled = false; }

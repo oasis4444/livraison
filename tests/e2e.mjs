@@ -85,7 +85,10 @@ try {
     await p.goto(BASE + '/livreur');
     await p.waitForSelector('text=Alefa Livreur');
     await p.fill('[name=phone]', '0340000000'); await p.fill('[name=password]', 'admin12345'); await p.click('[type=submit]');
-    await p.waitForSelector('text=pas un compte livreur');
+    // lien unique : un admin qui se connecte ici est envoyé vers l'espace admin
+    await p.waitForURL(BASE + '/', { timeout: 15000 }); await p.waitForSelector('text=Tableau de bord', { timeout: 15000 });
+    await p.evaluate(() => localStorage.removeItem('alefa_token'));
+    await p.goto(BASE + '/livreur'); await p.waitForSelector('text=Alefa Livreur');
     await p.fill('[name=phone]', '034 11 111 11'); await p.fill('[name=password]', 'velo1234'); await p.click('[type=submit]');
     await p.waitForSelector('#gps-gate', { timeout: 15000 });
     await p.waitForSelector('text=Accès à la position refusé', { timeout: 15000 });
