@@ -103,6 +103,17 @@ test('suivi public : position visible seulement pendant la livraison', async () 
   assert.equal(t.data.position, null, 'plus de position après la livraison');
 });
 
+test('API sans GPS : adresses localisées automatiquement puis colis affecté au trajet', async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = async (u, i) => String(u).includes('nominatim') ? new Response(JSON.stringify(/Ankorondrano/.test(decodeURIComponent(String(u))) ? [{ lat: String(ANKORONDRANO.lat), lon: String(ANKORONDRANO.lng) }] : [{ lat: String(ANALAKELY.lat), lon: String(ANALAKELY.lng) }])) : real(u, i);
+  try {
+    const t = await call('POST', '/api/courier/trips', { from: { address: 'Analakely', ...ANALAKELY }, to: { address: 'Ivandry', ...IVANDRY }, route: ROUTE, depart_at: Date.now() + 5 * 3600e3, capacity: 5 }, c2);
+    assert.equal(t.status, 201, JSON.stringify(t.data));
+    const r = await call('POST', '/api/v1/shipments', { external_ref: 'NOGPS-1', declared_value: 6000, sender: { name: 'Boutique', address: 'Analakely' }, recipient: { name: 'Hotely Mamy', phone: '0388948349', address: 'Ankorondrano' } }, null, { 'x-api-key': key });
+    assert.equal(r.status, 201); assert.equal(r.data.shipment.recipient.lat, ANKORONDRANO.lat); assert.equal(r.data.shipment.status, 'assigned');
+  } finally { globalThis.fetch = real; }
+});
+
 test('API : clé d\'idempotence, limitation, journal des échanges', async () => {
   const body = ship(ANALAKELY, ANKORONDRANO); delete body.external_ref;
   const a = await call('POST', '/api/v1/shipments', body, null, { 'x-api-key': key, 'idempotency-key': 'abc-123' });

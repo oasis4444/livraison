@@ -689,6 +689,14 @@ async function v1Create(ctx, env) {
   const sender = await one(env, 'SELECT * FROM users WHERE id = ?', m.user_id);
   // Clé d'idempotence : external_ref, ou à défaut l'en-tête Idempotency-Key.
   const body = { ...ctx.body, external_ref: ctx.body.external_ref || ctx.idempotencyKey || undefined };
+  // Adresses sans GPS (cas de la plupart des logiciels de vente) : position recherchée automatiquement à Antananarivo.
+  const { geocodeTana } = await import('./tsena.js');
+  const dup = body.external_ref ? await one(env, 'SELECT id FROM shipments WHERE merchant_id = ? AND external_ref = ?', m.id, String(body.external_ref)) : null;
+  if (!dup) {
+    const rec = body.recipient || {}, snd = body.sender || {};
+    if (rec.lat == null && body.drop_lat == null && (rec.address || body.drop_addr)) { const g = await geocodeTana(rec.address || body.drop_addr); if (g) body.recipient = { ...rec, lat: g[0], lng: g[1] }; }
+    if (snd.lat == null && body.pickup_lat == null && (snd.address || body.pickup_addr)) { const g = await geocodeTana(snd.address || body.pickup_addr); if (g) body.sender = { ...snd, lat: g[0], lng: g[1] }; }
+  }
   let r;
   try { r = await createShipment(env, body, { sender, source: 'api', merchant: m, actor: null }); }
   catch (e) { await logSync(env, `api:${m.name}`, 'in', body.external_ref, false, e.message); throw e; }
