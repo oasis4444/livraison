@@ -12,7 +12,7 @@ const fs = { // « Firestore » de Tsena
   d1: { no: 'L-00001', status: 'attente', clientName: 'Hotely Mamy', phone: '033 45 678 90', address: 'Andravoahangy', driver: 'Fidy', fee: 3000, amount: 45000, note: 'Livrer avant 11h' },
   d2: { no: 'L-00002', status: 'cours', clientName: 'Rasoa Hanta', phone: '034 12 345 67', address: 'Ampandrana', fee: 2000, amount: 0 },
 };
-const patches = [];
+const patches = []; let settingsAlefa = null, settingsWrites = 0;
 const val = (v) => (Array.isArray(v) ? { arrayValue: { values: v.map(val) } } : v && typeof v === 'object' ? { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, val(x)])) } }
   : typeof v === 'number' ? { integerValue: String(v) } : { stringValue: v });
 const dec = (v) => ('arrayValue' in v ? (v.arrayValue.values || []).map(dec) : 'mapValue' in v ? Object.fromEntries(Object.entries(v.mapValue.fields || {}).map(([k, x]) => [k, dec(x)]))
@@ -27,6 +27,9 @@ globalThis.fetch = async (url, init = {}) => {
     assert.equal(init.headers.Authorization, 'Bearer tok');
     const want = JSON.parse(init.body).structuredQuery.where.fieldFilter.value.arrayValue.values.map((v) => v.stringValue);
     return J(Object.entries(fs).filter(([, d]) => want.includes(d.status)).map(([id, d]) => ({ document: { name: `projects/p/databases/(default)/documents/deliveries/${id}`, fields: Object.fromEntries(Object.entries(d).map(([k, v]) => [k, val(v)])) } })));
+  }
+  if (init.method === 'PATCH' && u.includes('/documents/settings/alefa')) {
+    settingsWrites++; settingsAlefa = Object.fromEntries(Object.entries(JSON.parse(init.body).fields).map(([k, v]) => [k, dec(v)])); return J({});
   }
   if (u.includes(':batchGet')) {
     return J(JSON.parse(init.body).documents.map((name) => { const id = name.split('/').pop(); return fs[id] ? { found: { name, fields: Object.fromEntries(Object.entries(fs[id]).map(([k, v]) => [k, val(v)])) } } : { missing: name }; }));
@@ -197,4 +200,23 @@ test('adresse précise introuvable : le quartier est utilisé', async () => {
     assert.deepEqual(await geocodeTana('Lot II M 45 Ampandrana'), [-18.9038, 47.5337]);
     assert.equal(asked[0], 'Lot II M 45 Ampandrana, Antananarivo');
   } finally { globalThis.fetch = real; }
+});
+
+test('livreurs, axes et heures publiés automatiquement dans Tsena (settings/alefa), seulement quand ils changent', async () => {
+  const cid = env.DB.raw.prepare("SELECT id FROM users WHERE phone='+261349999999'").get().id;
+  env.DB.raw.prepare("INSERT INTO axes (name, center_lat, center_lng, radius_km, color, active) VALUES ('AMPANDRANA- ITAOSY', -18.9076, 47.4987, 3.6, '#0f7a55', 1)").run();
+  const ax = env.DB.raw.prepare("SELECT id FROM axes WHERE name='AMPANDRANA- ITAOSY'").get().id;
+  env.DB.raw.prepare("INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days) VALUES (?,?,480,600,'123456')").run(cid, ax);
+  await syncTsena(env);
+  const santatra = settingsAlefa.couriers.find((c) => c.fullName === 'Santatra Vélo');
+  assert.equal(santatra.name, 'Santatra (Alefa)');
+  assert.equal(santatra.axes, 'AMPANDRANA- ITAOSY');
+  assert.equal(santatra.hours, 'AMPANDRANA- ITAOSY 08:00–10:00 (lun–sam)');
+  assert.match(santatra.label, /^Santatra \(Alefa\) · AMPANDRANA- ITAOSY/);
+  const n = settingsWrites;
+  await syncTsena(env);
+  assert.equal(settingsWrites, n, 'rien de changé : pas de nouvelle écriture');
+  env.DB.raw.prepare('UPDATE courier_axes SET end_min = 660 WHERE courier_id = ?').run(cid);
+  await syncTsena(env);
+  assert.equal(settingsWrites, n + 1); assert.match(settingsAlefa.couriers.find((c) => c.fullName === 'Santatra Vélo').hours, /08:00–11:00/);
 });

@@ -4,7 +4,8 @@
 // Le mot de passe Tsena n'est jamais conservé : seul un jeton de rafraîchissement Firebase est gardé.
 import { fail, json, str, normalizePhone, randomHex, hashPassword, now } from './lib.js';
 import { one, all, run, settings, audit, alertAdmins } from './worker.js';
-import { createShipment, stepOf, STEP_LABELS, partnerCancel, partnerUpdate } from './shipments.js';
+import { createShipment, stepOf, STEP_LABELS, partnerCancel, partnerUpdate, departures } from './shipments.js';
+import { upcomingTrips } from './trips.js';
 import { logSync } from './trips.js';
 
 const KEYS = ['tsena_url', 'tsena_project', 'tsena_api_key', 'tsena_refresh', 'tsena_email', 'tsena_shop_name', 'tsena_shop_phone', 'tsena_pickup_addr', 'tsena_last_sync', 'tsena_last_result', 'tsena_last_error'];
@@ -262,6 +263,8 @@ export async function syncTsena(env) {
         out.errors.push(`${x.ref} → Tsena : ${e.message}`);
       }
     }
+    // 4. Alefa → Tsena : liste des livreurs, axes et heures (document settings/alefa), seulement si elle a changé.
+    try { if (await publishCouriers(env, s, token)) out.couriers = true; } catch (e) { out.errors.push(`Livreurs → Tsena : ${e.message}`); }
     await setMany(env, { tsena_last_sync: now(), tsena_last_result: JSON.stringify(out), tsena_last_error: out.errors.slice(0, 3).join(' | ') });
   } catch (e) {
     out.errors.push(e.message);
@@ -271,6 +274,44 @@ export async function syncTsena(env) {
     if (prev !== e.message) await alertAdmins(env, 'alert', `Synchronisation Tsena en échec : ${e.message}`);
   }
   return out;
+}
+
+// Liste des livreurs Alefa avec leurs axes, heures et prochains départs, publiée dans Tsena (collection settings, document « alefa »).
+const DAY = ['', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam', 'dim'];
+const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const daysTxt = (d) => (!d || d === '1234567' ? 'tous les jours' : d === '123456' ? 'lun–sam' : d === '12345' ? 'lun–ven' : d.split('').map((x) => DAY[x]).join(', '));
+export async function couriersForPartner(env) {
+  const cs = await all(env, `SELECT u.id, u.name, c.available, c.last_seen FROM users u LEFT JOIN couriers c ON c.user_id = u.id WHERE u.role = 'courier' AND u.status = 'active' ORDER BY u.name`);
+  const slots = await all(env, 'SELECT ca.courier_id, ca.start_min, ca.end_min, ca.days, a.name AS axe FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id WHERE a.active = 1 ORDER BY ca.start_min');
+  const deps = await departures(env, { days: 2 });
+  const trips = await upcomingTrips(env);
+  return cs.map((c) => {
+    const first = c.name.split(' ')[0];
+    const mine = slots.filter((x) => x.courier_id === c.id);
+    const next = [...deps.filter((d) => d.courier_id === c.id).map((d) => ({ at: d.departure_at, axe: d.axe })),
+      ...trips.filter((t) => t.courier_id === c.id).map((t) => ({ at: t.depart_at, axe: `${t.from.address.split(',')[0]} → ${t.to.address.split(',')[0]}` }))].sort((a, b) => a.at - b.at).slice(0, 4);
+    return {
+      name: `${first} (Alefa)`, fullName: c.name, online: !!c.last_seen && now() - c.last_seen < 2 * 60e3,
+      axes: [...new Set(mine.map((x) => x.axe))].join(', '),
+      hours: mine.map((x) => `${x.axe} ${hm(x.start_min)}–${hm(x.end_min)} (${daysTxt(x.days)})`).join(' · '),
+      next: next.map((n) => `${fmtMg(n.at)} ${n.axe}`).join(' · '),
+      label: [`${first} (Alefa)`, [...new Set(mine.map((x) => x.axe))].join('/'), next[0] ? `départ ${fmtMg(next[0].at)}` : ''].filter(Boolean).join(' · '),
+    };
+  });
+}
+async function publishCouriers(env, s, token) {
+  const couriers = await couriersForPartner(env);
+  const sig = JSON.stringify(couriers.map(({ online, ...c }) => c)); // l'état « en ligne » seul ne déclenche pas d'écriture
+  if (sig === s.tsena_couriers_sig && now() - Number(s.tsena_couriers_at || 0) < 30 * 60e3) return false;
+  const doc = { id: 'alefa', kind: 'alefa', updatedAt: new Date().toISOString(), couriers, url: s.app_url || '' };
+  const mask = Object.keys(doc).map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
+  await http(`${docsBase(s)}/settings/alefa?${mask}`, {
+    method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: Object.fromEntries(Object.entries(doc).map(([k, v]) => [k, toFs(v)])) }),
+  });
+  await setMany(env, { tsena_couriers_sig: sig, tsena_couriers_at: now() });
+  await logSync(env, 'tsena', 'out', 'livreurs', true, `${couriers.length} livreur(s) avec axes et heures publiés dans Tsena`);
+  return true;
 }
 
 // ---------------------------------------------------------------- routes (centre)
