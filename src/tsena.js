@@ -177,6 +177,11 @@ export async function syncTsena(env) {
         } catch (e) { out.errors.push(`${d.no || d.docId} : ${e.message}`); await logSync(env, 'tsena', 'in', d.no || d.docId, false, e.message); }
       }
     }
+    // Colis Tsena encore ouverts au nom d'un admin/livreur : remis automatiquement sur le compte boutique.
+    const wrong = await one(env, `SELECT COUNT(*) AS n FROM shipments WHERE id IN (SELECT shipment_id FROM tsena_links) AND status IN ('pending','assigned','picked_up')
+      AND sender_id IN (SELECT id FROM users WHERE role <> 'client')`);
+    if (wrong.n) await shopAccount(env, s);
+
     // 2. Tsena → Alefa : changements faits dans Tsena sur les livraisons déjà envoyées.
     const open = await all(env, `SELECT l.doc_id, l.last_step, s.id, s.status, s.drop_addr FROM tsena_links l JOIN shipments s ON s.id = l.shipment_id
       WHERE s.status IN ('pending','assigned','picked_up')`);

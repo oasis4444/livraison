@@ -126,6 +126,10 @@ test('numéro de l\'admin donné pour la boutique : compte boutique séparé cr�
   assert.equal(s6.sender.name, 'Tsena Ampandrana'); assert.equal(s6.sender.phone, '+261340000000', 'numéro de contact pour le livreur');
   const owner = env.DB.raw.prepare('SELECT u.role FROM shipments s JOIN users u ON u.id = s.sender_id WHERE s.external_ref = ?').get('L-00006');
   assert.equal(owner.role, 'client');
+  // ancien colis resté au nom de l'admin : corrigé tout seul à la synchronisation suivante
+  env.DB.raw.prepare("UPDATE shipments SET sender_id = (SELECT id FROM users WHERE role='admin') WHERE external_ref='L-00006'").run();
+  await syncTsena(env);
+  assert.equal(env.DB.raw.prepare('SELECT u.role FROM shipments s JOIN users u ON u.id = s.sender_id WHERE s.external_ref = ?').get('L-00006').role, 'client');
 });
 
 test('changements faits dans Tsena suivis automatiquement : modification, suppression, « Livrée » par la boutique', async () => {
