@@ -212,10 +212,28 @@ try {
     await lp.reload(); await lp.waitForSelector('[data-t=plan]');
     await lp.close();
   });
-  await step('suivi public sans compte : /suivi/<jeton>', async () => {
+  await step('suivi public sans compte : /suivi/<jeton>, le client appuie sur « J\'ai reçu », le code arrive chez le livreur', async () => {
     const p = await (await ctx(null)).newPage(); watch(p, 'suivi');
     await p.goto(BASE + '/suivi/' + globalThis.__track); await p.waitForSelector('text=TRAJET-1');
+    // le livreur récupère le colis (photo + valeur)
+    const photo = 'data:image/jpeg;base64,' + (await import('node:fs')).readFileSync('tests/fixture-colis.jpg').toString('base64');
+    const id = await courier.evaluate(async ({ photo }) => {
+      const tok = localStorage.getItem('alefa_token_livreur'), h = { authorization: 'Bearer ' + tok, 'content-type': 'application/json' };
+      const list = await (await fetch('/api/shipments', { headers: h })).json(); const s = list.shipments.find((x) => x.external_ref === 'TRAJET-1');
+      const r = await fetch(`/api/shipments/${s.id}/pickup`, { method: 'POST', headers: h, body: JSON.stringify({ value: 5000, photo }) }); if (!r.ok) throw new Error(await r.text());
+      return s.id;
+    }, { photo });
+    await courier.click('[data-t=colis]'); await courier.click(`[data-act=ship][data-id="${id}"]`);
+    await courier.click('button:has-text("Livré et payé")'); await courier.waitForSelector('text=appuyer sur « J\'ai reçu »');
+    await p.reload(); await p.click('[data-recv]'); await p.waitForSelector('text=Le code a été transmis au livreur');
     await p.screenshot({ path: 'tests/screens/31-suivi-public.png' });
+    await courier.waitForSelector('text=Le client a confirmé — code reçu', { timeout: 10000 });
+    const pin = await courier.inputValue('[data-pin]'); if (!/^\d{4}$/.test(pin)) throw new Error('code non reçu : ' + pin);
+    await courier.screenshot({ path: 'tests/screens/32-livreur-code-recu.png' });
+    await courier.click('[data-ok]'); await courier.waitForSelector('.toast >> text=Livré', { timeout: 10000 }).catch(() => {});
+    let st = '';
+    for (let i = 0; i < 20 && st !== 'delivered'; i++) { await courier.waitForTimeout(500); st = await courier.evaluate(async (id) => (await (await fetch(`/api/shipments/${id}`, { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token_livreur') } })).json()).shipment.status, id); }
+    if (st !== 'delivered') throw new Error('statut ' + st);
   });
   if (errors.length) { console.log('\nErreurs JS :\n' + errors.join('\n')); process.exitCode = 1; } else console.log('\nAucune erreur JavaScript ✔');
 } catch (e) {

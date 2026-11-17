@@ -140,7 +140,20 @@ async function trackPublic(ctx, env) {
   }
   return json({ ref: s.ref, external_ref: s.external_ref, step, step_label: STEP_LABELS[step], recipient: s.recipient_name.split(' ')[0], drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
     pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: s.courier_name ? s.courier_name.split(' ')[0] : null,
-    position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at });
+    position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at,
+    can_confirm: s.status === 'picked_up' && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at });
+}
+
+// Bouton « J'ai reçu mon colis » du lien de suivi (sans compte) : seulement quand le livreur a le colis.
+async function trackConfirm(ctx, env) {
+  await rateLimit(env, 't' + ctx.params.ref);
+  const s = await one(env, 'SELECT * FROM shipments WHERE track_token = ?', ctx.params.ref);
+  if (!s) fail(404, 'not_found', 'Lien de suivi invalide');
+  if (s.status === 'delivered') return json({ ok: true, delivered: true });
+  if (s.status !== 'picked_up') fail(409, 'bad_status', 'Le livreur n\'a pas encore votre colis');
+  const { recipientReceived } = await import('./shipments.js');
+  const delivered = s.recipient_confirmed_at ? false : await recipientReceived(env, s, 'link', null, 'Le destinataire a appuyé sur « J\'ai reçu » (lien de suivi) · code transmis au livreur');
+  return json({ ok: true, delivered });
 }
 
 // ---------------------------------------------------------------- journal des échanges + limitation
@@ -175,4 +188,5 @@ export function registerTripRoutes(route) {
   route('GET', '/api/admin/trips', ['admin'], adminTrips);
   route('GET', '/api/admin/sync-log', ['admin'], syncLog);
   route('GET', '/api/track/:ref', null, trackPublic);
+  route('POST', '/api/track/:ref/confirm', null, trackConfirm);
 }

@@ -212,10 +212,15 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     </div>
     ${s.courier ? `<div class="small">🚲 <b>${esc(s.courier.name || '')}</b>${s.departure_at ? ` · ${c('departure')} ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : ''} ${s.courier.phone && !isCourier ? call(s.courier.phone) : ''}</div>` : ''}
     ${s.has_photo ? `<img data-ph alt="${c('photo')}" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;background:var(--bg)">` : ''}
-    ${s.delivery_pin && ['pending', 'assigned', 'picked_up'].includes(s.status) ? `<div class="card" style="text-align:center;background:var(--green-soft);border:0">
-      <div class="small muted">${state.lang === 'mg' ? 'Kaody fanamarinana (omena ny livreur rehefa voaray ny entana)' : 'Code de confirmation (à donner au livreur à la réception)'}</div>
-      <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div>
-      ${role === 'sender' ? `<div class="tiny muted" style="margin-top:6px">${state.lang === 'mg' ? 'Alefaso amin\'ny mpandray ity kaody ity (SMS, appel).' : 'Transmettez ce code au destinataire (SMS, appel).'}</div>` : ''}</div>` : ''}
+    ${isCourier && s.delivery_pin && s.status === 'picked_up' ? `<div class="card" style="text-align:center;background:var(--green-soft);border:0">
+      <div class="small"><b>✅ ${state.lang === 'mg' ? 'Nanamarina ny client — kaody voaray' : 'Le client a confirmé — code reçu'}</b></div>
+      <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div></div>`
+    : s.delivery_pin && !isCourier && ['pending', 'assigned', 'picked_up'].includes(s.status) ? (role === 'recipient'
+      ? `<details class="small muted"><summary>${state.lang === 'mg' ? 'Asehoy ny kaody (raha tsy misy Internet ny livreur)' : 'Afficher le code (si le livreur n\'a pas Internet)'}</summary>
+          <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div></details>`
+      : `<div class="card" style="text-align:center;background:var(--green-soft);border:0">
+      <div class="small muted">${state.lang === 'mg' ? 'Kaody fanamarinana : alefa ho azy amin\'ny livreur rehefa manindry « Voaray » ny client' : 'Code de confirmation : transmis automatiquement au livreur quand le client appuie sur « J\'ai reçu »'}</div>
+      <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div></div>`) : ''}
     ${stepBar(s)}
     ${s.track_token && !isCourier && ['pending', 'assigned', 'picked_up'].includes(s.status) ? `<div class="row wrap small">🔗 <a href="/suivi/${esc(s.track_token)}" target="_blank" rel="noopener">${state.lang === 'mg' ? 'Rohy fanarahana amin\'ny sarintany' : 'Lien de suivi sur la carte'}</a>
       <a class="btn sm" href="sms:${esc(s.recipient.phone)}?body=${encodeURIComponent(`Alefa ${s.ref} : ${location.origin}/suivi/${s.track_token}`)}">✉ SMS</a></div>` : ''}
@@ -257,7 +262,7 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     if (s.to_return) btn(c('returned_btn'), 'primary lg', async () => { if (await confirmBox(c('returned_btn') + ' ?', 'OK')) { await api('POST', `/api/shipments/${s.id}/returned`, {}); done(); } });
   }
   if ((role === 'recipient' || isAdmin) && s.status === 'picked_up' && !s.recipient_confirmed_at) {
-    btn(state.lang === 'mg' ? '✅ Voaray ny entana' : '✅ J\'ai reçu le colis', 'primary lg', async () => {
+    btn(state.lang === 'mg' ? '✅ Tonga ny entana — alefaso ny kaody amin\'ny livreur' : '✅ J\'ai reçu le colis — envoyer le code au livreur', 'primary lg', async () => {
       if (!(await confirmBox(isAdmin ? 'Confirmer la réception à la place du destinataire (preuve hors application) ?' : (state.lang === 'mg' ? `Hamafisinao fa voarainao ny entana ary nandoa ${ar(s.amount_to_collect)} ianao?` : `Confirmez-vous avoir reçu le colis et payé ${ar(s.amount_to_collect)} ?`), 'OK'))) return;
       const r = await api('POST', `/api/shipments/${s.id}/confirm`, isAdmin ? { note: 'Confirmé par téléphone' } : {});
       toast(r.delivered ? stepLabel('delivered') : stepLabel('recipient_confirmed'), 'ok'); done();
@@ -283,10 +288,12 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
 // Remise au destinataire : code PIN (preuve immédiate) ou confirmation par le destinataire dans son application.
 function deliverForm(s, done) {
   const mg = state.lang === 'mg';
+  const got = s.delivery_pin && s.recipient_confirmed_at; // le client a appuyé sur « J'ai reçu » : code déjà transmis
   const m = modal(`${c('deliver_btn')} · ${s.ref}`, `<div class="stack">
     <label class="field"><span>${c('collected')} (Ar)</span><input class="input" data-v inputmode="numeric" value="${s.amount_to_collect}" style="font-size:1.3rem;font-weight:800"></label>
-    <label class="field"><span>${mg ? 'Kaody 4 isa avy amin\'ny mpandray' : 'Code à 4 chiffres donné par le destinataire'}</span>
-      <input class="input" data-pin inputmode="numeric" maxlength="4" placeholder="••••" style="text-align:center;font-size:1.8rem;letter-spacing:.5em;font-weight:850"></label>
+    ${got ? `<div class="card" style="text-align:center;background:var(--green-soft);border:0"><b>✅ ${mg ? 'Nanamarina ny client — kaody voaray ho azy' : 'Le client a confirmé — code reçu automatiquement'}</b></div>` : `<p class="small muted">${mg ? 'Asaivo manindry « Tonga ny entana » ao amin\'ny finday-ny ny client : ho tonga eto ho azy ny kaody.' : 'Demandez au client d\'appuyer sur « J\'ai reçu » sur son téléphone : le code arrive ici tout seul.'}</p>`}
+    <label class="field"><span>${mg ? 'Kaody 4 isa' : 'Code à 4 chiffres'}</span>
+      <input class="input" data-pin inputmode="numeric" maxlength="4" placeholder="••••" value="${got ? esc(s.delivery_pin) : ''}" style="text-align:center;font-size:1.8rem;letter-spacing:.5em;font-weight:850"></label>
     <button class="btn primary lg block" data-ok>✅ ${mg ? 'Hamafisina amin\'ny kaody' : 'Confirmer avec le code'}</button>
     <button class="btn block" data-nopin style="white-space:normal;line-height:1.3">${mg ? 'Tsy manana kaody → ny mpandray no hanamarina amin\'ny application-ny' : 'Pas de code → le destinataire confirmera dans son application'}</button>
     <p class="tiny muted">${mg ? 'Tsy ho « Tonga » ny entana raha tsy samy manamarina ianao sy ny mpandray.' : 'Le colis n\'est « Livré » qu\'une fois confirmé par vous ET par le destinataire.'}</p></div>`);
@@ -302,6 +309,21 @@ function deliverForm(s, done) {
   };
   m.el.querySelector('[data-ok]').onclick = () => send(true);
   m.el.querySelector('[data-nopin]').onclick = () => send(false);
+  // En attendant le client : le code apparaît tout seul dès qu'il appuie sur « J'ai reçu ».
+  if (!got) {
+    const t = setInterval(async () => {
+      if (!document.body.contains(m.el)) return clearInterval(t);
+      try {
+        const { shipment: x } = await api('GET', `/api/shipments/${s.id}`);
+        if (x.delivery_pin && x.recipient_confirmed_at) {
+          clearInterval(t);
+          const inp = m.el.querySelector('[data-pin]'); inp.value = x.delivery_pin;
+          inp.insertAdjacentHTML('beforebegin', `<div class="card" style="text-align:center;background:var(--green-soft);border:0;margin-bottom:6px"><b>✅ ${mg ? 'Nanamarina ny client — kaody voaray' : 'Le client a confirmé — code reçu'}</b></div>`);
+          toast(`✅ ${mg ? 'Kaody voaray' : 'Code reçu'} : ${x.delivery_pin}`, 'ok');
+        }
+      } catch {}
+    }, 4000);
+  }
 }
 
 function pickupForm(s, done) {

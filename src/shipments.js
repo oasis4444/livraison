@@ -308,7 +308,7 @@ async function listMine(ctx, env) {
   if (u.role !== 'courier' && trackIds.length) {
     for (const c of await all(env, `SELECT user_id, lat, lng, last_seen FROM couriers WHERE user_id IN (${trackIds.map(() => '?').join(',')})`, ...trackIds)) live[c.user_id] = c;
   }
-  return json({ shipments: rows.map((s) => ({ ...publicShipment(s), delivery_pin: u.role === 'courier' ? undefined : s.pin, courier_live: live[s.courier_id] && (s.status === 'picked_up' || s.stage) ? live[s.courier_id] : null, mine_as: s.sender_id === u.id ? 'sender' : s.recipient_phone === u.phone ? 'recipient' : 'courier', to_return: ['refused', 'cancelled'].includes(s.status) && s.picked_at && !s.returned_at })) });
+  return json({ shipments: rows.map((s) => ({ ...publicShipment(s), delivery_pin: u.role !== 'courier' || s.recipient_confirmed_at ? s.pin : undefined, recipient_confirmed_at: s.recipient_confirmed_at ?? null, courier_live: live[s.courier_id] && (s.status === 'picked_up' || s.stage) ? live[s.courier_id] : null, mine_as: s.sender_id === u.id ? 'sender' : s.recipient_phone === u.phone ? 'recipient' : 'courier', to_return: ['refused', 'cancelled'].includes(s.status) && s.picked_at && !s.returned_at })) });
 }
 
 async function getOne(ctx, env) {
@@ -316,7 +316,8 @@ async function getOne(ctx, env) {
   const s = await loadShipment(env, ctx.params.id);
   if (!(await canSee(env, u, s))) fail(403, 'forbidden', 'Accès refusé');
   const out = publicShipment(s);
-  if (u.role !== 'courier') out.delivery_pin = s.pin;
+  if (u.role !== 'courier' || s.recipient_confirmed_at) out.delivery_pin = s.pin; // le livreur reçoit le code quand le client a appuyé sur « J'ai reçu »
+  out.recipient_confirmed_at = s.recipient_confirmed_at ?? null;
   out.events = await all(env, 'SELECT status, note, at FROM shipment_events WHERE shipment_id = ? ORDER BY id', s.id);
   out.to_return = ['refused', 'cancelled'].includes(s.status) && !!s.picked_at && !s.returned_at;
   if (s.courier_id && (OPEN.includes(s.status) || out.to_return || u.role === 'admin')) {
@@ -423,7 +424,7 @@ async function completeIfBoth(env, s, by, user) {
   const f = await one(env, 'SELECT * FROM shipments WHERE id = ?', s.id);
   if (f.status !== 'picked_up' || !f.courier_confirmed_at || !f.recipient_confirmed_at) return false;
   await run(env, "UPDATE shipments SET status = 'delivered', done_at = ?, confirmed_by = ?, stage = NULL WHERE id = ? AND status = 'picked_up'", now(), by, s.id);
-  await logEvent(env, s, 'delivered', `Encaissé ${f.collected} Ar · confirmé par ${by === 'pin' ? 'code PIN du destinataire' : by === 'app' ? 'le destinataire (application)' : 'le centre'}`, user);
+  await logEvent(env, s, 'delivered', `Encaissé ${f.collected} Ar · confirmé par ${by === 'pin' ? 'code PIN du destinataire' : by === 'app' ? 'le destinataire (application)' : by === 'link' ? 'le destinataire (lien de suivi)' : 'le centre'}`, user);
   await broadcast(env, s, '✅ Colis livré', `Confirmé par le livreur et le destinataire · ${f.collected.toLocaleString('fr-FR')} Ar`);
   return true;
 }
@@ -455,6 +456,16 @@ async function deliver(ctx, env) {
 }
 
 // Le destinataire confirme (ou conteste) la réception depuis son application.
+// Le destinataire appuie sur « J'ai reçu mon colis » (application ou lien de suivi) : le code est transmis au livreur,
+// qui n'a plus qu'à appuyer sur « Livré ». Si le livreur a déjà confirmé, le colis passe « Livré ».
+export async function recipientReceived(env, s, by, user, note = null) {
+  await run(env, 'UPDATE shipments SET recipient_confirmed_at = COALESCE(recipient_confirmed_at, ?) WHERE id = ?', now(), s.id);
+  await logEvent(env, s, 'recipient_confirmed', note || 'Le destinataire a appuyé sur « J\'ai reçu » · code transmis au livreur', user);
+  const done = await completeIfBoth(env, s, by, user);
+  if (!done && s.courier_id) await notify(env, [s.courier_id], 'shipment', `✅ Code reçu : ${s.pin}`, `${s.ref} · le client a confirmé la réception — appuyez sur « Livré »`);
+  return done;
+}
+
 async function recipientConfirm(ctx, env) {
   const u = ctx.user;
   const s = await loadShipment(env, ctx.params.id);
@@ -469,10 +480,7 @@ async function recipientConfirm(ctx, env) {
     if (s.courier_id) await notify(env, [s.courier_id], 'shipment', '⚠ Réception contestée', `${s.ref} · ${note}`);
     return json({ ok: true, disputed: true });
   }
-  await run(env, 'UPDATE shipments SET recipient_confirmed_at = ? WHERE id = ?', now(), s.id);
-  await logEvent(env, s, 'recipient_confirmed', isAdmin ? `Confirmé par le centre${ctx.body.note ? ' : ' + str(ctx.body.note, { max: 200 }) : ''}` : 'Réception confirmée par le destinataire', u);
-  const done = await completeIfBoth(env, s, isAdmin ? 'admin' : 'app', u);
-  if (!done && s.courier_id) await notify(env, [s.courier_id], 'shipment', '✅ Le destinataire a confirmé', `${s.ref} · confirmez la remise de votre côté`);
+  const done = await recipientReceived(env, s, isAdmin ? 'admin' : 'app', u, isAdmin ? `Confirmé par le centre${ctx.body.note ? ' : ' + str(ctx.body.note, { max: 200 }) : ''}` : null);
   return json({ ok: true, delivered: done });
 }
 

@@ -129,3 +129,25 @@ test('API : clé d\'idempotence, limitation, journal des échanges', async () =>
   for (let i = 0; i < 4; i++) codes.push((await call('GET', '/api/v1/shipments', null, null, { 'x-api-key': key })).status);
   assert.deepEqual(codes, [200, 200, 200, 429]);
 });
+
+test('le client appuie sur « J\'ai reçu » (lien de suivi, sans compte) : le livreur reçoit le code, puis « Livré »', async () => {
+  env.DB.raw.prepare("UPDATE settings SET value='120' WHERE key='api_rate_per_min'").run(); env.DB.raw.prepare('DELETE FROM rate_hits').run();
+  const r = await call('POST', '/api/v1/shipments', ship(ANALAKELY, ANKORONDRANO, 'RECV-1'), null, { 'x-api-key': key });
+  const s = r.data.shipment;
+  env.DB.raw.prepare('UPDATE shipments SET courier_id = ?, status = ? WHERE id = ?').run(c1id, 'assigned', s.id);
+  // trop tôt : le livreur n'a pas encore le colis
+  assert.equal((await call('POST', `/api/track/${s.track_token}/confirm`, {})).status, 409);
+  assert.equal((await call('GET', `/api/shipments/${s.id}`, null, c1)).data.shipment.delivery_pin, undefined, 'pas de code avant');
+  env.DB.raw.prepare("UPDATE shipments SET status = 'picked_up', picked_at = ? WHERE id = ?").run(Date.now(), s.id);
+  assert.equal((await call('GET', `/api/track/${s.track_token}`)).data.can_confirm, true);
+  const c = await call('POST', `/api/track/${s.track_token}/confirm`, {});
+  assert.equal(c.status, 200); assert.equal(c.data.delivered, false);
+  const seen = (await call('GET', `/api/shipments/${s.id}`, null, c1)).data.shipment;
+  assert.match(seen.delivery_pin, /^\d{4}$/, 'le livreur reçoit le code'); assert.ok(seen.recipient_confirmed_at);
+  const notif = env.DB.raw.prepare("SELECT title FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(c1id);
+  assert.match(notif.title, new RegExp(`Code reçu : ${seen.delivery_pin}`));
+  const d = await call('POST', `/api/shipments/${s.id}/deliver`, { pin: seen.delivery_pin }, c1);
+  assert.equal(d.data.delivered, true);
+  const t = (await call('GET', `/api/track/${s.track_token}`)).data;
+  assert.equal(t.step, 'delivered'); assert.equal(t.can_confirm, false);
+});

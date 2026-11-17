@@ -34,9 +34,16 @@ async function trackView(token) {
   const tick = async () => {
     let r; try { r = await api('GET', `/api/track/${token}`); } catch (e) { app.querySelector('[data-info]').textContent = e.message; return; }
     app.querySelector('[data-h]').innerHTML = `<b>${esc(r.ref)}</b>${r.external_ref ? ` · ${esc(r.external_ref)}` : ''}`;
-    const eta = r.eta ? Math.max(1, Math.round((r.eta - Date.now()) / 60e3)) : null;
+    const eta = r.eta && !r.confirmed ? Math.max(1, Math.round((r.eta - Date.now()) / 60e3)) : null;
     app.querySelector('[data-info]').innerHTML = `<div style="font-size:1.15rem"><b>${esc(r.step_label || r.step)}</b></div>
+      ${r.can_confirm ? `<button class="btn primary lg block" data-recv style="margin:8px 0">✅ ${mg ? 'Tonga ny entana — alefaso ny kaody amin\'ny livreur' : 'J\'ai reçu mon colis — envoyer le code au livreur'}</button>` : ''}
+      ${r.confirmed && !r.done_at ? `<div class="small" style="color:var(--green)"><b>✅ ${mg ? 'Voaray ny fanamarinanao, nalefa tany amin\'ny livreur ny kaody' : 'Merci ! Le code a été transmis au livreur'}</b></div>` : ''}
       <div class="small muted">${r.courier ? `🚲 ${esc(r.courier)}` : ''}${eta ? ` · ${mg ? 'Tonga ao anatin\'ny' : 'Arrivée dans'} ~${eta} min` : ''}${!r.position && r.courier && !r.done_at ? ` · ${mg ? 'Mbola tsy hita ny toerany' : 'Position visible pendant la livraison'}` : ''}</div>`;
+    const rb = app.querySelector('[data-recv]');
+    if (rb) rb.onclick = async () => {
+      rb.disabled = true;
+      try { await api('POST', `/api/track/${token}/confirm`, {}); await tick(); } catch (e) { rb.disabled = false; app.querySelector('[data-info]').insertAdjacentHTML('beforeend', `<div class="small" style="color:var(--red)">${esc(e.message)}</div>`); }
+    };
     if (!map) return;
     const pts = [];
     if (r.pickup) { core.upsertMarker(map, mk, 'a', r.pickup, core.icons.a()); pts.push(r.pickup); }
