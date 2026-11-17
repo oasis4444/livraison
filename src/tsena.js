@@ -112,13 +112,10 @@ export async function geocodeTana(addr) {
 // Si le numéro indiqué est celui d'un admin ou d'un livreur, un compte boutique séparé est créé quand même
 // (numéro interne), pour que l'argent des ventes ne parte jamais sur le compte de l'admin ou du livreur.
 async function shopAccount(env, s) {
-  if (s.tsena_shop_user) {
-    const u = await one(env, "SELECT * FROM users WHERE id = ? AND role = 'client'", Number(s.tsena_shop_user));
-    if (u) return u;
-  }
   const name = s.tsena_shop_name || 'Tsena Ampandrana';
+  let u = s.tsena_shop_user ? await one(env, "SELECT * FROM users WHERE id = ? AND role = 'client'", Number(s.tsena_shop_user)) : null;
   let phone = s.tsena_shop_phone ? normalizePhone(s.tsena_shop_phone) : null;
-  let u = phone ? await one(env, 'SELECT * FROM users WHERE phone = ?', phone) : null;
+  if (!u) u = phone ? await one(env, 'SELECT * FROM users WHERE phone = ?', phone) : null;
   if (u && u.role !== 'client') { u = null; phone = null; }
   if (!u) {
     if (!phone) do { phone = '+2610' + String(crypto.getRandomValues(new Uint32Array(1))[0] % 1e8).padStart(8, '0'); } while (await one(env, 'SELECT id FROM users WHERE phone = ?', phone));
