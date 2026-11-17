@@ -105,12 +105,19 @@ async function ensureSchema(env) {
 // Adresse Tsena (texte libre) → position GPS, pour pouvoir trouver un livreur dont le trajet y passe.
 export async function geocodeTana(addr) {
   if (!addr || addr.length < 3) return null;
-  try {
-    const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mg&viewbox=47.40,-18.80,47.65,-19.02&bounded=1&q=${encodeURIComponent(addr + ', Antananarivo')}`;
-    const r = await fetch(u, { headers: { 'User-Agent': 'Alefa-livraison/1.0 (centre de livraison Antananarivo)', 'Accept-Language': 'fr' } });
-    const j = await r.json();
-    return j[0] ? [Number(j[0].lat), Number(j[0].lon)] : null;
-  } catch { return null; }
+  const find = async (q) => {
+    try {
+      const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=mg&viewbox=47.40,-18.80,47.65,-19.02&bounded=1&q=${encodeURIComponent(q + ', Antananarivo')}`;
+      const r = await fetch(u, { headers: { 'User-Agent': 'Alefa-livraison/1.0 (centre de livraison Antananarivo)', 'Accept-Language': 'fr' } });
+      const j = await r.json();
+      return j[0] ? [Number(j[0].lat), Number(j[0].lon)] : null;
+    } catch { return null; }
+  };
+  // Adresse complète, puis le quartier seul (« Lot II M 45 Ampandrana » → « Ampandrana »).
+  const words = addr.replace(/[,;/()]+/g, ' ').split(/\s+/).filter((w) => /^[A-Za-zÀ-ÿ'-]{4,}$/.test(w) && !/^(lot|lots|bis|ter|porte|rue|immeuble|villa|cite|cité|près|pres|face|derrière|derriere)$/i.test(w));
+  const tries = [addr, words.slice(-2).join(' '), words.at(-1), words[0]].filter((q, i, a) => q && a.indexOf(q) === i);
+  for (const q of tries) { const g = await find(q); if (g) return g; }
+  return null;
 }
 
 // ---------------------------------------------------------------- synchronisation
@@ -184,6 +191,10 @@ export async function syncTsena(env) {
     const wrong = await one(env, `SELECT COUNT(*) AS n FROM shipments WHERE id IN (SELECT shipment_id FROM tsena_links) AND status IN ('pending','assigned','picked_up')
       AND sender_id IN (SELECT id FROM users WHERE role <> 'client')`);
     if (wrong.n) await shopAccount(env, s);
+
+    // Adresses pas encore localisées : nouvel essai (quartier seul), puis recherche d'un livreur.
+    const noGeo = await all(env, "SELECT id, drop_addr FROM shipments WHERE drop_lat IS NULL AND status = 'pending' AND id IN (SELECT shipment_id FROM tsena_links) LIMIT 5");
+    for (const x of noGeo) { const g = await geocodeTana(x.drop_addr); if (g) await run(env, 'UPDATE shipments SET drop_lat = ?, drop_lng = ? WHERE id = ?', g[0], g[1], x.id); }
 
     // 2. Tsena → Alefa : changements faits dans Tsena sur les livraisons déjà envoyées.
     const open = await all(env, `SELECT l.doc_id, l.last_step, s.id, s.status, s.drop_addr FROM tsena_links l JOIN shipments s ON s.id = l.shipment_id

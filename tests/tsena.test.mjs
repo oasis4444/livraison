@@ -188,3 +188,13 @@ test('nouveaux statuts Tsena : Confirmée importée, Annulée suivie, « Remettr
   assert.equal(r.imported, 1, 'repart comme nouvelle demande');
   assert.equal(env.DB.raw.prepare("SELECT status FROM shipments WHERE external_ref='L-00010' ORDER BY id DESC").get().status, 'pending');
 });
+
+test('adresse précise introuvable : le quartier est utilisé', async () => {
+  const { geocodeTana } = await import('../src/tsena.js');
+  const real = globalThis.fetch, asked = [];
+  globalThis.fetch = async (u) => { const q = decodeURIComponent(String(u).split('q=')[1]); asked.push(q); return new Response(JSON.stringify(/^Ampandrana,/.test(q) ? [{ lat: '-18.9038', lon: '47.5337' }] : [])); };
+  try {
+    assert.deepEqual(await geocodeTana('Lot II M 45 Ampandrana'), [-18.9038, 47.5337]);
+    assert.equal(asked[0], 'Lot II M 45 Ampandrana, Antananarivo');
+  } finally { globalThis.fetch = real; }
+});
