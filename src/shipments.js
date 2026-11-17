@@ -50,7 +50,7 @@ const STEP_FR = { pending: 'À programmer', scheduled: 'Programmé', departed: '
   en_route: 'En route vers le destinataire', nearby: 'Livreur tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour vers l\'expéditeur', returned: 'Rendu à l\'expéditeur', assigned: 'Programmé', fee: 'Frais modifiés',
   awaiting_recipient: 'Remis — attente confirmation du destinataire', awaiting_courier: 'Reçu — attente confirmation du livreur', courier_confirmed: 'Remise déclarée par le livreur',
   recipient_confirmed: 'Réception confirmée par le destinataire', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée',
-  accepted: 'Mission acceptée par le livreur', declined: 'Mission refusée par le livreur', released: 'Trajet annulé — colis réaffecté' };
+  accepted: 'Mission acceptée par le livreur', declined: 'Mission refusée par le livreur', released: 'Trajet annulé — colis réaffecté', updated: 'Modifié par le logiciel de vente' };
 export const STEP_LABELS = STEP_FR;
 
 const toPay = (s) => (s.value ?? s.declared_value) + s.fee; // montant à encaisser auprès du destinataire
@@ -489,6 +489,39 @@ async function refuse(ctx, env) {
 }
 
 // Annulation : avant récupération → simple annulation. Après récupération → retour à l'expéditeur, qui paie les frais.
+// Changement fait dans le logiciel de vente (annulation, livraison faite par la boutique, adresse ou montant modifiés).
+// Avant récupération : Alefa suit. Après récupération : le centre est alerté (le livreur a déjà le colis).
+export async function partnerCancel(env, id, reason) {
+  const s = await loadShipment(env, id);
+  if (!s || !['pending', 'assigned'].includes(s.status)) {
+    if (s?.status === 'picked_up') await alertAdmins(env, 'alert', `${s.ref} (${s.external_ref || ''}) : ${reason} dans le logiciel de vente, mais le colis est déjà récupéré`);
+    return false;
+  }
+  await run(env, "UPDATE shipments SET status = 'cancelled', done_at = ?, outcome_note = ?, return_fee = 0, collected = 0 WHERE id = ?", now(), reason, s.id);
+  await logEvent(env, s, 'cancelled', reason, null);
+  if (s.courier_id) await notify(env, [s.courier_id], 'shipment_cancel', 'Colis annulé', `${s.ref} · ${reason}`);
+  return true;
+}
+export async function partnerUpdate(env, id, ch) {
+  const s = await loadShipment(env, id);
+  if (!s || !['pending', 'assigned'].includes(s.status)) return false;
+  const sets = [], args = [], what = [];
+  const put = (col, v, label) => { sets.push(`${col} = ?`); args.push(v); if (label) what.push(label); };
+  if (ch.recipient_name != null && ch.recipient_name !== s.recipient_name) put('recipient_name', ch.recipient_name, 'nom');
+  if (ch.recipient_phone && normalizePhone(ch.recipient_phone) !== s.recipient_phone) put('recipient_phone', normalizePhone(ch.recipient_phone), 'téléphone');
+  if (ch.declared_value != null && ch.declared_value !== s.declared_value) put('declared_value', ch.declared_value, 'montant');
+  if (ch.fee != null && ch.fee !== s.fee) put('fee', ch.fee, 'frais');
+  if (ch.drop_addr && ch.drop_addr !== s.drop_addr) { put('drop_addr', ch.drop_addr, 'adresse'); put('drop_lat', ch.drop_lat ?? null); put('drop_lng', ch.drop_lng ?? null); }
+  if (!sets.length) return false;
+  await run(env, `UPDATE shipments SET ${sets.join(', ')} WHERE id = ?`, ...args, s.id);
+  const note = `Modifié dans le logiciel de vente : ${what.join(', ')}`;
+  await logEvent(env, s, 'updated', note, null);
+  if (s.courier_id) await notify(env, [s.courier_id], 'shipment_update', '✏️ Colis modifié', `${s.ref} · ${what.join(', ')}`);
+  // Nouvelle adresse hors du trajet du livreur : on cherche un livreur compatible.
+  if (what.includes('adresse') && s.status === 'assigned' && !s.accepted_at) { const fresh = await loadShipment(env, s.id); const dep = await pickDeparture(env, fresh); if (dep && dep.courier_id !== s.courier_id) await assignTo(env, fresh, dep, null); }
+  return true;
+}
+
 async function cancel(ctx, env) {
   const u = ctx.user;
   const s = await loadShipment(env, ctx.params.id);

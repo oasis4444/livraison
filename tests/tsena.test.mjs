@@ -25,6 +25,9 @@ globalThis.fetch = async (url, init = {}) => {
     const want = JSON.parse(init.body).structuredQuery.where.fieldFilter.value.arrayValue.values.map((v) => v.stringValue);
     return J(Object.entries(fs).filter(([, d]) => want.includes(d.status)).map(([id, d]) => ({ document: { name: `projects/p/databases/(default)/documents/deliveries/${id}`, fields: Object.fromEntries(Object.entries(d).map(([k, v]) => [k, val(v)])) } })));
   }
+  if (u.includes(':batchGet')) {
+    return J(JSON.parse(init.body).documents.map((name) => { const id = name.split('/').pop(); return fs[id] ? { found: { name, fields: Object.fromEntries(Object.entries(fs[id]).map(([k, v]) => [k, val(v)])) } } : { missing: name }; }));
+  }
   if (init.method === 'PATCH' && u.includes('/documents/deliveries/')) {
     const id = u.split('/deliveries/')[1].split('?')[0];
     assert.match(u, /currentDocument\.exists=true/);
@@ -44,8 +47,6 @@ let admin;
 test('connexion à Tsena : mauvais mot de passe refusé, puis import automatique', async () => {
   env.DB.raw.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261340000000','Admin','admin',?,?,'active',0)").run(await hashPassword('a', 's', 1000), 's');
   admin = (await call('POST', '/api/auth/login', { phone: '0340000000', password: 'a' })).data.token;
-  const adminPhone = await call('POST', '/api/admin/tsena/connect', { email: 'x@y.mg', password: 'bon', shop_phone: '034 00 000 00' }, admin);
-  assert.equal(adminPhone.status, 400); assert.match(adminPhone.data.message, /administrateur/);
   const bad = await call('POST', '/api/admin/tsena/connect', { email: 'x@y.mg', password: 'faux', shop_phone: '0321112233' }, admin);
   assert.equal(bad.status, 400); assert.match(bad.data.message, /refusée/);
   const ok = await call('POST', '/api/admin/tsena/connect', { url: 'https://tsena-ampandrana.web.app', email: 'x@y.mg', password: 'bon', shop_name: 'Tsena Ampandrana', shop_phone: '0321112233', pickup_addr: 'Ampandrana' }, admin);
@@ -109,10 +110,40 @@ test('statut visible dans Tsena dès la programmation, livraison supprimée dans
 });
 
 test('modifier la boutique : les colis non récupérés passent sur son compte', async () => {
-  const bad = await call('POST', '/api/admin/tsena/shop', { shop_name: 'Tsena', shop_phone: '034 00 000 00' }, admin);
-  assert.equal(bad.status, 400);
   const ok = await call('POST', '/api/admin/tsena/shop', { shop_name: 'Tsena Ampandrana', shop_phone: '033 46 261 16', pickup_addr: 'Ampandrana' }, admin);
   assert.equal(ok.status, 200); assert.ok(ok.data.moved >= 1);
   const s3 = (await call('GET', '/api/admin/shipments?q=L-00003', null, admin)).data.shipments[0];
   assert.equal(s3.sender.phone, '+261334626116');
+});
+
+test('numéro de l\'admin donné pour la boutique : compte boutique séparé créé automatiquement, l\'admin n\'est jamais l\'expéditeur', async () => {
+  const r = await call('POST', '/api/admin/tsena/shop', { shop_name: 'Tsena Ampandrana', shop_phone: '034 00 000 00', pickup_addr: 'Ampandrana' }, admin);
+  assert.equal(r.status, 200);
+  fs.d6 = { no: 'L-00006', status: 'attente', clientName: 'Hery', phone: '034 12 121 21', address: 'Ampasika', amount: 6000, fee: 3000 };
+  const out = await syncTsena(env);
+  assert.equal(out.errors.length, 0, JSON.stringify(out.errors)); assert.equal(out.imported, 1);
+  const s6 = (await call('GET', '/api/admin/shipments?q=L-00006', null, admin)).data.shipments[0];
+  assert.equal(s6.sender.name, 'Tsena Ampandrana'); assert.equal(s6.sender.phone, '+261340000000', 'numéro de contact pour le livreur');
+  const owner = env.DB.raw.prepare('SELECT u.role FROM shipments s JOIN users u ON u.id = s.sender_id WHERE s.external_ref = ?').get('L-00006');
+  assert.equal(owner.role, 'client');
+});
+
+test('changements faits dans Tsena suivis automatiquement : modification, suppression, « Livrée » par la boutique', async () => {
+  fs.d7 = { no: 'L-00007', status: 'attente', clientName: 'Bema', phone: '034 55 555 55', address: 'Isotry', amount: 10000, fee: 3000 };
+  fs.d8 = { no: 'L-00008', status: 'attente', clientName: 'Koto', phone: '034 66 666 66', address: 'Anosy', amount: 8000, fee: 3000 };
+  await syncTsena(env);
+  // modification dans Tsena
+  Object.assign(fs.d7, { address: 'Ankorondrano', amount: 12000, phone: '034 55 555 56' });
+  let r = await syncTsena(env);
+  assert.equal(r.changed, 1);
+  const s7 = (await call('GET', '/api/admin/shipments?q=L-00007', null, admin)).data.shipments[0];
+  assert.equal(s7.declared_value, 12000); assert.equal(s7.recipient.address, 'Ankorondrano'); assert.equal(s7.recipient.phone, '+261345555556');
+  // la boutique livre elle-même L-00007, et supprime L-00008
+  fs.d7.status = 'livree'; delete fs.d8;
+  r = await syncTsena(env);
+  assert.equal(r.cancelled, 2);
+  const st = (ref) => env.DB.raw.prepare('SELECT status, outcome_note FROM shipments WHERE external_ref = ?').get(ref);
+  assert.equal(st('L-00007').status, 'cancelled'); assert.match(st('L-00007').outcome_note, /boutique/);
+  assert.equal(st('L-00008').status, 'cancelled'); assert.match(st('L-00008').outcome_note, /supprimée/);
+  assert.equal(fs.d7.status, 'livree', 'Tsena garde « Livrée »');
 });
