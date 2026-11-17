@@ -174,9 +174,12 @@ export function compressImage(file, max = 1024, quality = 0.62) {
     img.onload = () => {
       const s = Math.min(1, max / Math.max(img.width, img.height));
       const cv = document.createElement('canvas'); cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
-      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(img, 0, 0, cv.width, cv.height);
       URL.revokeObjectURL(img.src);
-      resolve(cv.toDataURL('image/jpeg', quality));
+      // Toujours en JPEG léger (< ~450 Ko) pour passer même sur une connexion lente.
+      let q = quality, out = cv.toDataURL('image/jpeg', q);
+      while (out.length > 450_000 && q > 0.35) { q -= 0.1; out = cv.toDataURL('image/jpeg', q); }
+      resolve(out);
     };
     img.onerror = () => reject(new Error('Photo illisible'));
     img.src = URL.createObjectURL(file);

@@ -1059,7 +1059,8 @@ async function handleApiInner(req, env) {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       // Protection CSRF : les écritures exigent un en-tête JSON (impossible via un formulaire tiers).
       if (!(req.headers.get('content-type') || '').includes('application/json') && req.method !== 'DELETE') fail(415, 'json_required', 'JSON requis');
-      ctx.body = await readJson(req);
+      // Les envois avec photo (récupération d'un colis) peuvent peser jusqu'à ~1,2 Mo ; le reste est limité à 64 Ko.
+      ctx.body = await readJson(req, /\/(pickup|photo)$/.test(url.pathname) ? 1_300_000 : 64 * 1024);
     }
     const r = R.find((x) => x.method === req.method && x.re.test(url.pathname));
     if (!r) fail(404, 'not_found', 'Route inconnue');

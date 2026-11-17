@@ -46,9 +46,9 @@ export function withSecurityHeaders(res) {
   return r;
 }
 
-export async function readJson(req) {
+export async function readJson(req, max = 64 * 1024) {
   const len = Number(req.headers.get('content-length') || 0);
-  if (len > 64 * 1024) fail(413, 'too_large', 'Requête trop volumineuse');
+  if (len > max) fail(413, 'too_large', max > 64 * 1024 ? 'Photo trop lourde, reprenez-la' : 'Requête trop volumineuse');
   try { return await req.json(); } catch { return {}; }
 }
 

@@ -95,7 +95,11 @@ test('récupération : photo et valeur obligatoires, frais modifiable', async ()
   assert.equal(r.status, 200); assert.equal(r.data.amount_to_collect, 23000);
   assert.equal((await call('GET', `/api/shipments/${ids['CMD-1']}/photo`, null, vendorTok)).data, 'IMG');
   assert.equal((await call('GET', '/api/v1/shipments/CMD-1/photo', null, null, { 'x-api-key': key })).data, 'IMG');
-  assert.equal((await call('POST', `/api/shipments/${ids['CMD-2']}/pickup`, { value: 15000, fee: 2500, photo: PHOTO }, courier)).status, 200);
+  // vraie photo de téléphone compressée (~300 Ko) : acceptée (le serveur limitait à 64 Ko)
+  const big = { value: 15000, fee: 2500, photo: 'data:image/jpeg;base64,' + Buffer.alloc(225_000, 7).toString('base64') };
+  const len = String(Buffer.byteLength(JSON.stringify(big)));
+  assert.equal((await call('POST', '/api/shipments/999999/accept', { x: 'y'.repeat(70_000) }, courier, { 'content-length': '70100' })).status, 413, 'autres requêtes toujours limitées');
+  assert.equal((await call('POST', `/api/shipments/${ids['CMD-2']}/pickup`, big, courier, { 'content-length': len })).status, 200);
   assert.equal((await call('POST', `/api/shipments/${ids['CMD-3']}/pickup`, { value: 10000, photo: PHOTO }, courier)).status, 200);
   assert.equal((await call('POST', '/api/v1/shipments/CMD-3/cancel', { reason: 'x' }, null, { 'x-api-key': key })).status, 409, 'annulation API impossible après récupération');
 });
