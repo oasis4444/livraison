@@ -4,7 +4,7 @@
 // Le mot de passe Tsena n'est jamais conservé : seul un jeton de rafraîchissement Firebase est gardé.
 import { fail, json, str, normalizePhone, randomHex, hashPassword, now } from './lib.js';
 import { one, all, run, settings, audit, alertAdmins } from './worker.js';
-import { createShipment, stepOf, STEP_LABELS, partnerCancel, partnerUpdate, departures } from './shipments.js';
+import { createShipment, stepOf, STEP_LABELS, partnerCancel, partnerUpdate, partnerChooseCourier, departures } from './shipments.js';
 import { upcomingTrips } from './trips.js';
 import { logSync } from './trips.js';
 
@@ -99,7 +99,7 @@ async function patchDelivery(s, token, docId, fields) {
 let schemaOk = false;
 async function ensureSchema(env) {
   if (schemaOk) return;
-  await env.DB.prepare('CREATE TABLE IF NOT EXISTS tsena_links (shipment_id INTEGER PRIMARY KEY REFERENCES shipments(id) ON DELETE CASCADE, doc_id TEXT NOT NULL UNIQUE, last_step TEXT, synced_at INTEGER, base_note TEXT)').run();
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS tsena_links (shipment_id INTEGER PRIMARY KEY REFERENCES shipments(id) ON DELETE CASCADE, doc_id TEXT NOT NULL UNIQUE, last_step TEXT, synced_at INTEGER, base_note TEXT, last_driver TEXT)').run();
   schemaOk = true;
 }
 
@@ -182,7 +182,10 @@ export async function syncTsena(env) {
             description: baseNote(d.note), fee: Number(d.fee) > 0 ? Math.round(Number(d.fee)) : undefined,
             sender_phone: s.tsena_shop_phone || undefined,
           }, { sender, source: 'api', actor: { role: 'admin', id: null } });
-          await run(env, 'INSERT OR IGNORE INTO tsena_links (shipment_id, doc_id, last_step, synced_at) VALUES (?,?,?,?)', r.shipment.id, d.docId, null, now());
+          await run(env, 'INSERT OR IGNORE INTO tsena_links (shipment_id, doc_id, last_step, synced_at, last_driver) VALUES (?,?,?,?,?)', r.shipment.id, d.docId, null, now(), d.driver || null);
+          // Livreur Alefa choisi dès la saisie dans Tsena (« Santatra (Alefa) ») : il reçoit le colis.
+          const pick = /^(.+?)\s*\(Alefa\)\s*$/i.exec(String(d.driver || '').trim())?.[1];
+          if (pick) await partnerChooseCourier(env, r.shipment.id, pick);
           out.imported += 1;
           await logSync(env, 'tsena', 'in', d.no || d.docId, true, `colis ${r.shipment.ref} créé${drop ? '' : ' (adresse à localiser)'}${r.shipment.courier_id ? ' · ' + (r.shipment.courier_name || '').split(' ')[0] : ''}`);
         } catch (e) { out.errors.push(`${d.no || d.docId} : ${e.message}`); await logSync(env, 'tsena', 'in', d.no || d.docId, false, e.message); }
@@ -198,7 +201,7 @@ export async function syncTsena(env) {
     for (const x of noGeo) { const g = await geocodeTana(x.drop_addr); if (g) await run(env, 'UPDATE shipments SET drop_lat = ?, drop_lng = ? WHERE id = ?', g[0], g[1], x.id); }
 
     // 2. Tsena → Alefa : changements faits dans Tsena sur les livraisons déjà envoyées.
-    const open = await all(env, `SELECT l.doc_id, l.last_step, s.id, s.status, s.drop_addr FROM tsena_links l JOIN shipments s ON s.id = l.shipment_id
+    const open = await all(env, `SELECT l.doc_id, l.last_step, l.last_driver, s.id, s.status, s.drop_addr FROM tsena_links l JOIN shipments s ON s.id = l.shipment_id
       WHERE s.status IN ('pending','assigned','picked_up')`);
     if (open.length) {
       const seen = Object.fromEntries(docs.map((d) => [d.docId, d]));
@@ -219,6 +222,9 @@ export async function syncTsena(env) {
           const g = addr !== o.drop_addr ? await geocodeTana(addr) : null;
           const changed = await partnerUpdate(env, o.id, { recipient_name: d.clientName || 'Client', recipient_phone: d.phone, drop_addr: addr, drop_lat: g?.[0], drop_lng: g?.[1],
             declared_value: Math.max(0, Math.round(Number(d.amount) || 0)), ...(Number(d.fee) > 0 ? { fee: Math.round(Number(d.fee)) } : {}) });
+          const typed = String(d.driver || '').trim();
+          const chosen = typed && typed !== (o.last_driver || '') ? /^(.+?)\s*\(Alefa\)\s*$/i.exec(typed)?.[1] : null; // choisi par une personne, pas écrit par Alefa
+          if (chosen && await partnerChooseCourier(env, o.id, chosen)) { out.changed = (out.changed || 0) + 1; await logSync(env, 'tsena', 'in', d.no, true, `livreur choisi dans Tsena : ${chosen}`); await run(env, 'UPDATE tsena_links SET last_step = NULL WHERE doc_id = ?', o.doc_id); }
           if (changed) { out.changed = (out.changed || 0) + 1; await logSync(env, 'tsena', 'in', d.no, true, 'modifiée dans Tsena → colis mis à jour'); await run(env, 'UPDATE tsena_links SET last_step = NULL WHERE doc_id = ?', o.doc_id); }
         } catch (e) { out.errors.push(`${d?.no || o.doc_id} : ${e.message}`); }
       }
@@ -251,7 +257,7 @@ export async function syncTsena(env) {
       fields.note = noteWith(base, `${STEP_LABELS[step] || step}${who}${when}${x.outcome_note && ['refused', 'cancelled', 'returning', 'returned'].includes(step) ? ' — ' + x.outcome_note : ''}`);
       try {
         await patchDelivery(s, token, x.doc_id, fields);
-        await run(env, 'UPDATE tsena_links SET last_step = ?, synced_at = ? WHERE shipment_id = ?', step, now(), x.shipment_id);
+        await run(env, 'UPDATE tsena_links SET last_step = ?, synced_at = ?, last_driver = COALESCE(?, last_driver) WHERE shipment_id = ?', step, now(), fields.driver ?? null, x.shipment_id);
         out.updated += 1;
         await logSync(env, 'tsena', 'out', x.external_ref || x.ref, true, `${step}${fields.status ? ' → ' + fields.status : ''}`);
       } catch (e) {

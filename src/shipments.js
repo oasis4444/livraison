@@ -502,6 +502,20 @@ export async function partnerCancel(env, id, reason) {
   if (s.courier_id) await notify(env, [s.courier_id], 'shipment_cancel', 'Colis annulé', `${s.ref} · ${reason}`);
   return true;
 }
+// Livreur choisi dans le logiciel de vente (« Santatra (Alefa) ») : on lui confie le colis sur son prochain départ ou trajet.
+export async function partnerChooseCourier(env, id, firstName) {
+  const s = await loadShipment(env, id);
+  if (!s || !['pending', 'assigned'].includes(s.status) || s.accepted_at) return false;
+  const c = await one(env, "SELECT id, name FROM users WHERE role = 'courier' AND status = 'active' AND (name = ? OR name LIKE ?) ORDER BY id LIMIT 1", firstName, firstName + ' %');
+  if (!c || c.id === s.courier_id) return false;
+  const trip = await matchTrip(env, s, { exclude: [] });
+  const dep = trip?.courier_id === c.id ? trip
+    : (await departures(env)).find((d) => d.courier_id === c.id && !d.started) || { courier_id: c.id, courier: c.name.split(' ')[0], departure_at: null, axe: null };
+  await assignTo(env, s, dep, null);
+  await logEvent(env, s, 'updated', `Livreur choisi dans le logiciel de vente : ${c.name.split(' ')[0]}`, null);
+  return true;
+}
+
 export async function partnerUpdate(env, id, ch) {
   const s = await loadShipment(env, id);
   if (!s || !['pending', 'assigned'].includes(s.status)) return false;

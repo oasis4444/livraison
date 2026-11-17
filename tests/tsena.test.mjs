@@ -189,7 +189,8 @@ test('nouveaux statuts Tsena : Confirmée importée, Annulée suivie, « Remettr
   fs.d10.status = 'attente';
   r = await syncTsena(env);
   assert.equal(r.imported, 1, 'repart comme nouvelle demande');
-  assert.equal(env.DB.raw.prepare("SELECT status FROM shipments WHERE external_ref='L-00010' ORDER BY id DESC").get().status, 'pending');
+  const again = env.DB.raw.prepare("SELECT s.status, u.name FROM shipments s LEFT JOIN users u ON u.id = s.courier_id WHERE external_ref='L-00010' ORDER BY s.id DESC").get();
+  assert.equal(again.status, 'assigned'); assert.equal(again.name, 'Santatra Vélo', 'le livreur affiché sur la carte Tsena est repris');
 });
 
 test('adresse précise introuvable : le quartier est utilisé', async () => {
@@ -219,4 +220,22 @@ test('livreurs, axes et heures publiés automatiquement dans Tsena (settings/ale
   env.DB.raw.prepare('UPDATE courier_axes SET end_min = 660 WHERE courier_id = ?').run(cid);
   await syncTsena(env);
   assert.equal(settingsWrites, n + 1); assert.match(settingsAlefa.couriers.find((c) => c.fullName === 'Santatra Vélo').hours, /08:00–11:00/);
+});
+
+test('livreur choisi dans Tsena (« Rivo (Alefa) ») : Alefa lui confie le colis', async () => {
+  env.DB.raw.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261348888888','Rivo Vélo','courier','x','x','active',0)").run();
+  const rivo = env.DB.raw.prepare("SELECT id FROM users WHERE phone='+261348888888'").get().id;
+  fs.d11 = { no: 'L-00011', status: 'attente', clientName: 'Tahina', phone: '034 11 111 99', address: 'Isotry', amount: 4000, fee: 3000 };
+  await syncTsena(env);
+  fs.d11.driver = 'Rivo (Alefa)';
+  await syncTsena(env);
+  const sh = env.DB.raw.prepare("SELECT courier_id, status FROM shipments WHERE external_ref='L-00011'").get();
+  assert.equal(sh.courier_id, rivo); assert.equal(sh.status, 'assigned');
+  await syncTsena(env);
+  assert.equal(fs.d11.driver, 'Rivo (Alefa)'); assert.match(fs.d11.note, /Rivo/);
+  // Rivo refuse : Alefa confie le colis à un autre ; le nom « Rivo (Alefa) » encore écrit dans Tsena ne le fait pas revenir
+  const tok = (await call('POST', '/api/auth/login', { phone: '0348888888', password: 'x' })).data.token;
+  env.DB.raw.prepare("UPDATE shipments SET refused_by = ?, courier_id = NULL, status = 'pending' WHERE external_ref = 'L-00011'").run(String(rivo));
+  await syncTsena(env);
+  assert.notEqual(env.DB.raw.prepare("SELECT courier_id FROM shipments WHERE external_ref='L-00011'").get().courier_id, rivo);
 });
