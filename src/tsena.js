@@ -23,7 +23,10 @@ const fromFs = (v) => {
   if ('arrayValue' in v) return (v.arrayValue.values || []).map(fromFs);
   return null;
 };
-const toFs = (x) => (typeof x === 'number' ? (Number.isInteger(x) ? { integerValue: String(x) } : { doubleValue: x }) : x == null ? { nullValue: null } : { stringValue: String(x) });
+const toFs = (x) => (Array.isArray(x) ? { arrayValue: { values: x.map(toFs) } }
+  : x && typeof x === 'object' ? { mapValue: { fields: Object.fromEntries(Object.entries(x).map(([k, v]) => [k, toFs(v)])) } }
+  : typeof x === 'number' ? (Number.isInteger(x) ? { integerValue: String(x) } : { doubleValue: x })
+  : typeof x === 'boolean' ? { booleanValue: x } : x == null ? { nullValue: null } : { stringValue: String(x) });
 
 async function http(url, init) {
   const r = await fetch(url, init);
@@ -55,10 +58,13 @@ async function idToken(env, s) {
 }
 const docsBase = (s) => `https://firestore.googleapis.com/v1/projects/${s.tsena_project}/databases/(default)/documents`;
 
+// Statuts Tsena : attente → confirmee → cours → livree (ou annulee).
+const OPEN_ST = ['attente', 'confirmee', 'cours'];
+const RANK = { attente: 0, confirmee: 1, cours: 2, livree: 3 };
 async function waitingDeliveries(s, token) {
   const j = await http(`${docsBase(s)}:runQuery`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'deliveries' }], where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'IN', value: { arrayValue: { values: [{ stringValue: 'attente' }, { stringValue: 'cours' }] } } } }, limit: 300 } }),
+    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'deliveries' }], where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'IN', value: { arrayValue: { values: OPEN_ST.map((v) => ({ stringValue: v })) } } } }, limit: 300 } }),
   });
   return (Array.isArray(j) ? j : []).filter((x) => x.document).map((x) => ({
     docId: x.document.name.split('/').pop(),
@@ -138,7 +144,7 @@ const noteWith = (base, text) => (base ? `${base} — ${MARK} ${text}` : `${MARK
 const fmtMg = (ms) => { const d = new Date(ms + 3 * 3600e3).toISOString(); return `${d.slice(8, 10)}/${d.slice(5, 7)} ${d.slice(11, 16)}`; };
 
 // Étape Alefa → statut Tsena (attente / cours / livree).
-const TSENA_STATUS = { departed: 'cours', at_pickup: 'cours', picked_up: 'cours', en_route: 'cours', nearby: 'cours', awaiting_recipient: 'cours', awaiting_courier: 'cours', delivered: 'livree' };
+const TSENA_STATUS = { scheduled: 'confirmee', departed: 'cours', at_pickup: 'cours', picked_up: 'cours', en_route: 'cours', nearby: 'cours', awaiting_recipient: 'cours', awaiting_courier: 'cours', delivered: 'livree' };
 
 export async function syncTsena(env) {
   const s = await settings(env);
@@ -152,10 +158,10 @@ export async function syncTsena(env) {
     const known = new Set((await all(env, 'SELECT doc_id FROM tsena_links')).map((x) => x.doc_id));
     // Livraisons déjà présentes dans Alefa (import manuel, même n°) : on les relie simplement.
     for (const d of docs.filter((x) => !known.has(x.docId) && x.no)) {
-      const ex = await one(env, 'SELECT id FROM shipments WHERE external_ref = ? AND id NOT IN (SELECT shipment_id FROM tsena_links) ORDER BY id DESC LIMIT 1', d.no);
+      const ex = await one(env, "SELECT id FROM shipments WHERE external_ref = ? AND status <> 'cancelled' AND id NOT IN (SELECT shipment_id FROM tsena_links) ORDER BY id DESC LIMIT 1", d.no);
       if (ex) { await run(env, 'INSERT OR IGNORE INTO tsena_links (shipment_id, doc_id, last_step, synced_at) VALUES (?,?,?,?)', ex.id, d.docId, null, now()); known.add(d.docId); out.linked = (out.linked || 0) + 1; }
     }
-    const fresh = docs.filter((d) => !known.has(d.docId) && d.phone && d.status === 'attente');
+    const fresh = docs.filter((d) => !known.has(d.docId) && d.phone && ['attente', 'confirmee'].includes(d.status));
     if (fresh.length) {
       const sender = await shopAccount(env, s);
       for (const d of fresh) {
@@ -189,8 +195,14 @@ export async function syncTsena(env) {
         const d = o.doc_id in seen ? seen[o.doc_id] : fetched[o.doc_id];
         if (d === undefined) continue;
         try {
-          if (d === null) { if (await partnerCancel(env, o.id, 'Livraison supprimée dans Tsena')) { out.cancelled = (out.cancelled || 0) + 1; await logSync(env, 'tsena', 'in', o.doc_id, true, 'supprimée dans Tsena → colis annulé'); } continue; }
-          if (d.status === 'livree' && o.last_step !== 'delivered') { if (await partnerCancel(env, o.id, 'Livrée par la boutique (Tsena)')) { out.cancelled = (out.cancelled || 0) + 1; await logSync(env, 'tsena', 'in', d.no, true, 'marquée Livrée dans Tsena → colis Alefa annulé'); } continue; }
+          // Annulée, supprimée ou livrée par la boutique dans Tsena : le colis Alefa est annulé et le lien retiré
+          // (si la livraison est « remise en attente » dans Tsena, elle repart comme une nouvelle demande).
+          const why = d === null ? 'Livraison supprimée dans Tsena' : d.status === 'annulee' ? 'Livraison annulée dans Tsena' : d.status === 'livree' && o.last_step !== 'delivered' ? 'Livrée par la boutique (Tsena)' : null;
+          if (why) {
+            if (await partnerCancel(env, o.id, why)) { out.cancelled = (out.cancelled || 0) + 1; await logSync(env, 'tsena', 'in', d?.no || o.doc_id, true, `${why} → colis Alefa annulé`); }
+            if (o.status !== 'picked_up') await run(env, 'DELETE FROM tsena_links WHERE doc_id = ?', o.doc_id);
+            continue;
+          }
           const addr = d.address || 'Adresse à confirmer';
           const g = addr !== o.drop_addr ? await geocodeTana(addr) : null;
           const changed = await partnerUpdate(env, o.id, { recipient_name: d.clientName || 'Client', recipient_phone: d.phone, drop_addr: addr, drop_lat: g?.[0], drop_lng: g?.[1],
@@ -211,9 +223,17 @@ export async function syncTsena(env) {
       if (cur && base !== (x.base_note ?? '')) await run(env, 'UPDATE tsena_links SET base_note = ? WHERE shipment_id = ?', base, x.shipment_id);
       if (step === x.last_step) continue;
       const fields = { alefaRef: x.ref, alefaStep: step, alefaPin: x.pin || '', alefaTrack: x.track_token && s.app_url ? `${s.app_url}/suivi/${x.track_token}` : '' };
-      if (TSENA_STATUS[step]) fields.status = TSENA_STATUS[step];
+      // Le statut Tsena n'avance que vers l'avant (jamais de retour en arrière si la boutique l'a déjà avancé) ;
+      // chaque changement est ajouté à l'historique de la carte (« … · Alefa »).
+      const want = TSENA_STATUS[step] || (['refused', 'returned'].includes(step) ? 'annulee' : null);
+      const have = cur?.status;
+      if (want && cur && want !== have && (want === 'annulee' ? have !== 'livree' : (RANK[want] ?? 0) > (RANK[have] ?? -1))) {
+        fields.status = want;
+        const at = new Date().toISOString();
+        fields.log = [...(Array.isArray(cur?.log) ? cur.log : []).slice(-9), { s: want, at, by: x.courier_name ? `${x.courier_name.split(' ')[0]} · Alefa` : 'Alefa' }];
+      }
       if (x.courier_name) fields.driver = `${x.courier_name.split(' ')[0]} (Alefa)`;
-      if (step === 'delivered') fields.doneAt = new Date(x.done_at || now()).toISOString();
+      if (fields.status === 'livree') fields.doneAt = new Date(x.done_at || now()).toISOString();
       const who = x.courier_name ? ` · ${x.courier_name.split(' ')[0]}` : '';
       const when = step === 'scheduled' && x.departure_at ? ` · départ ${fmtMg(x.departure_at)}` : '';
       fields.note = noteWith(base, `${STEP_LABELS[step] || step}${who}${when}${x.outcome_note && ['refused', 'cancelled', 'returning', 'returned'].includes(step) ? ' — ' + x.outcome_note : ''}`);

@@ -13,7 +13,10 @@ const fs = { // « Firestore » de Tsena
   d2: { no: 'L-00002', status: 'cours', clientName: 'Rasoa Hanta', phone: '034 12 345 67', address: 'Ampandrana', fee: 2000, amount: 0 },
 };
 const patches = [];
-const val = (v) => (typeof v === 'number' ? { integerValue: String(v) } : { stringValue: v });
+const val = (v) => (Array.isArray(v) ? { arrayValue: { values: v.map(val) } } : v && typeof v === 'object' ? { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, val(x)])) } }
+  : typeof v === 'number' ? { integerValue: String(v) } : { stringValue: v });
+const dec = (v) => ('arrayValue' in v ? (v.arrayValue.values || []).map(dec) : 'mapValue' in v ? Object.fromEntries(Object.entries(v.mapValue.fields || {}).map(([k, x]) => [k, dec(x)]))
+  : 'integerValue' in v ? Number(v.integerValue) : v.stringValue ?? null);
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   const J = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'content-type': 'application/json' } });
@@ -32,7 +35,7 @@ globalThis.fetch = async (url, init = {}) => {
     const id = u.split('/deliveries/')[1].split('?')[0];
     assert.match(u, /currentDocument\.exists=true/);
     if (!fs[id]) return J({ error: { message: 'NOT_FOUND' } }, 404);
-    const f = Object.fromEntries(Object.entries(JSON.parse(init.body).fields).map(([k, v]) => [k, v.stringValue ?? Number(v.integerValue)]));
+    const f = Object.fromEntries(Object.entries(JSON.parse(init.body).fields).map(([k, v]) => [k, dec(v)]));
     Object.assign(fs[id], f); patches.push([id, f]);
     return J({});
   }
@@ -150,4 +153,38 @@ test('changements faits dans Tsena suivis automatiquement : modification, suppre
   assert.equal(st('L-00007').status, 'cancelled'); assert.match(st('L-00007').outcome_note, /boutique/);
   assert.equal(st('L-00008').status, 'cancelled'); assert.match(st('L-00008').outcome_note, /supprimée/);
   assert.equal(fs.d7.status, 'livree', 'Tsena garde « Livrée »');
+});
+
+test('nouveaux statuts Tsena : Confirmée importée, Annulée suivie, « Remettre en attente » repart, historique « Alefa », jamais de retour en arrière', async () => {
+  const { createShipment } = await import('../src/shipments.js');
+  // un livreur avec un départ pour que les colis soient programmés
+  env.DB.raw.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261349999999','Santatra Vélo','courier','x','x','active',0)").run();
+  const cid = env.DB.raw.prepare("SELECT id FROM users WHERE phone='+261349999999'").get().id;
+  fs.d9 = { no: 'L-00009', status: 'confirmee', clientName: 'Lova', phone: '034 90 909 09', address: 'Analakely', amount: 7000, fee: 3000, log: [{ s: 'confirmee', at: '2026-11-17T11:00:00Z', by: 'oasis' }] };
+  let r = await syncTsena(env);
+  assert.equal(r.imported, 1, 'Confirmée importée');
+  // Alefa programme le colis avec un livreur → Tsena passe « Confirmée » (déjà) : pas de changement de statut, mais historique intact
+  env.DB.raw.prepare("UPDATE shipments SET status='assigned', courier_id=? WHERE external_ref='L-00009'").run(cid);
+  await syncTsena(env);
+  assert.equal(fs.d9.status, 'confirmee'); assert.equal(fs.d9.log.length, 1);
+  // le livreur récupère → « En route », ajouté à l'historique par Alefa
+  env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00009'").run();
+  await syncTsena(env);
+  assert.equal(fs.d9.status, 'cours'); assert.equal(fs.d9.log.at(-1).s, 'cours'); assert.equal(fs.d9.log.at(-1).by, 'Santatra · Alefa'); assert.equal(fs.d9.log[0].by, 'oasis');
+  // la boutique a déjà mis « En route » à la main : Alefa (programmé) ne le remet pas en « Confirmée »
+  fs.d10 = { no: 'L-00010', status: 'attente', clientName: 'Fara', phone: '034 10 101 01', address: 'Isotry', amount: 5000, fee: 3000 };
+  await syncTsena(env);
+  fs.d10.status = 'cours';
+  env.DB.raw.prepare("UPDATE shipments SET status='assigned', courier_id=? WHERE external_ref='L-00010'").run(cid);
+  await syncTsena(env);
+  assert.equal(fs.d10.status, 'cours', 'pas de retour en arrière');
+  // annulée dans Tsena → colis annulé ; « Remettre en attente » → nouvelle demande Alefa
+  fs.d10.status = 'annulee';
+  r = await syncTsena(env);
+  assert.equal(r.cancelled, 1);
+  assert.equal(env.DB.raw.prepare("SELECT status FROM shipments WHERE external_ref='L-00010' ORDER BY id DESC").get().status, 'cancelled');
+  fs.d10.status = 'attente';
+  r = await syncTsena(env);
+  assert.equal(r.imported, 1, 'repart comme nouvelle demande');
+  assert.equal(env.DB.raw.prepare("SELECT status FROM shipments WHERE external_ref='L-00010' ORDER BY id DESC").get().status, 'pending');
 });
