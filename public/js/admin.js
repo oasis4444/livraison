@@ -193,7 +193,20 @@ const VIEWS = {
       <td class="small">${t(d.payment_method)}${d.payment_method !== 'cash' ? ` <span class="status-pill st-${d.payment_status === 'paid' ? 'delivered' : 'pending'}">${d.payment_status}</span>` : ''}</td><td>${statusPill(d.status)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune livraison</td></tr>';
   },
 
-  async couriers() { return usersView('courier'); },
+  async couriers() {
+    await usersView('courier');
+    // Colis récupérés / livrés par livreur sur la période choisie.
+    const box = document.createElement('div'); box.className = 'panel'; box.style.marginBottom = '16px';
+    const days = Number(sessionStorage.getItem('alefa_stat_days') || 1);
+    const r = await api('GET', `/api/admin/courier-stats?days=${days}`);
+    box.innerHTML = `<div class="row between wrap"><h3>📦 Colis par livreur</h3><div class="row" style="gap:6px">${[[1, "Aujourd'hui"], [7, '7 jours'], [30, '30 jours']].map(([d, l]) => `<button class="btn sm ${d === days ? 'primary' : ''}" data-days="${d}">${l}</button>`).join('')}</div></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Livreur</th><th>Récupérés</th><th>Déposés au centre</th><th>Repris au centre</th><th>Livrés</th><th>Refusés</th><th>En cours</th><th>Encaissé</th></tr></thead><tbody>
+      ${r.couriers.map((c) => `<tr><td><b>${esc(c.name)}</b></td><td>${c.picked}</td><td>${c.to_centre}</td><td>${c.from_centre}</td><td><b>${c.delivered}</b></td><td>${c.refused}</td><td>${c.open}</td><td>${ar(c.collected)}</td></tr>`).join('')}
+      <tr style="font-weight:800"><td>Total</td>${['picked', 'to_centre', 'from_centre', 'delivered', 'refused', 'open'].map((k) => `<td>${r.couriers.reduce((a, c) => a + c[k], 0)}</td>`).join('')}<td>${ar(r.couriers.reduce((a, c) => a + c.collected, 0))}</td></tr></tbody></table></div>`;
+    box.querySelectorAll('[data-days]').forEach((b) => b.onclick = () => { sessionStorage.setItem('alefa_stat_days', b.dataset.days); show(); });
+    const main = document.querySelector('main'); const h = main.querySelector('.head, h2')?.closest('div') || main.firstElementChild;
+    h ? h.after(box) : main.prepend(box);
+  },
   async clients() { return usersView('client'); },
 
   async payments() {
@@ -258,7 +271,9 @@ const VIEWS = {
       </div><div class="stack">
         <div class="panel stack"><h3>Colis du centre</h3><div class="row">${f('default_fee', 'Frais de livraison par défaut (Ar)', 'Modifiable par axe et par colis')}
           <label class="field grow"><span>Le livreur peut modifier les frais</span><select class="input" data-s="courier_can_edit_fee"><option value="1" ${s.courier_can_edit_fee === '1' ? 'selected' : ''}>Oui</option><option value="0" ${s.courier_can_edit_fee !== '1' ? 'selected' : ''}>Non</option></select></label></div>
-          <div class="row">${f('centre_name', 'Nom du centre', '', 'text')}${f('centre_addr', 'Adresse du centre', '', 'text')}</div></div>
+          <div class="row">${f('centre_name', 'Nom du centre', '', 'text')}${f('centre_addr', 'Adresse du centre', 'Point de relais : quartier, rue (ex : Ampandrana, Lot II M 45)', 'text')}</div>
+          <div class="row"><label class="field grow"><span>Relais par le centre (2 livreurs)</span><select class="input" data-s="relay_enabled"><option value="1" ${s.relay_enabled !== '0' ? 'selected' : ''}>Oui</option><option value="0" ${s.relay_enabled === '0' ? 'selected' : ''}>Non</option></select></label><label class="field grow"><span>Photo obligatoire à la remise</span><select class="input" data-s="delivery_photo_required"><option value="1" ${s.delivery_photo_required !== '0' ? 'selected' : ''}>Oui</option><option value="0" ${s.delivery_photo_required === '0' ? 'selected' : ''}>Non</option></select></label></div>
+          ${f('delivery_max_dist_m', 'Alerte si « remis » loin de l\'adresse (m)', 'Position GPS du livreur au moment de la remise')}</div>
         <div class="panel stack"><h3>Plateforme & paiements</h3>${f('platform_name', 'Nom', '', 'text')}${f('support_phone', 'Téléphone support', '', 'tel')}
           ${f('mvola_number', 'Numéro marchand MVola', '', 'text')}${f('orange_money_number', 'Numéro Orange Money', '', 'text')}${f('airtel_money_number', 'Numéro Airtel Money', '', 'text')}</div>
         <div class="panel"><div class="row between"><h3>Zones de service</h3><button class="btn sm" data-act="zone">＋ Zone</button></div>
@@ -681,12 +696,14 @@ async function planningForm(courierId, name) {
 async function parcelDetail(id) {
   const d = await shipDetail(id, { role: 'admin', onChange: () => show() });
   const s = d.shipment;
-  if (!['pending', 'assigned'].includes(s.status)) return;
+  const canPick = ['pending', 'assigned'].includes(s.status), canDel = canPick || ['to_centre', 'at_centre'].includes(s.step);
+  if (canDel) await suggestBox(d, s, canPick);
+  if (!canPick) return;
   const sch = await api('GET', '/api/schedule');
   const couriers = (await api('GET', '/api/admin/users?role=courier&status=active')).users;
   const box = document.createElement('div');
   box.className = 'card';
-  box.innerHTML = `<b>Programmer sur un départ</b>
+  box.innerHTML = `<b>Ou : programmer sur un départ précis</b>
     <select class="input" data-dep style="margin-top:6px"><option value="auto">⚡ Automatique (prochain départ couvrant l'adresse)</option>
       ${sch.departures.filter((x) => !x.started).map((x) => `<option value="${x.slot_id}|${x.departure_at}">${dt(x.departure_at)} · ${esc(x.axe)} · 🚲 ${esc(x.courier)} (${x.load} colis)</option>`).join('')}
       <optgroup label="Livreur sans départ précis">${couriers.map((u) => `<option value="c${u.id}">🚲 ${esc(u.name)}</option>`).join('')}</optgroup></select>
@@ -696,6 +713,40 @@ async function parcelDetail(id) {
     const v = box.querySelector('[data-dep]').value;
     const body = v === 'auto' ? { auto: true } : v.startsWith('c') ? { courier_id: Number(v.slice(1)) } : { slot_id: Number(v.split('|')[0]), departure_at: Number(v.split('|')[1]) };
     try { await api('POST', `/api/shipments/${s.id}/assign`, body); d.modal.close(); toast('Colis programmé', 'ok'); show(); } catch (e) { toastErr(e); }
+  };
+}
+
+// Livreurs proposés pour la récupération et la livraison (passent par là, distance GPS en direct, prochain départ, charge).
+// Choisir deux livreurs différents = relais par le centre.
+async function suggestBox(d, s, canPick) {
+  const g = await api('GET', `/api/admin/shipments/${s.id}/suggest`);
+  let pick = g.current.pickup || '', del = g.current.delivery || '';
+  const box = document.createElement('div');
+  box.className = 'card stack';
+  const row = (c, leg) => `<label class="row" style="gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line);cursor:pointer">
+      <input type="radio" name="${leg}" value="${c.id}" ${String(leg === 'p' ? pick : del) === String(c.id) ? 'checked' : ''} style="margin-top:4px">
+      <span class="grow small"><b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'}${c.refused ? ' <span style="color:var(--red)">a refusé</span>' : ''}
+        <span class="muted">${c.dist_km != null ? ` · 📍 ${String(c.dist_km).replace('.', ',')} km maintenant` : ''}${c.on_trip ? ' · 🛣 trajet passe par là' : ''}${c.axe ? ` · 🧭 axe ${esc(c.axe)}` : ''}
+        ${c.next_departure ? ` · 🕘 ${dt(c.next_departure.at)} ${esc(c.next_departure.label || '')}` : ''} · ${c.load} colis en cours</span></span></label>`;
+  const list = (arr, leg) => arr.slice(0, 6).map((c) => row(c, leg)).join('') + (arr.length > 6 ? `<details class="small"><summary>${arr.length - 6} autre(s)</summary>${arr.slice(6).map((c) => row(c, leg)).join('')}</details>` : '');
+  box.innerHTML = `<b>🚲 Livreurs proposés</b>
+    <div class="tiny muted">En tête : ceux dont le trajet ou l'axe passe par l'adresse, puis les plus proches (GPS en direct). Deux livreurs différents = passage par le centre.</div>
+    ${canPick ? `<div><div class="small"><b>🟢 Récupération</b> — ${esc(s.sender.address)}</div>${list(g.pickup, 'p')}</div>` : ''}
+    <div><div class="small"><b>🟠 Livraison</b> — ${esc(s.recipient.address)}${canPick ? '' : ' (depuis le centre)'}</div>${list(g.delivery, 'd')}</div>
+    <div class="small" data-plan></div>
+    <button class="btn primary block" data-save>Enregistrer les livreurs</button>`;
+  d.actions.prepend(box);
+  const sum = () => {
+    const n = (id) => [...g.pickup, ...g.delivery].find((c) => String(c.id) === String(id))?.name?.split(' ')[0] || '?';
+    box.querySelector('[data-plan]').innerHTML = canPick ? (pick && del && String(pick) !== String(del) ? `🏢 Relais : <b>${esc(n(pick))}</b> → centre → <b>${esc(n(del))}</b>` : pick ? `➡️ Direct : <b>${esc(n(pick))}</b> fait tout le trajet` : '') : del ? `Livraison depuis le centre : <b>${esc(n(del))}</b>` : '';
+  };
+  box.addEventListener('change', (e) => { if (e.target.name === 'p') { pick = e.target.value; if (!del || String(del) === String(g.current.delivery)) { /* garde le choix */ } } if (e.target.name === 'd') del = e.target.value; sum(); });
+  sum();
+  box.querySelector('[data-save]').onclick = async () => {
+    try {
+      await api('POST', `/api/admin/shipments/${s.id}/plan`, canPick ? { pickup_courier_id: Number(pick), delivery_courier_id: Number(del || pick) } : { delivery_courier_id: Number(del) });
+      d.modal.close(); toast('Livreurs enregistrés', 'ok'); show();
+    } catch (e) { toastErr(e); }
   };
 }
 

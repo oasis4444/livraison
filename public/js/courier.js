@@ -308,25 +308,31 @@ async function loadWallet() {
 }
 
 async function loadMissions() {
-  const { shipments } = await api('GET', '/api/shipments');
+  const [{ shipments }, st] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/courier/stats').catch(() => null)]);
   const el = $('[data-colis]'); if (!el) return;
+  const me = state.user?.id, mg = state.lang === 'mg';
+  const mine = (x) => x.courier?.id === me;
   const grp = [
-    [state.lang === 'mg' ? '🔔 Iraka vaovao hekena' : '🔔 Nouvelles missions à accepter', shipments.filter((x) => x.status === 'assigned' && !x.accepted_at)],
-    [c('to_pickup'), shipments.filter((x) => x.status === 'assigned' && x.accepted_at)],
-    [c('to_deliver'), shipments.filter((x) => x.status === 'picked_up')],
+    [mg ? '🔔 Iraka vaovao hekena' : '🔔 Nouvelles missions à accepter', shipments.filter((x) => x.status === 'assigned' && !x.accepted_at && mine(x))],
+    [c('to_pickup'), shipments.filter((x) => x.status === 'assigned' && x.accepted_at && mine(x))],
+    [mg ? '🏢 Hapetraka ao amin\'ny centre' : '🏢 À déposer au centre', shipments.filter((x) => x.step === 'to_centre' && mine(x))],
+    [mg ? '📦 Halaina ao amin\'ny centre' : '📦 À prendre au centre', shipments.filter((x) => x.step === 'at_centre' && x.delivery_courier?.id === me)],
+    [c('to_deliver'), shipments.filter((x) => x.status === 'picked_up' && !['to_centre', 'at_centre'].includes(x.step) && mine(x))],
+    [mg ? '⏳ Ho avy amin\'ny centre (relais)' : '⏳ Arrivera au centre (relais)', shipments.filter((x) => x.relay && ['assigned', 'picked_up'].includes(x.status) && x.step !== 'at_centre' && x.delivery_courier?.id === me && !mine(x))],
     [c('to_return'), shipments.filter((x) => x.to_return)],
     [c('done_today'), shipments.filter((x) => ['delivered', 'refused', 'cancelled'].includes(x.status) && !x.to_return)],
   ];
   const cash = shipments.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + (x.collected || 0), 0);
-  const toLeave = shipments.filter((x) => x.step === 'scheduled').length;
-  el.innerHTML = (toLeave ? `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${state.lang === 'mg' ? 'Miala amin\'ny centre' : 'Je pars du centre'} (${toLeave} ${c('parcels')})</button>` : '') + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
+  const toLeave = shipments.filter((x) => x.step === 'scheduled' && mine(x)).length;
+  const stats = st?.today ? `<div class="row" style="gap:8px;margin-bottom:10px">${[[mg ? 'Nalaina' : 'Récupérés', st.today.picked + st.today.from_centre], [mg ? 'Natolotra' : 'Livrés', st.today.delivered], [mg ? 'Mandeha' : 'En cours', st.today.open]].map(([k, v]) => `<div class="card grow" style="text-align:center;padding:8px"><div style="font-size:1.3rem;font-weight:850">${v}</div><div class="tiny muted">${k} ${mg ? 'androany' : "aujourd'hui"}</div></div>`).join('')}</div>` : '';
+  el.innerHTML = stats + (toLeave ? `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${state.lang === 'mg' ? 'Miala amin\'ny centre' : 'Je pars du centre'} (${toLeave} ${c('parcels')})</button>` : '') + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
     + grp.filter(([, l]) => l.length).map(([title, l]) => `<h3>${esc(title)} (${l.length})</h3><div class="list">${l.map((x) => shipCard(x)).join('')}</div>`).join('')
     || `<p class="muted" style="text-align:center;padding:16px">${c('empty')}</p>`;
   // repères sur la carte
   for (const k of Object.keys(mk)) if (k.startsWith('s')) { mk[k].remove(); delete mk[k]; }
   for (const x of shipments) {
     if (x.status === 'assigned' && x.sender.lat != null) upsertMarker(map, mk, 's' + x.id, [x.sender.lat, x.sender.lng], icons.a())?.on('click', () => openShip(x.id));
-    if (x.status === 'picked_up' && x.recipient.lat != null) upsertMarker(map, mk, 's' + x.id, [x.recipient.lat, x.recipient.lng], icons.b())?.on('click', () => openShip(x.id));
+    if (x.status === 'picked_up' && mine(x) && !['to_centre', 'at_centre'].includes(x.step) && x.recipient.lat != null) upsertMarker(map, mk, 's' + x.id, [x.recipient.lat, x.recipient.lng], icons.b())?.on('click', () => openShip(x.id));
   }
 }
 const openShip = (id) => shipDetail(id, { role: 'courier', onChange: () => { lastSig = ''; render(); } });

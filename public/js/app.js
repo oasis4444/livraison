@@ -20,6 +20,28 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 
 // Suivi public d'un colis : /suivi/<jeton> (sans compte, position du livreur visible uniquement pendant la livraison).
 const TRACK = location.pathname.match(/^\/suivi\/([A-Za-z0-9_-]{8,40})\/?$/);
+const TRACK_FIND = /^\/suivi\/?$/.test(location.pathname);
+// « Suivre mon colis » : numéro du colis ou de la commande + téléphone → carte en direct (sans compte).
+function trackFindView() {
+  const mg = state.lang === 'mg', q = new URLSearchParams(location.search);
+  app.className = 'auth';
+  app.innerHTML = `<div class="auth-card stack">
+    <div class="row between"><div class="row" style="gap:8px"><img src="/icon.svg" alt="" style="width:34px"><b>Alefa</b></div>${langSwitch()}</div>
+    <h2>📍 ${mg ? 'Arahina ny colis-ko' : 'Suivre mon colis'}</h2>
+    <form class="stack" data-f>
+      <label class="field"><span>${mg ? 'Laharan\'ny colis na ny baiko' : 'Numéro du colis ou de la commande'}</span><input class="input" name="ref" required placeholder="AL7X2K9QP · L-00004" value="${esc(q.get('ref') || '')}" autocapitalize="characters"></label>
+      <label class="field"><span>${mg ? 'Laharan\'ny finday (mpandray na mpandefa)' : 'Votre téléphone (destinataire ou expéditeur)'}</span><input class="input" name="phone" type="tel" required placeholder="034 12 345 67"></label>
+      <button class="btn primary lg block">${mg ? 'Jereo' : 'Voir où est mon colis'}</button>
+    </form>
+    <p class="small muted" style="text-align:center"><a href="/">${mg ? '← Hiditra' : '← Connexion'}</a></p></div>`;
+  bind(app, { lang: (el) => { setLang(el.dataset.l); trackFindView(); } });
+  app.querySelector('[data-f]').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try { const r = await api('GET', `/api/track-find?ref=${encodeURIComponent(f.get('ref'))}&phone=${encodeURIComponent(f.get('phone'))}`); location.href = `/suivi/${r.token}`; }
+    catch (err) { toastErr(err); }
+  });
+}
 async function trackView(token) {
   const core = await import('./core.js');
   const mg = state.lang === 'mg';
@@ -38,6 +60,8 @@ async function trackView(token) {
     app.querySelector('[data-info]').innerHTML = `<div style="font-size:1.15rem"><b>${esc(r.step_label || r.step)}</b></div>
       ${r.can_confirm ? `<button class="btn primary lg block" data-recv style="margin:8px 0">✅ ${mg ? 'Tonga ny entana — alefaso ny kaody amin\'ny livreur' : 'J\'ai reçu mon colis — envoyer le code au livreur'}</button>` : ''}
       ${r.confirmed && !r.done_at ? `<div class="small" style="color:var(--green)"><b>✅ ${mg ? 'Voaray ny fanamarinanao, nalefa tany amin\'ny livreur ny kaody' : 'Merci ! Le code a été transmis au livreur'}</b></div>` : ''}
+      ${r.contents || r.size ? `<div class="small muted">📦 ${esc([r.contents, r.size].filter(Boolean).join(' · '))}</div>` : ''}
+      ${r.relay && ['to_centre', 'at_centre'].includes(r.step) ? `<div class="small muted">🏢 ${mg ? 'Mandalo ao amin\'ny centre Alefa ny colis-nao, avy eo livreur iray hafa no hitondra azy any aminao.' : 'Votre colis passe par le centre Alefa, puis un autre livreur vous l\'apporte.'}</div>` : ''}
       <div class="small muted">${r.courier ? `🚲 ${esc(r.courier)}` : ''}${eta ? ` · ${mg ? 'Tonga ao anatin\'ny' : 'Arrivée dans'} ~${eta} min` : ''}${!r.position && r.courier && !r.done_at ? ` · ${mg ? 'Mbola tsy hita ny toerany' : 'Position visible pendant la livraison'}` : ''}</div>`;
     const rb = app.querySelector('[data-recv]');
     if (rb) rb.onclick = async () => {
@@ -57,6 +81,7 @@ async function trackView(token) {
 
 async function boot() {
   if (TRACK) return trackView(TRACK[1]);
+  if (TRACK_FIND) return trackFindView();
   state.config = await api('GET', '/api/config').catch(() => ({ zones: [] }));
   if (state.token) {
     try {
@@ -115,7 +140,7 @@ function authView(mode = 'login', role = 'client') {
         <label class="row small"><input type="checkbox" name="is_business"> ${t('business')}</label>
         <label class="field hidden" data-company><span>${t('company')}</span><input class="input" name="company"></label>` : ''}
       <button class="btn primary lg block" type="submit">${mode === 'register' ? t('create_account') : t('sign_in')}</button>
-      <p class="small muted" style="text-align:center">🚲 <a href="/livreur">${t('courier_space_link')}</a></p>
+      <p class="small muted" style="text-align:center">📍 <a href="/suivi">${state.lang === 'mg' ? 'Arahina ny colis-ko' : 'Suivre mon colis'}</a> · 🚲 <a href="/livreur">${t('courier_space_link')}</a></p>
     </form>
   </div></div>`;
   bind(app, {

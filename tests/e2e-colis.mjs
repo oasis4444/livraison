@@ -102,8 +102,14 @@ try {
     await client.fill('[data-rn]', 'Koto'); await client.fill('[data-rp]', '034 77 777 77');
     await client.fill('[data-a=drop]', 'Behoririka'); await client.click('[data-s=drop] button >> nth=0');
     await client.fill('[data-v]', '12000'); await client.waitForSelector('[data-dep]');
+    // contenu et taille obligatoires
+    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Indiquez ce que contient le colis');
+    await client.fill('[data-d]', 'Chaussures'); await client.click('[data-sz^="30|"]');
+    if (await client.inputValue('[data-dl]') !== '30') throw new Error('taille M non remplie');
+    await client.fill('[data-kg]', '1,2');
     await client.screenshot({ path: 'tests/screens/24-client-envoi.png' });
-    await client.click('[data-ok]'); await client.waitForSelector('text=Programmé');
+    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Code à transmettre au destinataire');
+    await client.click('.modal-back [data-x]');
   });
   await step('lien « Alefa » depuis le logiciel de vente : formulaire prérempli', async () => {
     await client.goto(BASE + '/envoyer?ref=L-77&nom=Koto&tel=0347777777&adresse=Behoririka&valeur=15000&desc=Sac');
@@ -170,6 +176,9 @@ try {
     const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
     await client.waitForSelector(`text=🔑 ${pin}`);
     await courier.click('text=✅ Livré et payé');
+    // preuve : sans photo du colis remis, impossible de confirmer
+    await courier.fill('.modal [data-pin]', '1234'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Prenez une photo du colis remis');
+    await courier.setInputFiles('.modal [data-dphoto]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('.modal [data-dprev][src^="data:image"]');
     await courier.fill('.modal [data-pin]', pin === '0000' ? '1111' : '0000'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Code incorrect');
     await courier.fill('.modal [data-pin]', pin);
     await courier.screenshot({ path: 'tests/screens/31-livreur-pin.png' });
@@ -230,10 +239,50 @@ try {
     await courier.waitForSelector('text=Le client a confirmé — code reçu', { timeout: 10000 });
     const pin = await courier.inputValue('[data-pin]'); if (!/^\d{4}$/.test(pin)) throw new Error('code non reçu : ' + pin);
     await courier.screenshot({ path: 'tests/screens/32-livreur-code-recu.png' });
+    await courier.setInputFiles('.modal [data-dphoto]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('.modal [data-dprev][src^="data:image"]');
     await courier.click('[data-ok]'); await courier.waitForSelector('.toast >> text=Livré', { timeout: 10000 }).catch(() => {});
     let st = '';
     for (let i = 0; i < 20 && st !== 'delivered'; i++) { await courier.waitForTimeout(500); st = await courier.evaluate(async (id) => (await (await fetch(`/api/shipments/${id}`, { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token_livreur') } })).json()).shipment.status, id); }
     if (st !== 'delivered') throw new Error('statut ' + st);
+  });
+  await step('admin : livreurs proposés, relais par le centre (Hery récupère → centre → Tiana livre), compteurs par livreur', async () => {
+    const tok = await admin.evaluate(() => localStorage.getItem('alefa_token'));
+    const A = (m, p, b) => admin.evaluate(async ({ m, p, b, tok }) => { const r = await fetch(p, { method: m, headers: { authorization: 'Bearer ' + tok, 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return r.json(); }, { m, p, b, tok });
+    await A('POST', '/api/admin/users', { role: 'courier', phone: '034 22 222 22', name: 'Tiana Vélo', cin: '101 211 123 457', password: 'velo1234' });
+    const koto = (await A('GET', '/api/admin/shipments?q=Koto')).shipments[0];
+    await admin.click('[data-v=parcels]'); await admin.click(`text=${koto.ref}`);
+    await admin.waitForSelector('text=Livreurs proposés');
+    const ids = await A('GET', `/api/admin/shipments/${koto.id}/suggest`);
+    const hery = ids.pickup.find((c) => c.name === 'Hery Vélo').id, tiana = ids.delivery.find((c) => c.name === 'Tiana Vélo').id;
+    await admin.check(`input[name=p][value="${hery}"]`); await admin.check(`input[name=d][value="${tiana}"]`);
+    await admin.waitForSelector('text=Relais :');
+    await admin.screenshot({ path: 'tests/screens/40-admin-livreurs-proposes.png' });
+    await admin.click('[data-save]'); await admin.waitForSelector('text=Livreurs enregistrés');
+    let x = (await A('GET', `/api/shipments/${koto.id}`)).shipment;
+    if (!x.relay || x.pickup_courier.id !== hery || x.delivery_courier.id !== tiana) throw new Error('relais non enregistré ' + JSON.stringify([x.relay, x.pickup_courier, x.delivery_courier]));
+    // Hery récupère (photo + valeur), puis « Déposé au centre » depuis son application
+    const photo = 'data:image/jpeg;base64,' + (await import('node:fs')).readFileSync('tests/fixture-colis.jpg').toString('base64');
+    await courier.evaluate(async ({ id, photo }) => { const h = { authorization: 'Bearer ' + localStorage.getItem('alefa_token_livreur'), 'content-type': 'application/json' };
+      await fetch(`/api/shipments/${id}/accept`, { method: 'POST', headers: h, body: '{}' }); const r = await fetch(`/api/shipments/${id}/pickup`, { method: 'POST', headers: h, body: JSON.stringify({ value: 12000, photo }) }); if (!r.ok) throw new Error(await r.text()); }, { id: koto.id, photo });
+    await courier.click('[data-t=colis]'); await courier.waitForSelector('text=À déposer au centre');
+    await courier.click(`[data-act=ship][data-id="${koto.id}"]`); await courier.click('text=Déposé au centre');
+    await courier.waitForSelector('.toast >> text=Au centre');
+    // le centre remet le colis à Tiana
+    await admin.click('[data-v=parcels]'); await admin.click(`text=${koto.ref}`); await admin.click('text=Remis à Tiana');
+    x = (await A('GET', `/api/shipments/${koto.id}`)).shipment;
+    if (x.step !== 'en_route' || x.courier.id !== tiana) throw new Error('reprise au centre : ' + x.step);
+    await admin.click('[data-v=couriers]'); await admin.waitForSelector('text=Colis par livreur');
+    const row = await admin.textContent('tr:has-text("Hery Vélo")'); if (!/Hery Vélo\s*\d*[1-9]/.test(row.replace(/\s+/g, ' '))) throw new Error('compteur Hery : ' + row);
+    await admin.screenshot({ path: 'tests/screens/41-admin-colis-par-livreur.png' });
+  });
+  await step('« Suivre mon colis » : numéro + téléphone, sans compte', async () => {
+    const p = await (await ctx(null)).newPage(); watch(p, 'suivi-num');
+    await p.goto(BASE + '/'); await p.click('text=Suivre mon colis');
+    await p.fill('[name=ref]', 'CMD-1042'); await p.fill('[name=phone]', '034 99 999 99'); await p.click('text=Voir où est mon colis');
+    await p.waitForSelector('text=Aucun colis');
+    const tel = await admin.evaluate(async () => (await (await fetch('/api/admin/shipments?q=CMD-1042', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } })).json()).shipments[0].recipient.phone);
+    await p.fill('[name=phone]', tel); await p.click('text=Voir où est mon colis');
+    await p.waitForURL(/\/suivi\/[0-9a-f]{24}/); await p.waitForSelector('text=CMD-1042');
   });
   if (errors.length) { console.log('\nErreurs JS :\n' + errors.join('\n')); process.exitCode = 1; } else console.log('\nAucune erreur JavaScript ✔');
 } catch (e) {

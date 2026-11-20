@@ -71,13 +71,13 @@ test('pas de doublon, et l\'avancement Alefa est réécrit dans Tsena', async ()
   env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00001'").run();
   r = await syncTsena(env);
   assert.equal(r.updated, 1); assert.equal(fs.d1.status, 'cours'); assert.match(fs.d1.alefaPin, /^\d{4}$/);
-  assert.equal(fs.d1.note, 'Livrer avant 11h — 🚲 Alefa : Récupéré', 'note d\'origine conservée + statut Alefa');
+  assert.match(fs.d1.note, /^Livrer avant 11h — 🚲 Alefa : Récupéré · suivi AL\w+$/, 'note d\'origine conservée + statut Alefa + numéro de suivi');
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00001'").run(Date.now());
   await syncTsena(env);
   assert.equal(fs.d1.status, 'livree'); assert.ok(fs.d1.doneAt); assert.equal(fs.d1.alefaStep, 'delivered');
   r = await syncTsena(env);
   assert.equal(r.updated, 0, 'rien de nouveau');
-  assert.equal(fs.d1.note, 'Livrer avant 11h — 🚲 Alefa : Livré');
+  assert.match(fs.d1.note, /^Livrer avant 11h — 🚲 Alefa : Livré · suivi AL\w+$/);
   // nouvelle livraison saisie dans Tsena → arrive à la synchronisation suivante
   fs.d3 = { no: 'L-00003', status: 'attente', clientName: 'Koto', phone: '034 99 888 77', address: 'Behoririka', amount: 12000, fee: 0 };
   r = await syncTsena(env);
@@ -102,12 +102,12 @@ test('statut visible dans Tsena dès la programmation, livraison supprimée dans
   fs.d5 = { no: 'L-00005', status: 'attente', clientName: 'Soa', phone: '034 77 888 99', address: 'Ampasika', amount: 6000, fee: 3000, note: '' };
   await syncTsena(env); // import
   await syncTsena(env); // statut renvoyé
-  assert.match(fs.d5.note, /^🚲 Alefa : À programmer$/);
+  assert.match(fs.d5.note, /^🚲 Alefa : À programmer · suivi AL\w+$/);
   // l'utilisateur modifie sa note dans Tsena : elle est conservée
   fs.d5.note = 'Sonner 2 fois — ' + fs.d5.note;
   env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00005'").run();
   await syncTsena(env);
-  assert.equal(fs.d5.note, 'Sonner 2 fois — 🚲 Alefa : Récupéré');
+  assert.match(fs.d5.note, /^Sonner 2 fois — 🚲 Alefa : Récupéré · suivi AL\w+$/);
   delete fs.d5;
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00005'").run(Date.now());
   const r = await syncTsena(env);

@@ -34,19 +34,24 @@ const STEP = {
     nearby: 'Tout proche', delivered: 'Livré', refused: 'Refusé', cancelled: 'Annulé', returning: 'Retour expéditeur', returned: 'Rendu à l\'expéditeur', fee: 'Frais modifiés', assigned: 'Programmé',
     awaiting_recipient: 'Remis · à confirmer par le destinataire', awaiting_courier: 'Reçu · à confirmer par le livreur', courier_confirmed: 'Remise déclarée par le livreur',
     recipient_confirmed: 'Réception confirmée', pin_fail: 'Code PIN erroné', disputed: 'Réception contestée',
-    accepted: 'Mission acceptée', declined: 'Mission refusée par un livreur', released: 'Trajet annulé — réaffecté', updated: 'Modifié par la boutique' },
+    accepted: 'Mission acceptée', declined: 'Mission refusée par un livreur', released: 'Trajet annulé — réaffecté', updated: 'Modifié par la boutique',
+    to_centre: 'Vers le centre (relais)', at_centre: 'Au centre', centre_out: 'Repris au centre' },
   mg: { pending: 'Mbola tsy voalahatra', scheduled: 'Voalahatra', departed: 'Lasa (niala centre)', at_pickup: 'Tonga eo amin\'ny mpandefa', picked_up: 'Voaray', en_route: 'An-dalana',
     nearby: 'Efa akaiky', delivered: 'Tonga', refused: 'Nolavina', cancelled: 'Nofoanana', returning: 'Haverina amin\'ny mpandefa', returned: 'Naverina tamin\'ny mpandefa', fee: 'Saran-dalana novaina', assigned: 'Voalahatra',
     awaiting_recipient: 'Natolotra · miandry fanamarinan\'ny mpandray', awaiting_courier: 'Voaray · miandry fanamarinan\'ny livreur', courier_confirmed: 'Nambaran\'ny livreur fa natolotra',
     recipient_confirmed: 'Nohamafisin\'ny mpandray fa voaray', pin_fail: 'Kaody PIN diso', disputed: 'Nolavin\'ny mpandray fa tsy voaray',
-    accepted: 'Neken\'ny livreur', declined: 'Nolavin\'ny livreur iray', released: 'Nofoanana ny dia — natolotra livreur hafa', updated: 'Novain\'ny boutique' },
+    accepted: 'Neken\'ny livreur', declined: 'Nolavin\'ny livreur iray', released: 'Nofoanana ny dia — natolotra livreur hafa', updated: 'Novain\'ny boutique',
+    to_centre: 'Mankany amin\'ny centre (relais)', at_centre: 'Ao amin\'ny centre', centre_out: 'Nalaina tao amin\'ny centre' },
 };
 export const stepLabel = (k) => (STEP[state.lang] || STEP.fr)[k] || STEP.fr[k] || k;
 export const STEPS_FLOW = ['scheduled', 'departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'awaiting_recipient', 'delivered'];
-export const stepBar = (s) => { const i = STEPS_FLOW.indexOf(s.step === 'awaiting_courier' ? 'awaiting_recipient' : s.step); return i < 0 ? '' : `<div class="steps">${STEPS_FLOW.map((_, j) => `<i class="${j <= i ? 'on' : ''}"></i>`).join('')}</div>`; };
+export const STEPS_RELAY = ['scheduled', 'departed', 'at_pickup', 'to_centre', 'at_centre', 'en_route', 'nearby', 'awaiting_recipient', 'delivered'];
+export const stepBar = (s) => { const F = s.relay ? STEPS_RELAY : STEPS_FLOW; const k = s.step === 'awaiting_courier' ? 'awaiting_recipient' : s.relay && s.step === 'picked_up' ? 'en_route' : s.step; const i = F.indexOf(k); return i < 0 ? '' : `<div class="steps">${F.map((_, j) => `<i class="${j <= i ? 'on' : ''}"></i>`).join('')}</div>`; };
+/** « Robe · 30×25×8 cm · 0,6 kg » */
+export const sizeTxt = (s) => [s.contents || s.description, s.size ? `${s.size.l}×${s.size.w}×${s.size.h} cm` : '', s.weight_kg ? `${String(s.weight_kg).replace('.', ',')} kg` : ''].filter(Boolean).join(' · ');
 export const c = (k) => (state.lang === 'mg' ? L_MG : L_FR)[k] ?? L_FR[k] ?? k;
 
-const PILL = { pending: 'pending', scheduled: 'assigned', departed: 'assigned', at_pickup: 'assigned', picked_up: 'picked_up', en_route: 'picked_up', nearby: 'picked_up', awaiting_recipient: 'pending', awaiting_courier: 'pending', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled', returning: 'cancelled', returned: 'cancelled' };
+const PILL = { to_centre: 'picked_up', at_centre: 'assigned', pending: 'pending', scheduled: 'assigned', departed: 'assigned', at_pickup: 'assigned', picked_up: 'picked_up', en_route: 'picked_up', nearby: 'picked_up', awaiting_recipient: 'pending', awaiting_courier: 'pending', delivered: 'delivered', refused: 'cancelled', cancelled: 'cancelled', returning: 'cancelled', returned: 'cancelled' };
 export const shipPill = (s) => `<span class="status-pill st-${PILL[s.step] || 'pending'}">${esc(stepLabel(s.step))}</span>`;
 const dayLabel = (ms) => {
   const iso = (x) => new Date(x + 3 * 3600e3).toISOString().slice(0, 10), d = iso(ms);
@@ -57,6 +62,8 @@ export function shipCard(s, extra = '') {
   return `<div class="card" data-act="ship" data-id="${s.id}" style="cursor:pointer">
     <div class="row between"><span class="small"><b>${esc(s.ref)}</b>${s.external_ref ? ` <span class="muted">· ${esc(s.external_ref)}</span>` : ''}</span>${shipPill(s)}</div>
     <div class="route-line" style="margin:6px 0"><span class="dot"></span><span class="small ellipsis">${esc(s.sender.name)} — ${esc(s.sender.address)}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small ellipsis">${esc(s.recipient.name)} — ${esc(s.recipient.address)}</span></div>
+    ${sizeTxt(s) ? `<div class="tiny muted ellipsis">📦 ${esc(sizeTxt(s))}</div>` : ''}
+    ${s.relay ? `<div class="tiny" style="color:var(--blue,#2563eb)">🏢 ${state.lang === 'mg' ? 'Relais' : 'Relais'} : ${esc(s.pickup_courier?.name?.split(' ')[0] || '?')} → centre → ${esc(s.delivery_courier?.name?.split(' ')[0] || '?')}</div>` : ''}
     <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
 }
 
@@ -93,7 +100,12 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     <label class="field"><span>🟢 ${c('pickup_addr')}</span><div class="addr"><span class="ic"></span><input class="input" data-a="pickup" autocomplete="off" placeholder="Quartier, rue, repère…"><div class="act">${me ? '<button data-gps>◎</button>' : ''}</div><div class="suggest hidden" data-s="pickup"></div></div></label>
     <div class="row"><label class="field grow"><span>${c('rname')}</span><input class="input" data-rn value="${esc(P.nom || '')}"></label><label class="field grow"><span>${c('rphone')}</span><input class="input" data-rp type="tel" placeholder="034 12 345 67" value="${esc(P.tel || '')}"></label></div>
     <label class="field"><span>🟠 ${c('drop_addr')}</span><div class="addr"><span class="ic b"></span><input class="input" data-a="drop" autocomplete="off" placeholder="Quartier, rue, repère…" value="${esc(P.adresse || '')}"><div class="suggest hidden" data-s="drop"></div></div></label>
-    <div class="row"><label class="field grow"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label><label class="field grow"><span>${c('desc')}</span><input class="input" data-d value="${esc(P.desc || P.description || '')}"></label></div>
+    <label class="field"><span>📦 ${state.lang === 'mg' ? 'Inona no ao anaty colis?' : 'Que contient le colis ?'}${adminMode ? '' : ' *'}</span><input class="input" data-d placeholder="${state.lang === 'mg' ? 'Ohatra : akanjo 2, kiraro' : 'Ex : 2 robes, chaussures'}" value="${esc(P.desc || P.description || '')}"></label>
+    <div class="field"><span>📐 ${state.lang === 'mg' ? 'Haben\'ny colis (cm) : lava × sakany × haavony' : 'Taille du colis (cm) : longueur × largeur × hauteur'}${adminMode ? '' : ' *'}</span>
+      <div class="row" style="gap:6px;align-items:center"><input class="input" data-dl inputmode="decimal" placeholder="30" style="width:80px"> × <input class="input" data-dw inputmode="decimal" placeholder="20" style="width:80px"> × <input class="input" data-dh inputmode="decimal" placeholder="10" style="width:80px">
+        <input class="input" data-kg inputmode="decimal" placeholder="kg" style="width:80px" title="${state.lang === 'mg' ? 'Lanja (kg), tsy voatery' : 'Poids (kg), facultatif'}"></div>
+      <div class="row wrap" style="gap:6px;margin-top:6px">${[['S', 20, 15, 5], ['M', 30, 25, 15], ['L', 45, 35, 25], ['XL', 60, 40, 40]].map(([k, l, w, h]) => `<button type="button" class="btn sm" data-sz="${l}|${w}|${h}">${k} · ${l}×${w}×${h}</button>`).join('')}</div></div>
+    <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label>
     <label class="field"><span>${state.lang === 'mg' ? 'Laharan\'ny baiko (tsy voatery)' : 'N° de commande (facultatif)'}</span><input class="input" data-ref value="${esc(P.ref || '')}" placeholder="CMD-1042"></label>
     <div class="card" style="background:var(--bg);border:0" data-q><span class="small muted">${c('fee')} : —</span></div>
     <p class="tiny muted">${c('pay_info')}</p>
@@ -135,6 +147,8 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
       inp.value = f[k].label; box.classList.add('hidden');
       if (k === 'drop') quote();
     }
+    const sz = e.target.closest('[data-sz]');
+    if (sz) { const [l, w, h] = sz.dataset.sz.split('|'); el.querySelector('[data-dl]').value = l; el.querySelector('[data-dw]').value = w; el.querySelector('[data-dh]').value = h; }
     if (e.target.closest('[data-gps]')) {
       try { const [lat, lng] = await getPosition(); const label = await reverse(lat, lng); f.pickup = { label, lat, lng }; el.querySelector('[data-a=pickup]').value = label; } catch (err) { toastErr(err); }
     }
@@ -153,6 +167,8 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         sender_phone: adminMode ? txt('[data-sp]') : undefined,
         pickup_addr: pk.label, pickup_lat: pk.lat, pickup_lng: pk.lng, recipient_name: txt('[data-rn]'), recipient_phone: txt('[data-rp]'),
         drop_addr: dr.label, drop_lat: dr.lat, drop_lng: dr.lng, declared_value: Number(txt('[data-v]').replace(/\D/g, '')) || 0, description: txt('[data-d]'),
+        size: txt('[data-dl]') || txt('[data-dw]') || txt('[data-dh]') ? { l: txt('[data-dl]').replace(',', '.'), w: txt('[data-dw]').replace(',', '.'), h: txt('[data-dh]').replace(',', '.') } : undefined,
+        weight: txt('[data-kg]') ? txt('[data-kg]').replace(',', '.') : undefined,
         slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
       });
       m.close();
@@ -202,7 +218,13 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
       <div class="row" style="margin-top:6px">${call(s.sender.phone)}${isCourier && s.sender.lat != null ? `<a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${s.sender.lat},${s.sender.lng}&travelmode=bicycling">🧭</a>` : ''}</div></div>
     <div class="card"><div class="small muted">🟠 ${c('recipient')}</div><b>${esc(s.recipient.name)}</b> <span class="small">${esc(s.recipient.address)}</span>
       <div class="row" style="margin-top:6px">${call(s.recipient.phone)}${isCourier && s.recipient.lat != null ? `<a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${s.recipient.lat},${s.recipient.lng}&travelmode=bicycling">🧭</a>` : ''}</div></div>
-    ${s.description ? `<div class="small">📝 ${esc(s.description)}</div>` : ''}
+    ${sizeTxt(s) ? `<div class="small">📦 ${esc(sizeTxt(s))}</div>` : ''}
+    ${s.relay ? `<div class="card small" style="background:var(--bg);border:0">🏢 <b>${state.lang === 'mg' ? 'Relais amin\'ny centre' : 'Relais par le centre'}</b><br>
+      🟢 ${state.lang === 'mg' ? 'Maka' : 'Récupération'} : <b>${esc(s.pickup_courier?.name || '—')}</b> → 🏢 centre${s.centre_in_at ? ` <span class="muted">(${dt(s.centre_in_at)})</span>` : ''}<br>
+      🟠 ${state.lang === 'mg' ? 'Manatitra' : 'Livraison'} : <b>${esc(s.delivery_courier?.name || '—')}</b>${s.centre_out_at ? ` <span class="muted">(${state.lang === 'mg' ? 'nalaina' : 'repris'} ${dt(s.centre_out_at)})</span>` : ''}</div>` : ''}
+    ${s.delivery_proof && (isAdmin || role === 'sender') ? `<div class="card small" style="background:var(--bg);border:0">🧾 <b>${state.lang === 'mg' ? 'Porofo fanaterana' : 'Preuve de livraison'}</b>
+      ${s.delivery_proof.dist_m != null ? ` · 📍 ${s.delivery_proof.dist_m} m ${state.lang === 'mg' ? 'miala ny adiresy' : 'de l\'adresse'}${s.delivery_proof.dist_m > 300 ? ' ⚠️' : ' ✅'}` : ' · 📍 —'}
+      ${s.delivery_proof.photo ? `<img data-dph alt="" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;margin-top:6px;background:var(--bg)">` : ''}</div>` : ''}
     <div class="card" style="background:var(--bg);border:0">
       <div class="row between small"><span>${c('value')}</span><b>${ar(s.value ?? s.declared_value)}${s.value != null && s.value !== s.declared_value && s.declared_value ? ` <span class="muted">(annoncée ${ar(s.declared_value)})</span>` : ''}</b></div>
       <div class="row between small"><span>${c('fee')}</span><b>${ar(s.fee)} ${(isAdmin || isCourier) && ['pending', 'assigned', 'picked_up'].includes(s.status) ? '<button class="btn sm" data-fee>✎</button>' : ''}</b></div>
@@ -228,6 +250,7 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     <div class="stack" data-actions></div></div>`);
   const el = m.el;
   if (s.has_photo) photoUrl(s.id).then((u) => { const im = el.querySelector('[data-ph]'); if (u && im) im.src = u; });
+  if (s.delivery_proof?.photo && el.querySelector('[data-dph]')) fetch(`/api/shipments/${s.id}/delivery-photo`, { headers: { authorization: `Bearer ${state.token}` } }).then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) el.querySelector('[data-dph]').src = URL.createObjectURL(b); });
   if (courierMarker && s.courier?.lat != null) courierMarker(s);
   const acts = el.querySelector('[data-actions]');
   const done = () => { m.close(); onChange?.(); };
@@ -237,7 +260,7 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     await api('POST', `/api/shipments/${s.id}/fee`, { fee: Number(v) }).then(done).catch(toastErr);
   });
   if (isCourier) {
-    if (s.status === 'assigned' && !s.accepted_at) {
+    if (s.status === 'assigned' && !s.accepted_at && s.courier?.id === state.user?.id) {
       btn(state.lang === 'mg' ? '👍 Ekeko ity iraka ity' : '👍 Accepter la mission', 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/accept`, {}); toast(stepLabel('accepted'), 'ok'); done(); });
       btn(state.lang === 'mg' ? '👎 Laviko' : '👎 Refuser', 'danger', async () => {
         const reason = await promptBox(state.lang === 'mg' ? 'Nahoana?' : 'Pourquoi ?', { label: c('reason'), placeholder: state.lang === 'mg' ? 'Ohatra : feno, tsy eo amin\'ny lalako' : 'Ex : plein, pas sur mon chemin' }); if (reason === null) return;
@@ -245,8 +268,13 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
         toast(r.reassigned_to ? `→ ${r.reassigned_to}` : stepLabel('declined'), 'ok'); done();
       });
     }
-    if (s.status === 'assigned') btn(`📦 ${c('pickup_btn')}`, s.accepted_at ? 'primary lg' : '', () => { m.close(); pickupForm(s, () => onChange?.()); });
-    if (s.status === 'picked_up') {
+    if (s.status === 'assigned' && s.courier?.id === state.user?.id) btn(`📦 ${c('pickup_btn')}`, s.accepted_at ? 'primary lg' : '', () => { m.close(); pickupForm(s, () => onChange?.()); });
+    const me = state.user?.id;
+    if (s.step === 'to_centre' && s.courier?.id === me) btn(`🏢 ${state.lang === 'mg' ? 'Napetrako tao amin\'ny centre' : 'Déposé au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/drop-centre`, {}); toast(stepLabel('at_centre'), 'ok'); done(); });
+    else if (s.step === 'at_centre' && s.delivery_courier?.id === me) btn(`📦 ${state.lang === 'mg' ? 'Noraisiko tao amin\'ny centre' : 'Pris au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/take-centre`, {}); toast(stepLabel('centre_out'), 'ok'); done(); });
+    else if (s.relay && s.status === 'assigned' && s.delivery_courier?.id === me && s.pickup_courier?.id !== me)
+      acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">🏢 ${state.lang === 'mg' ? `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} no maka azy ary mametraka azy ao amin'ny centre ; avy eo ianao no manatitra.` : `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} le récupère et le dépose au centre ; vous le livrez ensuite.`}</div>`);
+    if (s.status === 'picked_up' && !['to_centre', 'at_centre'].includes(s.step)) {
       if (!s.courier_confirmed_at) btn(`${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', () => { m.close(); deliverForm(s, () => onChange?.()); });
       else acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">⏳ ${esc(stepLabel('awaiting_recipient'))}</div>`);
       btn(c('refused_btn'), 'sun', async () => {
@@ -278,6 +306,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
       await api('POST', `/api/shipments/${s.id}/cancel`, { note }); done();
     });
   }
+  if (isAdmin && s.step === 'to_centre') btn('🏢 Reçu au centre', 'primary', async () => { await api('POST', `/api/shipments/${s.id}/drop-centre`, {}); done(); });
+  if (isAdmin && s.step === 'at_centre') btn(`📦 Remis à ${s.delivery_courier?.name?.split(' ')[0] || 'livreur'}`, 'primary', async () => { await api('POST', `/api/shipments/${s.id}/take-centre`, {}); done(); });
   if (isAdmin && s.status === 'picked_up') btn('✖ Annuler → retour expéditeur (frais à sa charge)', 'danger', async () => {
     const note = await promptBox('Annuler après récupération', { label: c('reason') }); if (!note) return;
     await api('POST', `/api/shipments/${s.id}/cancel`, { note }); done();
@@ -293,18 +323,27 @@ function deliverForm(s, done) {
     <label class="field"><span>${c('collected')} (Ar)</span><input class="input" data-v inputmode="numeric" value="${s.amount_to_collect}" style="font-size:1.3rem;font-weight:800"></label>
     ${got ? `<div class="card" style="text-align:center;background:var(--green-soft);border:0"><b>✅ ${mg ? 'Nanamarina ny client — kaody voaray ho azy' : 'Le client a confirmé — code reçu automatiquement'}</b></div>` : `<p class="small muted">${mg ? 'Asaivo manindry « Tonga ny entana » ao amin\'ny finday-ny ny client : ho tonga eto ho azy ny kaody.' : 'Demandez au client d\'appuyer sur « J\'ai reçu » sur son téléphone : le code arrive ici tout seul.'}</p>
       ${s.track_token ? `<a class="btn block" href="sms:${esc(s.recipient.phone)}?body=${encodeURIComponent(`Alefa ${s.ref} : votre colis est là. Appuyez sur « J'ai reçu » ici : ${location.origin}/suivi/${s.track_token}`)}">✉ ${mg ? 'Alefaso SMS ny rohy ho an\'ny client' : 'Envoyer le lien au client (SMS)'}</a>` : ''}`}
+    <label class="field"><span>📷 ${mg ? 'Sarin\'ny colis natolotra (porofo) *' : 'Photo du colis remis (preuve) *'}</span>
+      <input class="input" data-dphoto type="file" accept="image/*" capture="environment"></label>
+    <img data-dprev alt="" style="display:none;width:100%;max-height:180px;object-fit:cover;border-radius:10px">
     <label class="field"><span>${mg ? 'Kaody 4 isa' : 'Code à 4 chiffres'}</span>
       <input class="input" data-pin inputmode="numeric" maxlength="4" placeholder="••••" value="${got ? esc(s.delivery_pin) : ''}" style="text-align:center;font-size:1.8rem;letter-spacing:.5em;font-weight:850"></label>
     <button class="btn primary lg block" data-ok>✅ ${mg ? 'Hamafisina amin\'ny kaody' : 'Confirmer avec le code'}</button>
     <button class="btn block" data-nopin style="white-space:normal;line-height:1.3">${mg ? 'Tsy manana kaody → ny mpandray no hanamarina amin\'ny application-ny' : 'Pas de code → le destinataire confirmera dans son application'}</button>
     <p class="tiny muted">${mg ? 'Tsy ho « Tonga » ny entana raha tsy samy manamarina ianao sy ny mpandray.' : 'Le colis n\'est « Livré » qu\'une fois confirmé par vous ET par le destinataire.'}</p></div>`);
+  let photo = null;
+  m.el.querySelector('[data-dphoto]').onchange = async (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    try { photo = await compressImage(f); const im = m.el.querySelector('[data-dprev]'); im.src = photo; im.style.display = 'block'; } catch (err) { toastErr(err); }
+  };
   const send = async (withPin) => {
     const pin = m.el.querySelector('[data-pin]').value.trim();
     if (withPin && !/^\d{4}$/.test(pin)) return toast(mg ? 'Kaody 4 isa' : 'Code à 4 chiffres', 'err');
+    if (!photo) return toast(mg ? 'Makà sary ny colis natolotra' : 'Prenez une photo du colis remis', 'err');
     let pos = [];
     try { pos = await getPosition({ timeout: 5000 }); } catch {}
     try {
-      const r = await api('POST', `/api/shipments/${s.id}/deliver`, { collected: Number(m.el.querySelector('[data-v]').value.replace(/\D/g, '')), pin: withPin ? pin : undefined, lat: pos[0], lng: pos[1] });
+      const r = await api('POST', `/api/shipments/${s.id}/deliver`, { collected: Number(m.el.querySelector('[data-v]').value.replace(/\D/g, '')), pin: withPin ? pin : undefined, lat: pos[0], lng: pos[1], photo });
       m.close(); toast(r.delivered ? stepLabel('delivered') : stepLabel('awaiting_recipient'), 'ok'); done();
     } catch (err) { toastErr(err); }
   };
@@ -400,6 +439,7 @@ const COLS = {
   declared_value: ['valeur', 'montant', 'prix', 'total', 'value', 'vidiny', 'somme'],
   description: ['description', 'article', 'produit', 'contenu', 'designation', 'désignation', 'entana'],
   drop_lat: ['lat', 'latitude'], drop_lng: ['lng', 'lon', 'longitude'],
+  size: ['taille', 'dimensions', 'dimension', 'mesures', 'haben', 'l x l x h'], weight: ['poids', 'weight', 'kg', 'lanja'],
 };
 const norm = (h) => String(h || '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '');
 function mapHeader(h) {
@@ -448,7 +488,7 @@ export function rowsFromBackup(text) {
 }
 
 export function templateCsv() {
-  const csv = '﻿ref;nom;telephone;adresse;valeur;description\r\nCMD-1042;Rasoa Rakoto;034 12 345 67;Behoririka, près de la pharmacie;25000;Robe taille M\r\nCMD-1043;Hery;033 11 222 33;Ankorondrano, immeuble Fitaratra;12000;Chaussures\r\n';
+  const csv = '﻿ref;nom;telephone;adresse;valeur;description;taille;poids\r\nCMD-1042;Rasoa Rakoto;034 12 345 67;Behoririka, près de la pharmacie;25000;Robe taille M;30x25x8;0,5\r\nCMD-1043;Hery;033 11 222 33;Ankorondrano, immeuble Fitaratra;12000;Chaussures;35x22x12;1\r\n';
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'alefa-modele-colis.csv'; a.click();
 }
 

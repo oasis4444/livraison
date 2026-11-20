@@ -116,8 +116,10 @@ test('étapes : en route puis livreur tout proche', async () => {
 
 test('livraison, refus (destinataire paie les frais), annulation (expéditeur paie le retour)', async () => {
   // double confirmation : PIN faux refusé ; sans PIN → attente du destinataire ; le destinataire confirme → livré
-  assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, { pin: '0000' === (await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.delivery_pin ? '1111' : '0000' }, courier)).status, 400);
-  const d1 = await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, {}, courier);
+  assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, { photo: PHOTO, pin: '0000' === (await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.delivery_pin ? '1111' : '0000' }, courier)).status, 400);
+  // preuve de livraison : sans photo, refusé
+  assert.equal((await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, {}, courier)).status, 400, 'photo obligatoire');
+  const d1 = await call('POST', `/api/shipments/${ids['CMD-1']}/deliver`, { photo: PHOTO }, courier);
   assert.equal(d1.data.collected, 23000); assert.equal(d1.data.delivered, false); assert.equal(d1.data.awaiting_recipient, true);
   assert.equal((await call('GET', '/api/v1/shipments/CMD-1', null, null, { 'x-api-key': key })).data.shipment.step, 'awaiting_recipient');
   assert.equal((await call('GET', `/api/shipments/${ids['CMD-1']}`, null, courier)).data.shipment.delivery_pin, undefined, 'le livreur ne voit jamais le PIN');
@@ -160,13 +162,19 @@ test('centre : attribution manuelle, frais, export', async () => {
   const ex = await call('GET', '/api/admin/shipments/export', null, admin);
   assert.match(ex.data, /CMD-1/);
   // client crée un colis depuis l'application
-  const c = await call('POST', '/api/shipments', { pickup_addr: 'Chez moi, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng, recipient_name: 'Koto', recipient_phone: '0347777777', drop_addr: 'Behoririka', drop_lat: BEHORIRIKA.lat, drop_lng: BEHORIRIKA.lng, declared_value: 5000 }, recipient);
+  const base = { pickup_addr: 'Chez moi, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng, recipient_name: 'Koto', recipient_phone: '0347777777', drop_addr: 'Behoririka', drop_lat: BEHORIRIKA.lat, drop_lng: BEHORIRIKA.lng, declared_value: 5000 };
+  // depuis l'application : contenu et taille obligatoires
+  assert.match((await call('POST', '/api/shipments', base, recipient)).data.message, /contient/);
+  assert.match((await call('POST', '/api/shipments', { ...base, description: 'Chaussures' }, recipient)).data.message, /taille/);
+  assert.equal((await call('POST', '/api/shipments', { ...base, description: 'Chaussures', size: '30x20' }, recipient)).status, 400, '3 mesures');
+  const c = await call('POST', '/api/shipments', { ...base, description: 'Chaussures', size: '30 x 20 x 12', weight: 1.5 }, recipient);
+  assert.deepEqual(c.data.shipment.size, { l: 30, w: 20, h: 12 }); assert.equal(c.data.shipment.weight_kg, 1.5); assert.equal(c.data.shipment.contents, 'Chaussures');
   assert.equal(c.status, 201); assert.equal(c.data.shipment.status, 'assigned');
   const sid = c.data.shipment.id;
   const pin = (await call('GET', `/api/shipments/${sid}`, null, recipient)).data.shipment.delivery_pin;
   assert.match(pin, /^\d{4}$/, 'l\'expéditeur voit le PIN à transmettre');
   assert.equal((await call('POST', `/api/shipments/${sid}/pickup`, { value: 5000, photo: PHOTO }, courier)).status, 200);
-  const dp = await call('POST', `/api/shipments/${sid}/deliver`, { pin }, courier);
+  const dp = await call('POST', `/api/shipments/${sid}/deliver`, { pin, photo: PHOTO }, courier);
   assert.equal(dp.data.delivered, true, 'PIN du destinataire = double confirmation immédiate');
   assert.equal((await call('GET', `/api/shipments/${sid}`, null, admin)).data.shipment.confirmed_by, 'pin');
 });

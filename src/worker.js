@@ -760,7 +760,7 @@ async function adminSettingsGet(ctx, env) {
 }
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
-  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee'];
+  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -771,7 +771,10 @@ async function adminSettingsPut(ctx, env) {
     if (k === 'commission_mode' && !['percent', 'subscription'].includes(val)) fail(400, 'invalid', 'Mode de commission invalide');
     if (k === 'courier_can_edit_fee') val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
+    if (['delivery_photo_required', 'relay_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
     stmts.push(q(env, 'UPDATE settings SET value = ? WHERE key = ?', val, k));
+    // Nouvelle adresse du centre : sa position GPS sera recherchée de nouveau (relais).
+    if (k === 'centre_addr' && val !== cur.centre_addr && !('centre_lat' in (ctx.body.settings || {}))) stmts.push(q(env, "UPDATE settings SET value = '' WHERE key IN ('centre_lat','centre_lng')"));
   }
   if (stmts.length) await env.DB.batch(stmts);
   await audit(env, ctx, 'admin_settings', ctx.body.settings);

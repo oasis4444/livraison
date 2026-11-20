@@ -2,7 +2,7 @@
 // un colis est confié au livreur dont l'itinéraire passe près du point de récupération PUIS près du point de livraison
 // (sens du trajet), dans ses horaires, sans dépasser sa capacité, avec le plus petit détour.
 // + lien de suivi public, journal des échanges et limitation de l'API.
-import { fail, json, str, int, now, haversineKm } from './lib.js';
+import { fail, json, str, int, now, haversineKm, normalizePhone } from './lib.js';
 import { one, all, run, settings } from './worker.js';
 
 const MAX_PTS = 200;
@@ -131,9 +131,9 @@ async function trackPublic(ctx, env) {
   const { stepOf, STEP_LABELS } = await import('./shipments.js');
   const step = stepOf(s);
   // La position du livreur n'est visible que pendant la mission (jamais avant ni après).
-  const live = ['departed', 'at_pickup', 'picked_up', 'en_route', 'nearby', 'awaiting_recipient', 'awaiting_courier'].includes(step) && s.clat != null && now() - (s.cseen || 0) < 10 * 60e3;
+  const live = ['departed', 'at_pickup', 'picked_up', 'to_centre', 'en_route', 'nearby', 'awaiting_recipient', 'awaiting_courier'].includes(step) && s.clat != null && now() - (s.cseen || 0) < 10 * 60e3;
   let eta = null;
-  if (live && s.drop_lat != null) {
+  if (live && s.drop_lat != null && (!s.relay || s.centre_out_at)) { // pas d'heure d'arrivée tant que le colis va au centre
     const km = (s.status === 'assigned' && s.pickup_lat != null ? haversineKm(s.clat, s.clng, s.pickup_lat, s.pickup_lng) + haversineKm(s.pickup_lat, s.pickup_lng, s.drop_lat, s.drop_lng)
       : haversineKm(s.clat, s.clng, s.drop_lat, s.drop_lng)) * 1.3;
     eta = now() + Math.round((km / 12) * 60 + (s.status === 'assigned' ? 5 : 0)) * 60e3;
@@ -141,7 +141,21 @@ async function trackPublic(ctx, env) {
   return json({ ref: s.ref, external_ref: s.external_ref, step, step_label: STEP_LABELS[step], recipient: s.recipient_name.split(' ')[0], drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
     pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: s.courier_name ? s.courier_name.split(' ')[0] : null,
     position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at,
-    can_confirm: s.status === 'picked_up' && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at });
+    can_confirm: s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at)) && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at,
+    relay: !!s.relay, contents: s.description || null, size: s.dim_l ? `${s.dim_l}×${s.dim_w}×${s.dim_h} cm` : null });
+}
+
+// « Suivre mon colis » : numéro du colis (ALxxxx) ou de la commande du logiciel de vente (L-00004, C-A0001)
+// + numéro de téléphone du destinataire ou de l'expéditeur → page de suivi. Limité pour éviter les essais en série.
+async function trackFind(ctx, env) {
+  const ip = ctx.ip || 'x';
+  await rateLimit(env, 'find' + ip);
+  const p = ctx.url.searchParams;
+  const ref = str(p.get('ref'), { min: 3, max: 60, name: 'Numéro du colis' }).trim().toUpperCase();
+  let phone; try { phone = normalizePhone(p.get('phone')); } catch { fail(400, 'invalid', 'Numéro de téléphone invalide'); }
+  const s = await one(env, `SELECT track_token FROM shipments WHERE (UPPER(ref) = ? OR UPPER(external_ref) = ?) AND (recipient_phone = ? OR sender_phone = ?) ORDER BY id DESC LIMIT 1`, ref, ref, phone, phone);
+  if (!s) fail(404, 'not_found', 'Aucun colis avec ce numéro et ce téléphone');
+  return json({ token: s.track_token });
 }
 
 // Bouton « J'ai reçu mon colis » du lien de suivi (sans compte) : seulement quand le livreur a le colis.
@@ -187,6 +201,7 @@ export function registerTripRoutes(route) {
   route('POST', '/api/courier/trips/:id/cancel', ['courier', 'admin'], cancelTrip);
   route('GET', '/api/admin/trips', ['admin'], adminTrips);
   route('GET', '/api/admin/sync-log', ['admin'], syncLog);
+  route('GET', '/api/track-find', null, trackFind);
   route('GET', '/api/track/:ref', null, trackPublic);
   route('POST', '/api/track/:ref/confirm', null, trackConfirm);
 }

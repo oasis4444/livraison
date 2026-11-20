@@ -152,7 +152,7 @@ const noteWith = (base, text) => (base ? `${base} — ${MARK} ${text}` : `${MARK
 const fmtMg = (ms) => { const d = new Date(ms + 3 * 3600e3).toISOString(); return `${d.slice(8, 10)}/${d.slice(5, 7)} ${d.slice(11, 16)}`; };
 
 // Étape Alefa → statut Tsena (attente / cours / livree).
-const TSENA_STATUS = { scheduled: 'confirmee', departed: 'cours', at_pickup: 'cours', picked_up: 'cours', en_route: 'cours', nearby: 'cours', awaiting_recipient: 'cours', awaiting_courier: 'cours', delivered: 'livree' };
+const TSENA_STATUS = { scheduled: 'confirmee', to_centre: 'cours', at_centre: 'cours', departed: 'cours', at_pickup: 'cours', picked_up: 'cours', en_route: 'cours', nearby: 'cours', awaiting_recipient: 'cours', awaiting_courier: 'cours', delivered: 'livree' };
 
 export async function syncTsena(env) {
   const s = await settings(env);
@@ -254,7 +254,7 @@ export async function syncTsena(env) {
       if (fields.status === 'livree') fields.doneAt = new Date(x.done_at || now()).toISOString();
       const who = x.courier_name ? ` · ${x.courier_name.split(' ')[0]}` : '';
       const when = step === 'scheduled' && x.departure_at ? ` · départ ${fmtMg(x.departure_at)}` : '';
-      fields.note = noteWith(base, `${STEP_LABELS[step] || step}${who}${when}${x.outcome_note && ['refused', 'cancelled', 'returning', 'returned'].includes(step) ? ' — ' + x.outcome_note : ''}`);
+      fields.note = noteWith(base, `${STEP_LABELS[step] || step}${who}${when} · suivi ${x.ref}${x.outcome_note && ['refused', 'cancelled', 'returning', 'returned'].includes(step) ? ' — ' + x.outcome_note : ''}`);
       try {
         await patchDelivery(s, token, x.doc_id, fields);
         await run(env, 'UPDATE tsena_links SET last_step = ?, synced_at = ?, last_driver = COALESCE(?, last_driver) WHERE shipment_id = ?', step, now(), fields.driver ?? null, x.shipment_id);

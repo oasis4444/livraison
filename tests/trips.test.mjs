@@ -146,7 +146,7 @@ test('le client appuie sur « J\'ai reçu » (lien de suivi, sans compte) : le l
   assert.match(seen.delivery_pin, /^\d{4}$/, 'le livreur reçoit le code'); assert.ok(seen.recipient_confirmed_at);
   const notif = env.DB.raw.prepare("SELECT title FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(c1id);
   assert.match(notif.title, new RegExp(`Code reçu : ${seen.delivery_pin}`));
-  const d = await call('POST', `/api/shipments/${s.id}/deliver`, { pin: seen.delivery_pin }, c1);
+  const d = await call('POST', `/api/shipments/${s.id}/deliver`, { pin: seen.delivery_pin, photo: 'data:image/jpeg;base64,AAAA', lat: ANKORONDRANO.lat, lng: ANKORONDRANO.lng }, c1);
   assert.equal(d.data.delivered, true);
   const t = (await call('GET', `/api/track/${s.track_token}`)).data;
   assert.equal(t.step, 'delivered'); assert.equal(t.can_confirm, false);
