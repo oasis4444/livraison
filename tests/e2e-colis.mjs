@@ -69,16 +69,19 @@ try {
     await admin.screenshot({ path: 'tests/screens/20-admin-api.png' });
     await admin.click('.modal-back [data-x]');
   });
-  await step('livreur : saisit son heure de départ et son axe', async () => {
+  await step('admin : saisit l\'heure de départ et l\'axe du livreur ; le livreur les voit sans pouvoir les changer', async () => {
+    await admin.click('[data-v=couriers]'); await admin.click('[data-act=planning]');
+    await admin.click('.modal [data-add]');
+    const min = new Date(Date.now() + 3 * 3600e3).getUTCHours() * 60 + new Date(Date.now() + 3 * 3600e3).getUTCMinutes();
+    const st = Math.min(1380, min + 30), hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    await admin.fill('.modal [data-k=start]', hhmm(st)); await admin.fill('.modal [data-k=end]', hhmm(Math.min(1439, st + 120)));
+    await admin.dispatchEvent('.modal [data-k=end]', 'change'); await admin.dispatchEvent('.modal [data-k=start]', 'change');
+    await admin.click('.modal [data-save]'); await admin.waitForSelector('text=Planning enregistré');
     await courier.goto(BASE + '/livreur');
     await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'velo1234'); await courier.click('[type=submit]');
     await courier.waitForSelector('[data-t=plan]');
-    await courier.click('[data-t=plan]'); await courier.click('[data-add]');
-    const min = new Date(Date.now() + 3 * 3600e3).getUTCHours() * 60 + new Date(Date.now() + 3 * 3600e3).getUTCMinutes();
-    const st = Math.min(1380, min + 30), hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-    await courier.fill('[data-k=start]', hhmm(st)); await courier.fill('[data-k=end]', hhmm(Math.min(1439, st + 120)));
-    await courier.dispatchEvent('[data-k=end]', 'change'); await courier.dispatchEvent('[data-k=start]', 'change');
-    await courier.click('[data-save]'); await courier.waitForSelector('text=Enregistrer ✓');
+    await courier.click('[data-t=plan]'); await courier.waitForSelector('[data-plan] >> text=Centre-ville');
+    if (await courier.locator('[data-plan] [data-save], [data-plan] [data-add]').count()) throw new Error('le livreur peut encore modifier son planning');
     await courier.waitForSelector('[data-allsched] >> text=Centre-ville');
     await courier.screenshot({ path: 'tests/screens/21-livreur-departs.png' });
   });
@@ -171,6 +174,11 @@ try {
     await courier.fill('.modal [data-v]', '25000');
     await courier.screenshot({ path: 'tests/screens/25-livreur-recuperation.png' });
     await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=À livrer');
+    // le destinataire n'a pas de compte : on propose tout de suite au livreur de lui envoyer le lien
+    await courier.waitForSelector('text=Envoyer le lien au destinataire');
+    const sms = await courier.getAttribute('.modal a[href^="sms:"]', 'href'); if (!/suivi%2F[0-9a-f]{24}|suivi\/[0-9a-f]{24}/.test(decodeURIComponent(sms))) throw new Error('lien SMS : ' + sms);
+    await courier.screenshot({ path: 'tests/screens/26-livreur-lien-destinataire.png' });
+    await courier.click('.modal [data-later]');
     await courier.click('[data-act=ship] >> text=CMD-1042');
     await courier.waitForSelector('[data-ph][src^="blob:"]');
     const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
@@ -198,10 +206,14 @@ try {
     const d = await api('GET', '/api/v1/shipments/CMD-1042', null, { 'X-API-Key': apiKey });
     if (d.data.shipment.status !== 'delivered' || !d.data.shipment.has_photo) throw new Error(JSON.stringify(d.data));
   });
-  await step('livreur : déclare un trajet Analakely → Ivandry, un colis sur le chemin lui est proposé et il l\'accepte', async () => {
-    await courier.click('[data-t=plan]'); await courier.waitForSelector('[data-tadd]');
-    await courier.fill('[data-from]', 'Analakely'); await courier.fill('[data-to]', 'Ivandry');
-    await courier.click('[data-tadd]'); await courier.waitForSelector('[data-trip]');
+  await step('admin : saisit un trajet Analakely → Ivandry pour le livreur ; un colis sur le chemin lui est proposé et il l\'accepte', async () => {
+    await admin.click('[data-v=couriers]'); await admin.click('[data-act=planning]'); await admin.waitForSelector('.modal [data-tadd]');
+    await admin.fill('.modal [data-from]', 'Analakely'); await admin.fill('.modal [data-to]', 'Ivandry');
+    await admin.click('.modal [data-tadd]'); await admin.waitForSelector('.modal [data-trip]');
+    await admin.screenshot({ path: 'tests/screens/30-admin-trajet-livreur.png' });
+    await admin.click('.modal-back [data-x]');
+    await courier.click('[data-t=plan]'); await courier.waitForSelector('[data-trips] [data-trip]');
+    if (await courier.locator('[data-trips] [data-cancel]').count()) throw new Error('le livreur peut annuler le trajet');
     await courier.screenshot({ path: 'tests/screens/30-livreur-trajet.png' });
     const r = await api('POST', '/api/v1/shipments', { external_ref: 'TRAJET-1', declared_value: 5000, sender: { address: 'Analakely', lat: -18.9055, lng: 47.5255 },
       recipient: { name: 'Fara', phone: '0345556677', address: 'Ivandry', lat: -18.8752, lng: 47.5328 } }, { 'X-API-Key': apiKey });

@@ -30,11 +30,14 @@ test('mise en place : axe, livreur, planning, marchand API', async () => {
   assert.equal((await call('POST', '/api/admin/axes', { name: 'Ivandry', center_lat: -18.875, center_lng: 47.535, radius_km: 1.5, fee: 4000 }, admin)).status, 200);
   courierId = (await call('POST', '/api/admin/users', { role: 'courier', phone: '0341111111', name: 'Hery Vélo', cin: '101211123456', password: 'velo123' }, admin)).data.id;
   courier = (await call('POST', '/api/auth/login', { phone: '0341111111', password: 'velo123' })).data.token;
-  // le livreur saisit lui-même son heure de départ et son axe
+  // le centre (admin) saisit l'heure de départ et l'axe du livreur ; le livreur ne peut que les consulter
   const axes = (await call('GET', '/api/courier/schedule', null, courier)).data.axes;
   const min = new Date(Date.now() + 3 * 3600e3).getUTCHours() * 60 + new Date(Date.now() + 3 * 3600e3).getUTCMinutes();
   const start = (min + 30) % 1440, end = Math.min(1440, start + 120);
-  assert.equal((await call('PUT', '/api/courier/schedule', { slots: [{ axe_id: axes.find((a) => a.name === 'Centre-ville').id, start_min: start, end_min: end }] }, courier)).status, 200);
+  const slots = [{ axe_id: axes.find((a) => a.name === 'Centre-ville').id, start_min: start, end_min: end }];
+  assert.equal((await call('PUT', '/api/courier/schedule', { slots }, courier)).status, 404, 'le livreur ne modifie plus son planning');
+  assert.equal((await call('PUT', `/api/admin/couriers/${courierId}/axes`, { slots }, admin)).status, 200);
+  assert.equal((await call('GET', '/api/courier/schedule', null, courier)).data.slots.length, 1);
   const m = await call('POST', '/api/admin/merchants', { name: 'Boutique Soa', phone: '0329999999', webhook_url: 'https://vente.test/hook' }, admin);
   assert.equal(m.status, 201); key = m.data.api_key; assert.match(key, /^ak_/); assert.ok(m.data.vendor_temp_password);
   vendorTok = (await call('POST', '/api/auth/login', { phone: '0329999999', password: m.data.vendor_temp_password })).data.token;

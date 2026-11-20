@@ -88,8 +88,16 @@ function point(o, name) {
   return [lat, lng];
 }
 
-async function createTrip(ctx, env) {
-  const b = ctx.body, cid = ctx.user.id;
+// Trajets saisis par le centre (admin) pour un livreur.
+async function adminCreateTrip(ctx, env) {
+  const c = await one(env, "SELECT id FROM users WHERE id = ? AND role = 'courier'", ctx.params.id);
+  if (!c) fail(404, 'not_found', 'Livreur introuvable');
+  return createTrip(ctx, env, c.id);
+}
+async function adminCourierTrips(ctx, env) { return json({ trips: await upcomingTrips(env, { courierId: Number(ctx.params.id) }) }); }
+
+async function createTrip(ctx, env, cid) {
+  const b = ctx.body;
   const from = point(b.from, 'départ'), to = point(b.to, 'destination');
   const depart = int(b.depart_at, { min: now() - 3600e3, max: now() + 8 * 864e5, name: 'Heure de départ' });
   let route = simplify(Array.isArray(b.route) && b.route.length >= 2 ? b.route : [from, to]);
@@ -197,8 +205,10 @@ async function adminTrips(ctx, env) { return json({ trips: await upcomingTrips(e
 
 export function registerTripRoutes(route) {
   route('GET', '/api/courier/trips', ['courier'], myTrips);
-  route('POST', '/api/courier/trips', ['courier'], createTrip);
-  route('POST', '/api/courier/trips/:id/cancel', ['courier', 'admin'], cancelTrip);
+  // Le centre (admin) saisit les trajets ; le livreur les consulte.
+  route('GET', '/api/admin/couriers/:id/trips', ['admin'], adminCourierTrips);
+  route('POST', '/api/admin/couriers/:id/trips', ['admin'], adminCreateTrip);
+  route('POST', '/api/courier/trips/:id/cancel', ['admin'], cancelTrip);
   route('GET', '/api/admin/trips', ['admin'], adminTrips);
   route('GET', '/api/admin/sync-log', ['admin'], syncLog);
   route('GET', '/api/track-find', null, trackFind);

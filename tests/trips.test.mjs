@@ -30,11 +30,13 @@ test('mise en place : deux livreurs déclarent leur trajet', async () => {
   c1 = (await call('POST', '/api/auth/login', { phone: '0341111111', password: 'velo123' })).data.token;
   c2 = (await call('POST', '/api/auth/login', { phone: '0342222222', password: 'velo123' })).data.token;
   const trip = (dep, cap = 10) => ({ from: { address: 'Analakely', ...ANALAKELY }, to: { address: 'Ivandry', ...IVANDRY }, route: ROUTE, depart_at: dep, capacity: cap });
-  const t1 = await call('POST', '/api/courier/trips', trip(Date.now() + 30 * 60e3, 2), c1);
+  assert.equal((await call('POST', '/api/courier/trips', trip(Date.now() + 30 * 60e3, 2), c1)).status, 404, 'le livreur ne saisit plus ses trajets');
+  const t1 = await call('POST', `/api/admin/couriers/${c1id}/trips`, trip(Date.now() + 30 * 60e3, 2), admin);
   assert.equal(t1.status, 201, JSON.stringify(t1.data)); assert.ok(t1.data.trip.km > 3 && t1.data.trip.km < 6);
   // même livreur, trajet qui chevauche → refusé
-  assert.equal((await call('POST', '/api/courier/trips', trip(Date.now() + 45 * 60e3), c1)).status, 409);
-  assert.equal((await call('POST', '/api/courier/trips', trip(Date.now() + 60 * 60e3), c2)).status, 201);
+  assert.equal((await call('POST', `/api/admin/couriers/${c1id}/trips`, trip(Date.now() + 45 * 60e3), admin)).status, 409);
+  assert.equal((await call('POST', `/api/admin/couriers/${c2id}/trips`, trip(Date.now() + 60 * 60e3), admin)).status, 201);
+  assert.equal((await call('GET', '/api/courier/trips', null, c1)).data.trips.length, 1, 'le livreur voit son trajet');
   const m = await call('POST', '/api/admin/merchants', { name: 'Vente Test', phone: '0329999999' }, admin);
   key = m.data.api_key;
   const sch = (await call('GET', '/api/schedule', null, c2)).data;
@@ -81,7 +83,8 @@ test('acceptation, puis refus → réaffectation automatique', async () => {
 
 test('annulation d\'un trajet : ses colis repartent', async () => {
   const t = (await call('GET', '/api/courier/trips', null, c2)).data.trips[0];
-  const r = await call('POST', `/api/courier/trips/${t.id}/cancel`, {}, c2);
+  assert.equal((await call('POST', `/api/courier/trips/${t.id}/cancel`, {}, c2)).status, 403, 'seul le centre annule');
+  const r = await call('POST', `/api/courier/trips/${t.id}/cancel`, {}, admin);
   assert.equal(r.status, 200); assert.equal(r.data.moved, 1);
   const s = (await call('GET', '/api/admin/shipments?q=T-5', null, admin)).data.shipments[0];
   assert.equal(s.courier.id, c1id, 'Hery a refusé T-1 : une place s\'est libérée sur son trajet');
@@ -107,7 +110,7 @@ test('API sans GPS : adresses localisées automatiquement puis colis affecté au
   const real = globalThis.fetch;
   globalThis.fetch = async (u, i) => String(u).includes('nominatim') ? new Response(JSON.stringify(/Ankorondrano/.test(decodeURIComponent(String(u))) ? [{ lat: String(ANKORONDRANO.lat), lon: String(ANKORONDRANO.lng) }] : [{ lat: String(ANALAKELY.lat), lon: String(ANALAKELY.lng) }])) : real(u, i);
   try {
-    const t = await call('POST', '/api/courier/trips', { from: { address: 'Analakely', ...ANALAKELY }, to: { address: 'Ivandry', ...IVANDRY }, route: ROUTE, depart_at: Date.now() + 5 * 3600e3, capacity: 5 }, c2);
+    const t = await call('POST', `/api/admin/couriers/${c2id}/trips`, { from: { address: 'Analakely', ...ANALAKELY }, to: { address: 'Ivandry', ...IVANDRY }, route: ROUTE, depart_at: Date.now() + 5 * 3600e3, capacity: 5 }, admin);
     assert.equal(t.status, 201, JSON.stringify(t.data));
     const r = await call('POST', '/api/v1/shipments', { external_ref: 'NOGPS-1', declared_value: 6000, sender: { name: 'Boutique', address: 'Analakely' }, recipient: { name: 'Hotely Mamy', phone: '0388948349', address: 'Ankorondrano' } }, null, { 'x-api-key': key });
     assert.equal(r.status, 201); assert.equal(r.data.shipment.recipient.lat, ANKORONDRANO.lat); assert.equal(r.data.shipment.status, 'assigned');

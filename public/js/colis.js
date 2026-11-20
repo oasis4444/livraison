@@ -271,7 +271,7 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     if (s.status === 'assigned' && s.courier?.id === state.user?.id) btn(`📦 ${c('pickup_btn')}`, s.accepted_at ? 'primary lg' : '', () => { m.close(); pickupForm(s, () => onChange?.()); });
     const me = state.user?.id;
     if (s.step === 'to_centre' && s.courier?.id === me) btn(`🏢 ${state.lang === 'mg' ? 'Napetrako tao amin\'ny centre' : 'Déposé au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/drop-centre`, {}); toast(stepLabel('at_centre'), 'ok'); done(); });
-    else if (s.step === 'at_centre' && s.delivery_courier?.id === me) btn(`📦 ${state.lang === 'mg' ? 'Noraisiko tao amin\'ny centre' : 'Pris au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/take-centre`, {}); toast(stepLabel('centre_out'), 'ok'); done(); });
+    else if (s.step === 'at_centre' && s.delivery_courier?.id === me) btn(`📦 ${state.lang === 'mg' ? 'Noraisiko tao amin\'ny centre' : 'Pris au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/take-centre`, {}); toast(stepLabel('centre_out'), 'ok'); done(); sendLinkPrompt(s); });
     else if (s.relay && s.status === 'assigned' && s.delivery_courier?.id === me && s.pickup_courier?.id !== me)
       acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">🏢 ${state.lang === 'mg' ? `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} no maka azy ary mametraka azy ao amin'ny centre ; avy eo ianao no manatitra.` : `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} le récupère et le dépose au centre ; vous le livrez ensuite.`}</div>`);
     if (s.status === 'picked_up' && !['to_centre', 'at_centre'].includes(s.step)) {
@@ -389,41 +389,36 @@ function pickupForm(s, done) {
     try {
       await api('POST', `/api/shipments/${s.id}/pickup`, { photo, value: Number(el.querySelector('[data-v]').value.replace(/\D/g, '')), fee: Number(el.querySelector('[data-fee]').value.replace(/\D/g, '')), lat: pos[0], lng: pos[1] });
       m.close(); toast(c('sh_picked_up'), 'ok'); done();
+      if (!s.relay) sendLinkPrompt(s); // en route vers le destinataire : on lui envoie le lien
     } catch (err) { toastErr(err); }
   };
+}
+
+// Le destinataire n'a pas de compte : il suit le colis et confirme la réception par un lien.
+// Proposé au livreur dès qu'il part vers lui (après la récupération, ou en reprenant le colis au centre).
+export function sendLinkPrompt(s) {
+  if (!s.track_token || !s.recipient?.phone) return;
+  const mg = state.lang === 'mg', url = `${location.origin}/suivi/${s.track_token}`;
+  const body = mg ? `Alefa ${s.ref} : an-dalana ny entanao. Araho eto, ary tsindrio « Voaray » rehefa tonga : ${url}` : `Alefa ${s.ref} : votre colis est en route. Suivez-le ici et appuyez sur « J'ai reçu » à l'arrivée : ${url}`;
+  const m = modal(mg ? '✉ Alefaso amin\'ny mpandray ny rohy' : '✉ Envoyer le lien au destinataire', `<div class="stack">
+    <p class="small">${mg ? `Tsy manana kaonty ${esc(s.recipient.name)} : amin'ity rohy ity no hanarahany ny colis sy hanamarinany fa voarainy.` : `${esc(s.recipient.name)} n'a pas de compte : ce lien lui permet de suivre le colis et de confirmer la réception.`}</p>
+    <a class="btn primary lg block" href="sms:${esc(s.recipient.phone)}?body=${encodeURIComponent(body)}">✉ SMS → ${esc(phoneFmt(s.recipient.phone))}</a>
+    <a class="btn block" href="https://wa.me/${esc(String(s.recipient.phone).replace(/\D/g, ''))}?text=${encodeURIComponent(body)}" target="_blank" rel="noopener">WhatsApp</a>
+    <button class="btn block" data-later>${mg ? 'Avy eo' : 'Plus tard'}</button></div>`);
+  m.el.querySelector('[data-later]').onclick = () => m.close();
 }
 
 // ---------------------------------------------------------------- planning du livreur (saisi par lui-même)
 const DAYS = ['L', 'Ma', 'Me', 'J', 'V', 'S', 'D'];
 const toMin = (v) => { const [h, mi] = String(v || '0:0').split(':').map(Number); return h * 60 + (mi || 0); };
-export async function courierScheduleEditor(container, onSaved) {
-  const { slots: cur, axes } = await api('GET', '/api/courier/schedule');
-  let slots = cur.map((x) => ({ axe_id: x.axe_id, start_min: x.start_min, end_min: x.end_min, days: x.days }));
-  const render = () => {
-    slots.sort((a, b) => a.start_min - b.start_min);
-    container.innerHTML = `<div class="small muted" style="margin-bottom:8px">${state.lang === 'mg' ? 'Ampidiro ny ora hialanao eo amin\'ny centre sy ny axe halehanao. Hitan\'ny client rehetra izany.' : 'Indiquez vos heures de départ du centre et l\'axe parcouru. Tous les clients les voient.'}</div>
-      ${axes.length ? '' : '<p class="muted">Aucun axe : demandez au centre d\'en créer.</p>'}
-      <div class="list">${slots.map((x, i) => `<div class="card" data-i="${i}" style="padding:10px">
-        <div class="row"><select class="input grow" data-k="axe_id">${axes.map((a) => `<option value="${a.id}" ${a.id === x.axe_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select><button class="btn sm danger" data-del>✕</button></div>
-        <div class="row" style="margin-top:6px"><label class="field grow"><span>${c('dep_time')}</span><input class="input" type="time" data-k="start" value="${hm(x.start_min)}"></label><label class="field grow"><span>${c('ret_time')}</span><input class="input" type="time" data-k="end" value="${x.end_min >= 1440 ? '23:59' : hm(x.end_min)}"></label></div>
-        <div class="chips" style="margin-top:6px">${DAYS.map((d, j) => `<button class="chip ${String(x.days).includes(String(j + 1)) ? 'on' : ''}" data-day="${j + 1}" style="padding:.25rem .55rem">${d}</button>`).join('')}</div></div>`).join('') || `<p class="muted">${c('empty')}</p>`}</div>
-      <div class="row" style="margin-top:10px"><button class="btn grow" data-add ${axes.length ? '' : 'disabled'}>${c('add_dep')}</button><button class="btn primary grow" data-save>${c('save')}</button></div>`;
-  };
-  render();
-  container.onchange = (e) => {
-    const row = e.target.closest('[data-i]'); if (!row) return; const x = slots[+row.dataset.i];
-    if (e.target.dataset.k === 'axe_id') x.axe_id = +e.target.value;
-    if (e.target.dataset.k === 'start') x.start_min = toMin(e.target.value);
-    if (e.target.dataset.k === 'end') { const v = toMin(e.target.value); x.end_min = v === 1439 ? 1440 : v; }
-  };
-  container.onclick = async (e) => {
-    const row = e.target.closest('[data-i]');
-    if (row && e.target.closest('[data-del]')) { slots.splice(+row.dataset.i, 1); return render(); }
-    const d = e.target.closest('[data-day]')?.dataset.day;
-    if (row && d) { const x = slots[+row.dataset.i]; x.days = String(x.days).includes(d) ? String(x.days).replace(d, '') : [...String(x.days) + d].sort().join(''); return render(); }
-    if (e.target.closest('[data-add]')) { const last = slots[slots.length - 1]; const st = last ? Math.min(1380, last.end_min) : 480; slots.push({ axe_id: axes[0].id, start_min: st, end_min: Math.min(1440, st + 120), days: '1234567' }); return render(); }
-    if (e.target.closest('[data-save]')) { try { await api('PUT', '/api/courier/schedule', { slots }); toast(c('save') + ' ✓', 'ok'); onSaved?.(); } catch (err) { toastErr(err); } }
-  };
+// Axes et heures du livreur : saisis par le centre, le livreur les consulte seulement.
+export async function courierScheduleEditor(container) {
+  const { slots } = await api('GET', '/api/courier/schedule');
+  const mg = state.lang === 'mg';
+  container.innerHTML = `<div class="small muted" style="margin-bottom:8px">${mg ? 'Ny centre no mametraka ny axe sy ny ora iaingananao. Hitan\'ny client rehetra izany.' : 'Vos axes et heures de départ sont fixés par le centre. Tous les clients les voient.'}</div>
+    <div class="list">${slots.sort((a, b) => a.start_min - b.start_min).map((x) => `<div class="card" style="padding:10px">
+      <div class="row between"><b>🧭 ${esc(x.axe_name || x.name || '')}</b><span class="small">${hm(x.start_min)} → ${x.end_min >= 1440 ? '24:00' : hm(x.end_min)}</span></div>
+      <div class="chips" style="margin-top:6px">${DAYS.map((d, j) => `<span class="chip ${String(x.days).includes(String(j + 1)) ? 'on' : ''}" style="padding:.2rem .5rem">${d}</span>`).join('')}</div></div>`).join('') || `<p class="muted">${mg ? 'Mbola tsy nomen\'ny centre axe ianao.' : 'Le centre ne vous a pas encore attribué d\'axe.'}</p>`}</div>`;
 }
 
 // ---------------------------------------------------------------- import Excel / CSV (une ligne = un colis)
@@ -592,15 +587,15 @@ const L_TRIP = {
   mg: { title: 'Ny diako', help: 'Ampidiro ny toerana iaingananao, ny alehanao ary ny ora : homena anao ny entana halaina sy haterina eo amin\'ny lalanao.',
     from: 'Iaingana', to: 'Alehana', when: 'Ora iaingana', cap: 'Entana farafahabetsany', here: '📍 Toerana misy ahy', add: '＋ Ampidiro ity dia ity', none: 'Tsy misy dia voalahatra.', del: 'Foanana', route: 'Jereo ny lalana', day: 'Andro', load: 'entana' },
 };
-export async function courierTripsEditor(container, { map, bikeRoute, onChange } = {}) {
+export async function courierTripsEditor(container, { map, bikeRoute, onChange, base = '/api/courier/trips', readOnly = false } = {}) {
   const T = L_TRIP[state.lang] || L_TRIP.fr;
   let layer = null, from = null, to = null, route = null;
   const draw = (coords) => { if (!map || !window.L) return; layer?.remove(); layer = L.polyline(coords, { color: '#0f7a55', weight: 5, opacity: .8 }).addTo(map); try { map.fitBounds(layer.getBounds(), { padding: [30, 30] }); } catch {} };
   const load = async () => {
-    const { trips } = await api('GET', '/api/courier/trips');
+    const { trips } = await api('GET', base);
     const d0 = new Date(); const pad = (n) => String(n).padStart(2, '0');
-    container.innerHTML = `<div class="small muted" style="margin-bottom:8px">${T.help}</div>
-      <div class="card stack" style="padding:10px">
+    container.innerHTML = `<div class="small muted" style="margin-bottom:8px">${readOnly ? (state.lang === 'mg' ? 'Ny centre no mametraka ny dianao. Homena anao ny colis eo amin\'ny lalanao.' : 'Vos trajets sont fixés par le centre. Les colis sur votre chemin vous sont proposés.') : T.help}</div>
+      <div class="card stack" style="padding:10px;${readOnly ? 'display:none' : ''}">
         <label class="field"><span>${T.from}</span><div class="row"><input class="input grow" data-from placeholder="Analakely"><button class="btn sm" data-here>${T.here}</button></div></label>
         <label class="field"><span>${T.to}</span><input class="input" data-to placeholder="Ivandry"></label>
         <div class="row"><label class="field grow"><span>${T.day}</span><input class="input" type="date" data-tday value="${d0.getFullYear()}-${pad(d0.getMonth() + 1)}-${pad(d0.getDate())}"></label>
@@ -611,7 +606,7 @@ export async function courierTripsEditor(container, { map, bikeRoute, onChange }
       <div class="list" style="margin-top:10px">${trips.map((x) => `<div class="card" style="padding:10px" data-trip="${x.id}">
         <div class="row between"><b>${dayLabel(x.depart_at)} ${time(x.depart_at)}</b><span class="small muted">${x.km ?? '?'} km · ${x.load}/${x.capacity} ${T.load}</span></div>
         <div class="small">${esc(x.from.address)} → ${esc(x.to.address)}</div>
-        <div class="row" style="margin-top:6px"><button class="btn sm" data-show="${x.id}">🗺</button><button class="btn sm danger" data-cancel="${x.id}">${T.del}</button></div></div>`).join('') || `<p class="muted">${T.none}</p>`}</div>`;
+        <div class="row" style="margin-top:6px"><button class="btn sm" data-show="${x.id}">🗺</button>${readOnly ? '' : `<button class="btn sm danger" data-cancel="${x.id}">${T.del}</button>`}</div></div>`).join('') || `<p class="muted">${T.none}</p>`}</div>`;
     container._trips = trips;
   };
   const resolve = async (input, cur) => {
@@ -642,7 +637,7 @@ export async function courierTripsEditor(container, { map, bikeRoute, onChange }
           await compute();
           const day = container.querySelector('[data-tday]').value, hhmm = container.querySelector('[data-when]').value;
           const depart_at = new Date(`${day}T${hhmm}:00+03:00`).getTime();
-          const r = await api('POST', '/api/courier/trips', { from, to, route, depart_at, capacity: Number(container.querySelector('[data-cap]').value) || 10 });
+          const r = await api('POST', base, { from, to, route, depart_at, capacity: Number(container.querySelector('[data-cap]').value) || 10 });
           toast(`✓ ${r.assigned ? `+${r.assigned} ${T.load}` : ''}`, 'ok'); from = to = route = null; await load(); onChange?.();
         } finally { b.disabled = false; }
         return;

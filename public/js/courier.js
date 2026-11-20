@@ -167,8 +167,8 @@ function render() {
     body.innerHTML = header() + `<h3>🛣 ${state.lang === 'mg' ? 'Ny diako' : 'Mes trajets'}</h3><div data-trips>…</div>`
       + `<h3 style="margin-top:16px">🕘 ${c('my_schedule')} (axes)</h3><div data-plan>…</div><h3 style="margin-top:16px">${c('from_centre')}</h3><div data-allsched class="small">…</div>`;
     const all = () => scheduleHtml(null).then((h) => { const el = $('[data-allsched]'); if (el) el.innerHTML = h; });
-    courierTripsEditor($('[data-trips]'), { map, bikeRoute, onChange: all }).catch(toastErr);
-    courierScheduleEditor($('[data-plan]'), all).catch(toastErr); all(); return; }
+    courierTripsEditor($('[data-trips]'), { map, bikeRoute, onChange: all, readOnly: true }).catch(toastErr);
+    courierScheduleEditor($('[data-plan]')).catch(toastErr); all(); return; }
   if (tab === 'hist') { body.innerHTML = header() + '<div data-hist class="list">…</div>'; return loadHistory(); }
   body.innerHTML = header() + (available
     ? `<div class="list">${requests.map(reqCard).join('') || (axe && !axe.free && !axe.current ? `<p class="muted" style="text-align:center;padding:16px">⏸ ${t('off_schedule')}</p>` : `<div style="text-align:center;padding:16px"><div class="radar" style="margin:10px auto 16px"></div><p class="muted">${t('no_requests')}</p></div>`)}</div>`

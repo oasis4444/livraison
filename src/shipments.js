@@ -782,11 +782,6 @@ async function mySchedule(ctx, env) {
   const axes = await all(env, 'SELECT id, name, color, center_lat, center_lng, radius_km FROM axes WHERE active = 1 ORDER BY name');
   return json({ slots, axes });
 }
-async function saveMySchedule(ctx, env) {
-  await saveSlots(env, ctx.user.id, ctx.body.slots);
-  await audit(env, ctx, 'courier_schedule', { slots: (ctx.body.slots || []).length });
-  return json({ ok: true });
-}
 
 // ---------------------------------------------------------------- centre : liste, caisse, vendeurs
 async function adminList(ctx, env) {
@@ -1082,7 +1077,7 @@ export function registerShipmentRoutes(route) {
   route('POST', '/api/shipments/:id/returned', ['courier'], returned);
   route('GET', '/api/courier/schedule', ['courier'], mySchedule);
   route('POST', '/api/courier/depart', ['courier'], depart);
-  route('PUT', '/api/courier/schedule', ['courier'], saveMySchedule);
+  // Axes et heures des livreurs : saisis par le centre (Admin → Livreurs → 🧭 Axes), le livreur les consulte seulement.
   route('GET', '/api/admin/shipments', ['admin'], adminList);
   route('GET', '/api/admin/shipments/export', ['admin'], adminExportShipments);
   route('GET', '/api/admin/cash', ['admin'], cashOverview);

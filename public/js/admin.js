@@ -1,9 +1,9 @@
 // Tableau de bord Administrateur.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA,
+  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute,
 } from './core.js';
-import { c, shipPill, sendForm, shipDetail, importForm, templateCsv } from './colis.js';
+import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTripsEditor } from './colis.js';
 
 let root, main, view = location.hash.replace('#', '') || 'dash', liveTimer = null, liveMap = null, counts = {};
 const liveMk = {};
@@ -653,7 +653,14 @@ async function planningForm(courierId, name) {
         <button class="btn sun" data-gen style="align-self:flex-end">Générer</button></div></div>
     <div class="row between"><b>Créneaux</b><span><button class="btn sm" data-add>＋ Créneau</button> <button class="btn sm danger" data-clear>Tout effacer</button></span></div>
     <div data-slots class="list"></div>
-    <button class="btn primary block" data-save>Enregistrer le planning</button></div>`, { wide: true });
+    <button class="btn primary block" data-save>Enregistrer le planning</button>
+    <hr style="border:0;border-top:1px solid var(--line);margin:8px 0">
+    <b>🛣 Trajets de ${esc(name)}</b>
+    <div class="small muted">Départ → destination à une heure précise : les colis à récupérer et livrer sur ce chemin lui sont confiés automatiquement.</div>
+    <div data-tmap style="height:220px;border-radius:12px;overflow:hidden"></div>
+    <div data-trips></div></div>`, { wide: true });
+  const tmap = makeMap(m.el.querySelector('[data-tmap]'), { zoom: 12 });
+  courierTripsEditor(m.el.querySelector('[data-trips]'), { map: tmap, bikeRoute, base: `/api/admin/couriers/${courierId}/trips` }).catch(toastErr);
   const box = m.el.querySelector('[data-slots]');
   const render = () => {
     slots.sort((a, b) => a.start_min - b.start_min);
@@ -725,17 +732,44 @@ async function suggestBox(d, s, canPick) {
   box.className = 'card stack';
   const row = (c, leg) => `<label class="row" style="gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line);cursor:pointer">
       <input type="radio" name="${leg}" value="${c.id}" ${String(leg === 'p' ? pick : del) === String(c.id) ? 'checked' : ''} style="margin-top:4px">
-      <span class="grow small"><b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'}${c.refused ? ' <span style="color:var(--red)">a refusé</span>' : ''}
+      <span class="grow small"><b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'} · <a href="tel:${esc(c.phone)}" onclick="event.stopPropagation()">📞 ${esc(phoneFmt(c.phone))}</a>${c.refused ? ' <span style="color:var(--red)">a refusé</span>' : ''}
         <span class="muted">${c.dist_km != null ? ` · 📍 ${String(c.dist_km).replace('.', ',')} km maintenant` : ''}${c.on_trip ? ' · 🛣 trajet passe par là' : ''}${c.axe ? ` · 🧭 axe ${esc(c.axe)}` : ''}
         ${c.next_departure ? ` · 🕘 ${dt(c.next_departure.at)} ${esc(c.next_departure.label || '')}` : ''} · ${c.load} colis en cours</span></span></label>`;
   const list = (arr, leg) => arr.slice(0, 6).map((c) => row(c, leg)).join('') + (arr.length > 6 ? `<details class="small"><summary>${arr.length - 6} autre(s)</summary>${arr.slice(6).map((c) => row(c, leg)).join('')}</details>` : '');
   box.innerHTML = `<b>🚲 Livreurs proposés</b>
     <div class="tiny muted">En tête : ceux dont le trajet ou l'axe passe par l'adresse, puis les plus proches (GPS en direct). Deux livreurs différents = passage par le centre.</div>
+    <div data-smap style="height:260px;border-radius:12px;overflow:hidden"></div>
+    <div class="tiny muted">🟢 A = récupération · 🟠 B = livraison · 🏢 centre · 🚲 livreurs en direct (mis à jour toutes les 5 s)</div>
     ${canPick ? `<div><div class="small"><b>🟢 Récupération</b> — ${esc(s.sender.address)}</div>${list(g.pickup, 'p')}</div>` : ''}
     <div><div class="small"><b>🟠 Livraison</b> — ${esc(s.recipient.address)}${canPick ? '' : ' (depuis le centre)'}</div>${list(g.delivery, 'd')}</div>
     <div class="small" data-plan></div>
     <button class="btn primary block" data-save>Enregistrer les livreurs</button>`;
   d.actions.prepend(box);
+  // Carte en direct : points A / B / centre et position actuelle de chaque livreur proposé.
+  const smap = makeMap(box.querySelector('[data-smap]'), { zoom: 13 });
+  const mk = {};
+  const drawMap = (data, fit) => {
+    if (!smap) return;
+    const pts = [];
+    if (s.sender.lat != null) { upsertMarker(smap, mk, 'A', [s.sender.lat, s.sender.lng], icons.a()); pts.push([s.sender.lat, s.sender.lng]); }
+    if (s.recipient.lat != null) { upsertMarker(smap, mk, 'B', [s.recipient.lat, s.recipient.lng], icons.b()); pts.push([s.recipient.lat, s.recipient.lng]); }
+    if (data.centre) upsertMarker(smap, mk, 'C', data.centre, L.divIcon({ className: '', html: '<div style="font-size:22px">🏢</div>', iconSize: [24, 24], iconAnchor: [12, 12] }));
+    const seen = new Set(['A', 'B', 'C']);
+    for (const c of [...new Map([...data.pickup, ...data.delivery].map((x) => [x.id, x])).values()]) {
+      if (!c.position) continue;
+      const k = 'k' + c.id; seen.add(k);
+      upsertMarker(smap, mk, k, c.position, icons.bike('', c.name.split(' ')[0]));
+      mk[k].bindTooltip(`<b>${esc(c.name)}</b><br>📞 ${esc(phoneFmt(c.phone))}<br>${c.online ? '🟢 en ligne' : '⚪ hors ligne'}${c.position_at ? ' · ' + time(c.position_at) : ''}`);
+      if (c.online) pts.push(c.position);
+    }
+    pruneMarkers(mk, seen);
+    if (fit && pts.length) try { smap.fitBounds(pts, { padding: [30, 30], maxZoom: 15 }); } catch {}
+  };
+  drawMap(g, true);
+  const live = setInterval(async () => {
+    if (!document.body.contains(box)) return clearInterval(live);
+    try { const x = await api('GET', `/api/admin/shipments/${s.id}/suggest`); g.pickup = x.pickup; g.delivery = x.delivery; drawMap(x, false); } catch {}
+  }, 5000);
   const sum = () => {
     const n = (id) => [...g.pickup, ...g.delivery].find((c) => String(c.id) === String(id))?.name?.split(' ')[0] || '?';
     box.querySelector('[data-plan]').innerHTML = canPick ? (pick && del && String(pick) !== String(del) ? `🏢 Relais : <b>${esc(n(pick))}</b> → centre → <b>${esc(n(del))}</b>` : pick ? `➡️ Direct : <b>${esc(n(pick))}</b> fait tout le trajet` : '') : del ? `Livraison depuis le centre : <b>${esc(n(del))}</b>` : '';
