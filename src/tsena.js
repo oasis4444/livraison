@@ -154,9 +154,16 @@ const fmtMg = (ms) => { const d = new Date(ms + 3 * 3600e3).toISOString(); retur
 // Étape Alefa → statut Tsena (attente / cours / livree).
 const TSENA_STATUS = { scheduled: 'confirmee', to_centre: 'cours', at_centre: 'cours', departed: 'cours', at_pickup: 'cours', picked_up: 'cours', en_route: 'cours', nearby: 'cours', awaiting_recipient: 'cours', awaiting_courier: 'cours', delivered: 'livree' };
 
-export async function syncTsena(env) {
+// Rythme de lecture de Tsena (quota Firebase gratuit : 50 000 lectures / jour, partagé avec l'application Tsena elle-même) :
+// toutes les 3 minutes de 6 h à 20 h (heure de Tana), toutes les 20 minutes la nuit, pause de 30 minutes après un refus « 429 ».
+const mgHour = () => new Date(now() + 3 * 3600e3).getUTCHours();
+const nextDelay = () => (mgHour() >= 6 && mgHour() < 20 ? 3 : 20) * 60e3;
+
+export async function syncTsena(env, { force = false } = {}) {
   const s = await settings(env);
   if (!s.tsena_refresh) return { skipped: 'not_connected' };
+  if (!force && Number(s.tsena_next_at || 0) > now()) return { skipped: 'wait' };
+  await setMany(env, { tsena_next_at: now() + nextDelay() });
   await ensureSchema(env);
   const out = { imported: 0, updated: 0, errors: [] };
   try {
@@ -274,6 +281,11 @@ export async function syncTsena(env) {
     await setMany(env, { tsena_last_sync: now(), tsena_last_result: JSON.stringify(out), tsena_last_error: out.errors.slice(0, 3).join(' | ') });
   } catch (e) {
     out.errors.push(e.message);
+    if (/429|RESOURCE_EXHAUSTED|Quota/i.test(e.message)) {
+      e.message = 'Quota Firebase de Tsena dépassé (429) : nouvel essai dans 30 minutes';
+      out.errors[out.errors.length - 1] = e.message;
+      await setMany(env, { tsena_next_at: now() + 30 * 60e3 });
+    }
     await logSync(env, 'tsena', 'in', null, false, e.message);
     const prev = s.tsena_last_error;
     await setMany(env, { tsena_last_sync: now(), tsena_last_result: JSON.stringify(out), tsena_last_error: e.message });
@@ -308,7 +320,7 @@ export async function couriersForPartner(env) {
 async function publishCouriers(env, s, token) {
   const couriers = await couriersForPartner(env);
   const sig = JSON.stringify(couriers.map(({ online, ...c }) => c)); // l'état « en ligne » seul ne déclenche pas d'écriture
-  if (sig === s.tsena_couriers_sig && now() - Number(s.tsena_couriers_at || 0) < 30 * 60e3) return false;
+  if (sig === s.tsena_couriers_sig) return false; // publié seulement quand la liste change (économise le quota Firebase)
   const doc = { id: 'alefa', kind: 'alefa', updatedAt: new Date().toISOString(), couriers, url: s.app_url || '' };
   const mask = Object.keys(doc).map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
   await http(`${docsBase(s)}/settings/alefa?${mask}`, {
@@ -349,11 +361,11 @@ async function connect(ctx, env) {
   const pk = await geocodeTana(pickupAddr);
   await setMany(env, { ...s, tsena_shop_user: '', app_url: ctx.url.origin, tsena_pickup_lat: pk?.[0] ?? '', tsena_pickup_lng: pk?.[1] ?? '', tsena_url: cfg.base, tsena_email: email, tsena_shop_name: str(b.shop_name || 'Tsena Ampandrana', { max: 80 }), tsena_shop_phone: shopPhone, tsena_pickup_addr: pickupAddr, tsena_last_error: '' });
   await audit(env, ctx, 'tsena_connect', { url: cfg.base, email });
-  const first = await syncTsena(env);
+  const first = await syncTsena(env, { force: true });
   return json({ ok: true, waiting: waiting.filter((d) => d.status === 'attente').length, ...first });
 }
 
-async function syncNow(ctx, env) { return json(await syncTsena(env)); }
+async function syncNow(ctx, env) { return json(await syncTsena(env, { force: true })); }
 
 // Modifier la boutique (nom, numéro, adresse de récupération) sans ressaisir le mot de passe Tsena.
 // Les colis Tsena encore non récupérés passent sur le compte de la boutique.

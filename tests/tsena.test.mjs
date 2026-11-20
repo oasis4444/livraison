@@ -65,22 +65,22 @@ test('connexion à Tsena : mauvais mot de passe refusé, puis import automatique
 });
 
 test('pas de doublon, et l\'avancement Alefa est réécrit dans Tsena', async () => {
-  let r = await syncTsena(env);
+  let r = await syncTsena(env, { force: true });
   assert.equal(r.imported, 0, 'déjà importée');
   // le colis avance : récupéré puis livré
   env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00001'").run();
-  r = await syncTsena(env);
+  r = await syncTsena(env, { force: true });
   assert.equal(r.updated, 1); assert.equal(fs.d1.status, 'cours'); assert.match(fs.d1.alefaPin, /^\d{4}$/);
   assert.match(fs.d1.note, /^Livrer avant 11h — 🚲 Alefa : Récupéré · suivi AL\w+$/, 'note d\'origine conservée + statut Alefa + numéro de suivi');
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00001'").run(Date.now());
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(fs.d1.status, 'livree'); assert.ok(fs.d1.doneAt); assert.equal(fs.d1.alefaStep, 'delivered');
-  r = await syncTsena(env);
+  r = await syncTsena(env, { force: true });
   assert.equal(r.updated, 0, 'rien de nouveau');
   assert.match(fs.d1.note, /^Livrer avant 11h — 🚲 Alefa : Livré · suivi AL\w+$/);
   // nouvelle livraison saisie dans Tsena → arrive à la synchronisation suivante
   fs.d3 = { no: 'L-00003', status: 'attente', clientName: 'Koto', phone: '034 99 888 77', address: 'Behoririka', amount: 12000, fee: 0 };
-  r = await syncTsena(env);
+  r = await syncTsena(env, { force: true });
   assert.equal(r.imported, 1);
   const s3 = (await call('GET', '/api/admin/shipments?q=L-00003', null, admin)).data.shipments[0];
   assert.equal(s3.fee, 3000, 'frais Alefa par défaut quand Tsena n\'en indique pas');
@@ -91,28 +91,28 @@ test('une livraison déjà importée à la main (même n°) est reliée et suivi
   const sender = env.DB.raw.prepare("SELECT * FROM users WHERE phone='+261321112233'").get();
   fs.d4 = { no: 'L-00004', status: 'cours', clientName: 'Bema', phone: '034 55 666 77', address: 'Isotry', amount: 5000 };
   await createShipment(env, { external_ref: 'L-00004', recipient_name: 'Bema', recipient_phone: '0345566677', drop_addr: 'Isotry', pickup_addr: 'Ampandrana', declared_value: 5000 }, { sender, source: 'admin', actor: { role: 'admin', id: null } });
-  const r = await syncTsena(env);
+  const r = await syncTsena(env, { force: true });
   assert.equal(r.linked, 1); assert.equal(r.imported, 0, 'pas recréée');
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00004'").run(Date.now());
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(fs.d4.status, 'livree');
 });
 
 test('statut visible dans Tsena dès la programmation, livraison supprimée dans Tsena jamais recréée', async () => {
   fs.d5 = { no: 'L-00005', status: 'attente', clientName: 'Soa', phone: '034 77 888 99', address: 'Ampasika', amount: 6000, fee: 3000, note: '' };
-  await syncTsena(env); // import
-  await syncTsena(env); // statut renvoyé
+  await syncTsena(env, { force: true }); // import
+  await syncTsena(env, { force: true }); // statut renvoyé
   assert.match(fs.d5.note, /^🚲 Alefa : À programmer · suivi AL\w+$/);
   // l'utilisateur modifie sa note dans Tsena : elle est conservée
   fs.d5.note = 'Sonner 2 fois — ' + fs.d5.note;
   env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00005'").run();
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.match(fs.d5.note, /^Sonner 2 fois — 🚲 Alefa : Récupéré · suivi AL\w+$/);
   delete fs.d5;
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE external_ref='L-00005'").run(Date.now());
-  const r = await syncTsena(env);
+  const r = await syncTsena(env, { force: true });
   assert.equal(fs.d5, undefined, 'pas recréée'); assert.ok(r.errors.some((e) => /NOT_FOUND/.test(e)));
-  assert.equal((await syncTsena(env)).errors.length, 0, 'pas de relance infinie');
+  assert.equal((await syncTsena(env, { force: true })).errors.length, 0, 'pas de relance infinie');
 });
 
 test('modifier la boutique : les colis non récupérés passent sur son compte', async () => {
@@ -126,7 +126,7 @@ test('numéro de l\'admin donné pour la boutique : compte boutique séparé cr�
   const r = await call('POST', '/api/admin/tsena/shop', { shop_name: 'Tsena Ampandrana', shop_phone: '034 00 000 00', pickup_addr: 'Ampandrana' }, admin);
   assert.equal(r.status, 200);
   fs.d6 = { no: 'L-00006', status: 'attente', clientName: 'Hery', phone: '034 12 121 21', address: 'Ampasika', amount: 6000, fee: 3000 };
-  const out = await syncTsena(env);
+  const out = await syncTsena(env, { force: true });
   assert.equal(out.errors.length, 0, JSON.stringify(out.errors)); assert.equal(out.imported, 1);
   const s6 = (await call('GET', '/api/admin/shipments?q=L-00006', null, admin)).data.shipments[0];
   assert.equal(s6.sender.name, 'Tsena Ampandrana'); assert.equal(s6.sender.phone, '+261340000000', 'numéro de contact pour le livreur');
@@ -134,23 +134,23 @@ test('numéro de l\'admin donné pour la boutique : compte boutique séparé cr�
   assert.equal(owner.role, 'client');
   // ancien colis resté au nom de l'admin : corrigé tout seul à la synchronisation suivante
   env.DB.raw.prepare("UPDATE shipments SET sender_id = (SELECT id FROM users WHERE role='admin') WHERE external_ref='L-00006'").run();
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(env.DB.raw.prepare('SELECT u.role FROM shipments s JOIN users u ON u.id = s.sender_id WHERE s.external_ref = ?').get('L-00006').role, 'client');
 });
 
 test('changements faits dans Tsena suivis automatiquement : modification, suppression, « Livrée » par la boutique', async () => {
   fs.d7 = { no: 'L-00007', status: 'attente', clientName: 'Bema', phone: '034 55 555 55', address: 'Isotry', amount: 10000, fee: 3000 };
   fs.d8 = { no: 'L-00008', status: 'attente', clientName: 'Koto', phone: '034 66 666 66', address: 'Anosy', amount: 8000, fee: 3000 };
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   // modification dans Tsena
   Object.assign(fs.d7, { address: 'Ankorondrano', amount: 12000, phone: '034 55 555 56' });
-  let r = await syncTsena(env);
+  let r = await syncTsena(env, { force: true });
   assert.equal(r.changed, 1);
   const s7 = (await call('GET', '/api/admin/shipments?q=L-00007', null, admin)).data.shipments[0];
   assert.equal(s7.declared_value, 12000); assert.equal(s7.recipient.address, 'Ankorondrano'); assert.equal(s7.recipient.phone, '+261345555556');
   // la boutique livre elle-même L-00007, et supprime L-00008
   fs.d7.status = 'livree'; delete fs.d8;
-  r = await syncTsena(env);
+  r = await syncTsena(env, { force: true });
   assert.equal(r.cancelled, 2);
   const st = (ref) => env.DB.raw.prepare('SELECT status, outcome_note FROM shipments WHERE external_ref = ?').get(ref);
   assert.equal(st('L-00007').status, 'cancelled'); assert.match(st('L-00007').outcome_note, /boutique/);
@@ -164,30 +164,30 @@ test('nouveaux statuts Tsena : Confirmée importée, Annulée suivie, « Remettr
   env.DB.raw.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261349999999','Santatra Vélo','courier','x','x','active',0)").run();
   const cid = env.DB.raw.prepare("SELECT id FROM users WHERE phone='+261349999999'").get().id;
   fs.d9 = { no: 'L-00009', status: 'confirmee', clientName: 'Lova', phone: '034 90 909 09', address: 'Analakely', amount: 7000, fee: 3000, log: [{ s: 'confirmee', at: '2026-11-17T11:00:00Z', by: 'oasis' }] };
-  let r = await syncTsena(env);
+  let r = await syncTsena(env, { force: true });
   assert.equal(r.imported, 1, 'Confirmée importée');
   // Alefa programme le colis avec un livreur → Tsena passe « Confirmée » (déjà) : pas de changement de statut, mais historique intact
   env.DB.raw.prepare("UPDATE shipments SET status='assigned', courier_id=? WHERE external_ref='L-00009'").run(cid);
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(fs.d9.status, 'confirmee'); assert.equal(fs.d9.log.length, 1);
   // le livreur récupère → « En route », ajouté à l'historique par Alefa
   env.DB.raw.prepare("UPDATE shipments SET status='picked_up', picked_at=1 WHERE external_ref='L-00009'").run();
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(fs.d9.status, 'cours'); assert.equal(fs.d9.log.at(-1).s, 'cours'); assert.equal(fs.d9.log.at(-1).by, 'Santatra · Alefa'); assert.equal(fs.d9.log[0].by, 'oasis');
   // la boutique a déjà mis « En route » à la main : Alefa (programmé) ne le remet pas en « Confirmée »
   fs.d10 = { no: 'L-00010', status: 'attente', clientName: 'Fara', phone: '034 10 101 01', address: 'Isotry', amount: 5000, fee: 3000 };
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   fs.d10.status = 'cours';
   env.DB.raw.prepare("UPDATE shipments SET status='assigned', courier_id=? WHERE external_ref='L-00010'").run(cid);
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(fs.d10.status, 'cours', 'pas de retour en arrière');
   // annulée dans Tsena → colis annulé ; « Remettre en attente » → nouvelle demande Alefa
   fs.d10.status = 'annulee';
-  r = await syncTsena(env);
+  r = await syncTsena(env, { force: true });
   assert.equal(r.cancelled, 1);
   assert.equal(env.DB.raw.prepare("SELECT status FROM shipments WHERE external_ref='L-00010' ORDER BY id DESC").get().status, 'cancelled');
   fs.d10.status = 'attente';
-  r = await syncTsena(env);
+  r = await syncTsena(env, { force: true });
   assert.equal(r.imported, 1, 'repart comme nouvelle demande');
   const again = env.DB.raw.prepare("SELECT s.status, u.name FROM shipments s LEFT JOIN users u ON u.id = s.courier_id WHERE external_ref='L-00010' ORDER BY s.id DESC").get();
   assert.equal(again.status, 'assigned'); assert.equal(again.name, 'Santatra Vélo', 'le livreur affiché sur la carte Tsena est repris');
@@ -208,17 +208,17 @@ test('livreurs, axes et heures publiés automatiquement dans Tsena (settings/ale
   env.DB.raw.prepare("INSERT INTO axes (name, center_lat, center_lng, radius_km, color, active) VALUES ('AMPANDRANA- ITAOSY', -18.9076, 47.4987, 3.6, '#0f7a55', 1)").run();
   const ax = env.DB.raw.prepare("SELECT id FROM axes WHERE name='AMPANDRANA- ITAOSY'").get().id;
   env.DB.raw.prepare("INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days) VALUES (?,?,480,600,'123456')").run(cid, ax);
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   const santatra = settingsAlefa.couriers.find((c) => c.fullName === 'Santatra Vélo');
   assert.equal(santatra.name, 'Santatra (Alefa)');
   assert.equal(santatra.axes, 'AMPANDRANA- ITAOSY');
   assert.equal(santatra.hours, 'AMPANDRANA- ITAOSY 08:00–10:00 (lun–sam)');
   assert.match(santatra.label, /^Santatra \(Alefa\) · AMPANDRANA- ITAOSY/);
   const n = settingsWrites;
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(settingsWrites, n, 'rien de changé : pas de nouvelle écriture');
   env.DB.raw.prepare('UPDATE courier_axes SET end_min = 660 WHERE courier_id = ?').run(cid);
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(settingsWrites, n + 1); assert.match(settingsAlefa.couriers.find((c) => c.fullName === 'Santatra Vélo').hours, /08:00–11:00/);
 });
 
@@ -226,16 +226,33 @@ test('livreur choisi dans Tsena (« Rivo (Alefa) ») : Alefa lui confie le colis
   env.DB.raw.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261348888888','Rivo Vélo','courier','x','x','active',0)").run();
   const rivo = env.DB.raw.prepare("SELECT id FROM users WHERE phone='+261348888888'").get().id;
   fs.d11 = { no: 'L-00011', status: 'attente', clientName: 'Tahina', phone: '034 11 111 99', address: 'Isotry', amount: 4000, fee: 3000 };
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   fs.d11.driver = 'Rivo (Alefa)';
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   const sh = env.DB.raw.prepare("SELECT courier_id, status FROM shipments WHERE external_ref='L-00011'").get();
   assert.equal(sh.courier_id, rivo); assert.equal(sh.status, 'assigned');
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.equal(fs.d11.driver, 'Rivo (Alefa)'); assert.match(fs.d11.note, /Rivo/);
   // Rivo refuse : Alefa confie le colis à un autre ; le nom « Rivo (Alefa) » encore écrit dans Tsena ne le fait pas revenir
   const tok = (await call('POST', '/api/auth/login', { phone: '0348888888', password: 'x' })).data.token;
   env.DB.raw.prepare("UPDATE shipments SET refused_by = ?, courier_id = NULL, status = 'pending' WHERE external_ref = 'L-00011'").run(String(rivo));
-  await syncTsena(env);
+  await syncTsena(env, { force: true });
   assert.notEqual(env.DB.raw.prepare("SELECT courier_id FROM shipments WHERE external_ref='L-00011'").get().courier_id, rivo);
+});
+
+test('quota Firebase ménagé : pas de lecture avant le délai, pause de 30 min après un refus 429', async () => {
+  const runs = () => patches.length;
+  let r = await syncTsena(env, { force: true });
+  r = await syncTsena(env);
+  assert.equal(r.skipped, 'wait', 'deuxième passage dans la même minute : rien lu');
+  const real = globalThis.fetch;
+  globalThis.fetch = async (u, i) => (String(u).includes(':runQuery') ? new Response(JSON.stringify({ error: { message: 'Quota exceeded.', status: 'RESOURCE_EXHAUSTED' } }), { status: 429 }) : real(u, i));
+  try {
+    r = await syncTsena(env, { force: true });
+    assert.match(r.errors[0], /Quota Firebase de Tsena dépassé/);
+    const next = Number(env.DB.raw.prepare("SELECT value FROM settings WHERE key = 'tsena_next_at'").get().value);
+    assert.ok(next - Date.now() > 25 * 60e3, 'pause d\'environ 30 minutes');
+    assert.equal((await syncTsena(env)).skipped, 'wait');
+  } finally { globalThis.fetch = real; }
+  assert.ok(runs() >= 0);
 });
