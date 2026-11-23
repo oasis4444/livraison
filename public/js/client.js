@@ -143,7 +143,7 @@ function showOutCouriers(deps) {
   const keep = new Set();
   for (const d of deps.filter((x) => x.started && x.lat != null)) {
     keep.add('sc' + d.courier_id);
-    upsertMarker(map, mk, 'sc' + d.courier_id, [d.lat, d.lng], icons.bike('', `${d.courier} · ${d.axe}`), { refreshIcon: true });
+    upsertMarker(map, mk, 'sc' + d.courier_id, [d.lat, d.lng], icons.bike('', `${d.courier} · ${d.axe}`, d.vehicle), { refreshIcon: true });
   }
   for (const k of Object.keys(mk)) if (k.startsWith('sc') && !keep.has(k)) { mk[k].remove(); delete mk[k]; }
 }

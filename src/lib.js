@@ -126,6 +126,13 @@ export function bbox(lat, lng, km) {
   return [lat - dLat, lat + dLat, lng - dLng, lng + dLng];
 }
 
+// Vitesse moyenne en ville selon le véhicule du livreur (réglages bike_speed_kmh / moto_speed_kmh).
+export const VEHICLES = ['velo', 'moto'];
+export const vehicleOf = (v) => (v === 'moto' ? 'moto' : 'velo');
+export function speedKmh(s, vehicle) {
+  return vehicleOf(vehicle) === 'moto' ? Number(s?.moto_speed_kmh || 25) : Number(s?.bike_speed_kmh || 14);
+}
+
 export const round500 = (n) => Math.max(500, Math.round(n / 500) * 500);
 
 export function suggestPrice(s, pickup, drop) {

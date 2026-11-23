@@ -300,7 +300,7 @@ const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 6
 const daysTxt = (d) => (!d || d === '1234567' ? 'tous les jours' : d === '123456' ? 'lun–sam' : d === '12345' ? 'lun–ven' : d.split('').map((x) => DAY[x]).join(', '));
 export async function couriersForPartner(env) {
   const cs = await all(env, `SELECT u.id, u.name, c.available, c.last_seen FROM users u LEFT JOIN couriers c ON c.user_id = u.id WHERE u.role = 'courier' AND u.status = 'active' ORDER BY u.name`);
-  const slots = await all(env, 'SELECT ca.courier_id, ca.start_min, ca.end_min, ca.days, a.name AS axe FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id WHERE a.active = 1 ORDER BY ca.start_min');
+  const slots = await all(env, 'SELECT ca.courier_id, ca.start_min, ca.end_min, ca.days, ca.from_addr, ca.to_addr, a.name AS axe FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id WHERE a.active = 1 ORDER BY ca.start_min');
   const deps = await departures(env, { days: 2 });
   const trips = await upcomingTrips(env);
   return cs.map((c) => {
@@ -311,7 +311,7 @@ export async function couriersForPartner(env) {
     return {
       name: `${first} (Alefa)`, fullName: c.name, online: !!c.last_seen && now() - c.last_seen < 2 * 60e3,
       axes: [...new Set(mine.map((x) => x.axe))].join(', '),
-      hours: mine.map((x) => `${x.axe} ${hm(x.start_min)}–${hm(x.end_min)} (${daysTxt(x.days)})`).join(' · '),
+      hours: mine.map((x) => `${x.axe}${x.from_addr ? ` (${x.from_addr.split(',')[0]} → ${x.to_addr.split(',')[0]})` : ''} ${hm(x.start_min)}–${hm(x.end_min)} (${daysTxt(x.days)})`).join(' · '),
       next: next.map((n) => `${fmtMg(n.at)} ${n.axe}`).join(' · '),
       label: [`${first} (Alefa)`, [...new Set(mine.map((x) => x.axe))].join('/'), next[0] ? `départ ${fmtMg(next[0].at)}` : ''].filter(Boolean).join(' · '),
     };

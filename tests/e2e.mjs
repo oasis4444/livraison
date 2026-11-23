@@ -48,6 +48,8 @@ const step = async (name, fn) => { process.stdout.write(`• ${name} … `); awa
 const cc = await ctx(ANALAKELY), client = await cc.newPage(); watch(client, 'client');
 const kc = await ctx({ latitude: -18.9030, longitude: 47.5270 }), courier = await kc.newPage(); watch(courier, 'courier');
 const ac = await browser.newContext({ viewport: { width: 1360, height: 860 } });
+await ac.route('https://nominatim.openstreetmap.org/**', (r) => r.fulfill({ json: [/behoririka/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Behoririka, Antananarivo', lat: '-18.8990', lon: '47.5240' } : { display_name: 'Analakely, Antananarivo', lat: '-18.9055', lon: '47.5255' }] }));
+await ac.route('https://routing.openstreetmap.de/**', (r) => r.abort());
 await ac.route('https://unpkg.com/**', (r) => r.request().url().endsWith('.js') ? r.fulfill({ contentType: 'text/javascript', body: LEAFLET_STUB }) : r.fulfill({ contentType: 'text/css', body: '' }));
 const admin = await ac.newPage(); watch(admin, 'admin');
 
@@ -74,6 +76,11 @@ try {
     await admin.click('[data-ok]'); await admin.waitForSelector('text=Livreur créé');
     await admin.click('[data-pl]'); await admin.waitForSelector('[data-gax]');
     await admin.check('[data-gax] input'); await admin.fill('[data-gfrom]', '00:00'); await admin.fill('[data-gto]', '23:59'); await admin.click('[data-gen]');
+    // un seul créneau généré (00:00 → 23:59) : départ et arrivée à saisir
+    await admin.fill('.modal [data-k=from]', 'Analakely'); await admin.dispatchEvent('.modal [data-k=from]', 'change');
+    await admin.waitForSelector('.modal [data-k=to]');
+    await admin.fill('.modal [data-k=to]', 'Behoririka'); await admin.dispatchEvent('.modal [data-k=to]', 'change');
+    await admin.waitForSelector('.modal >> text=✓ Analakely → Behoririka');
     await admin.screenshot({ path: 'tests/screens/12-admin-planning.png' });
     await admin.click('[data-save]'); await admin.waitForSelector('text=Planning enregistré');
   });

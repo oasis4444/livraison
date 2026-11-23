@@ -1,7 +1,7 @@
 // Application Livreur (vélo) : disponibilité, partage GPS, demandes proches, négociation, livraison avec PIN, revenus.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, getPosition, hm, every, startNotifications, showNotifications, profileForm,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, startNotifications, showNotifications, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel } from './colis.js';
@@ -72,7 +72,7 @@ function onFix(p) {
   const first = !pos;
   pos = [p.coords.latitude, p.coords.longitude];
   hideGate();
-  upsertMarker(map, mk, 'me', pos, icons.bike(active ? 'busy' : ''), { zIndexOffset: 1000, refreshIcon: true });
+  upsertMarker(map, mk, 'me', pos, icons.bike(active ? 'busy' : '', '', state.courier?.vehicle), { zIndexOffset: 1000, refreshIcon: true });
   if (first) { map?.setView(pos, 15); sendPos(); if (available) loadRequests(); }
 }
 function showGate(kind) {
@@ -152,7 +152,7 @@ function reqCard(q) {
   return `<div class="card ${mine ? 'hl' : ''}" data-act="open" data-id="${q.id}" style="cursor:pointer">
     <div class="row between"><span class="small muted">${t(q.type)} · ${esc(q.client_name.split(' ')[0])}${q.scheduled_at ? ` · 🗓 ${dt(q.scheduled_at)}` : ''}</span><span class="price">${q.proposed_price.toLocaleString('fr-FR')} <small>Ar</small></span></div>
     <div class="route-line" style="margin:6px 0"><span class="dot"></span><span class="small ellipsis">${esc(q.pickup_addr || '—')}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small ellipsis">${esc(q.drop_addr || '—')}</span></div>
-    <div class="row between small"><span class="muted">📍 ${km(q.to_pickup_km)} ${t('to_pickup')} · 🚲 ${km(q.distance_km)}</span><span>${t(q.payment_method)}</span></div>
+    <div class="row between small"><span class="muted">📍 ${km(q.to_pickup_km)} ${t('to_pickup')} · ${vehIcon(state.courier?.vehicle)} ${km(q.distance_km)}</span><span>${t(q.payment_method)}</span></div>
     ${mine ? `<div class="small" style="margin-top:6px;color:var(--green);font-weight:700">${t('my_offer')} : ${ar(q.my_price)} — ${t('waiting_client')}</div>` : ''}
   </div>`;
 }
@@ -172,21 +172,21 @@ function render() {
   if (tab === 'hist') { body.innerHTML = header() + '<div data-hist class="list">…</div>'; return loadHistory(); }
   body.innerHTML = header() + (available
     ? `<div class="list">${requests.map(reqCard).join('') || (axe && !axe.free && !axe.current ? `<p class="muted" style="text-align:center;padding:16px">⏸ ${t('off_schedule')}</p>` : `<div style="text-align:center;padding:16px"><div class="radar" style="margin:10px auto 16px"></div><p class="muted">${t('no_requests')}</p></div>`)}</div>`
-    : `<div style="text-align:center;padding:16px 8px"><div style="font-size:46px">🚲</div><p class="muted">${t('go_online')}</p></div>`);
+    : `<div style="text-align:center;padding:16px 8px"><div style="font-size:46px">${vehIcon(state.courier?.vehicle)}</div><p class="muted">${t('go_online')}</p></div>`);
 }
 
 async function openRequest(id) {
   const q = requests.find((x) => x.id === id);
   if (!q) return;
   selected = q;
-  const r = await bikeRoute([q.pickup_lat, q.pickup_lng], [q.drop_lat, q.drop_lng]);
+  const r = await bikeRoute([q.pickup_lat, q.pickup_lng], [q.drop_lat, q.drop_lng], state.courier?.vehicle);
   drawRoute(r, true);
   upsertMarker(map, mk, 'A', [q.pickup_lat, q.pickup_lng], icons.a());
   upsertMarker(map, mk, 'B', [q.drop_lat, q.drop_lng], icons.b());
   const m = modal(`${t(q.type)} · ${ar(q.proposed_price)}`, `<div class="stack">
     <div class="card"><div class="route-line"><span class="dot"></span><span class="small">${esc(q.pickup_addr || '—')}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small">${esc(q.drop_addr || '—')}</span></div></div>
     ${q.description ? `<div class="small">📝 ${esc(q.description)}</div>` : ''}
-    <div class="row between small"><span class="muted">📍 ${km(q.to_pickup_km)} ${t('to_pickup')}</span><span class="muted">🚲 ${km(r.km)} · ~${r.min || etaMin(r.km)} ${t('min')}</span></div>
+    <div class="row between small"><span class="muted">📍 ${km(q.to_pickup_km)} ${t('to_pickup')}</span><span class="muted">${vehIcon(state.courier?.vehicle)} ${km(r.km)} · ~${r.min || etaMin(r.km, state.courier?.vehicle)} ${t('min')}</span></div>
     <div class="row between small"><span class="muted">${t('payment')}</span><b>${t(q.payment_method)}</b></div>
     <div class="row between small"><span class="muted">${t('suggested')}</span><b>${ar(q.suggested_price)}</b></div>
     <button class="btn primary lg block" data-acc>✅ ${t('accept_price')} ${ar(q.proposed_price)}</button>
@@ -244,9 +244,9 @@ async function refreshActive() {
   if (key !== lastRouteKey) {
     const first = !lastRouteKey || !lastRouteKey.startsWith(d.status);
     lastRouteKey = key;
-    const r = await bikeRoute(from, target);
+    const r = await bikeRoute(from, target, state.courier?.vehicle);
     drawRoute(r, first);
-    active._km = r.km; active._eta = r.min || etaMin(r.km);
+    active._km = r.km; active._eta = r.min || etaMin(r.km, state.courier?.vehicle);
   } else { active._km = prev._km; active._eta = prev._eta; }
   const sig = JSON.stringify([d.status, d.messages?.length, active._eta]);
   if (sig !== prev._sig || !$('[data-active]')) renderActive();
@@ -266,7 +266,7 @@ function renderActive() {
     <div class="card" style="background:${d.status === 'assigned' ? 'var(--green-soft)' : '#fff1e0'};border:0">
       <div class="small muted">${d.status === 'assigned' ? '① ' + t('where_from') : '② ' + t('where_to')}</div>
       <b style="font-size:1.1rem">${esc(d.status === 'assigned' ? d.pickup_addr : d.drop_addr) || '—'}</b>
-      <div class="small muted">🚲 ${km(d._km)} · ~${d._eta || '…'} ${t('min')}</div>
+      <div class="small muted">${vehIcon(state.courier?.vehicle)} ${km(d._km)} · ~${d._eta || '…'} ${t('min')}</div>
       ${d.status === 'picked_up' && (d.recipient_name || d.recipient_phone) ? `<div class="small" style="margin-top:4px">👤 ${esc(d.recipient_name || '')} ${d.recipient_phone ? `· <a href="tel:${esc(d.recipient_phone)}">${esc(phoneFmt(d.recipient_phone))}</a>` : ''}</div>` : ''}
     </div>
     ${d.description ? `<div class="small">📝 ${esc(d.description)}</div>` : ''}
@@ -298,9 +298,9 @@ async function loadWallet() {
       <div class="tiny muted">${c.balance < 0 ? (state.lang === 'mg' ? 'Komisiona tokony haloa amin\'ny Alefa' : 'Commissions à régler à Alefa') : (state.lang === 'mg' ? 'Vola tokony horaisinao avy amin\'ny Alefa' : 'Montant que Alefa vous doit')}</div>
       ${c.balance < 0 && nums.length ? `<div class="small" style="margin-top:6px">${t('pay_to')} : ${nums.map(([k, v]) => `${t(k)} <b>${esc(v)}</b>`).join(' · ')}</div>` : ''}
     </div>
-    <div class="row"><div class="card grow" style="text-align:center"><div class="tiny muted">${t('today')}</div><b>${ar(w.stats.today)}</b><div class="tiny muted">${w.stats.today_count} 🚲</div></div>
+    <div class="row"><div class="card grow" style="text-align:center"><div class="tiny muted">${t('today')}</div><b>${ar(w.stats.today)}</b><div class="tiny muted">${w.stats.today_count} ${vehIcon(state.courier?.vehicle)}</div></div>
       <div class="card grow" style="text-align:center"><div class="tiny muted">${t('week')}</div><b>${ar(w.stats.week)}</b></div>
-      <div class="card grow" style="text-align:center"><div class="tiny muted">${t('total')}</div><b>${ar(w.stats.revenue)}</b><div class="tiny muted">${w.stats.total} 🚲</div></div></div>
+      <div class="card grow" style="text-align:center"><div class="tiny muted">${t('total')}</div><b>${ar(w.stats.revenue)}</b><div class="tiny muted">${w.stats.total} ${vehIcon(state.courier?.vehicle)}</div></div></div>
     <div class="small muted">${t('commission')} : <b>${w.commission_mode === 'percent' ? w.commission_percent + ' %' : 'Abonnement'}</b>${w.commission_mode === 'subscription' ? ` · ${t('subscription_until')} <b>${c.subscription_until ? dt(c.subscription_until) : '—'}</b>` : ''} · ${stars(c.rating)} (${c.rating_count})</div>
     <h3>${t('transactions')}</h3>
     <div class="list">${w.transactions.map((x) => `<div class="row between small"><span><b>${esc(x.note || x.kind)}</b><br><span class="muted">${dt(x.at)}</span></span><b style="color:${x.amount < 0 ? 'var(--red)' : 'var(--green)'}">${x.amount > 0 ? '+' : ''}${ar(x.amount)}</b></div>`).join('') || `<p class="muted">${t('empty')}</p>`}</div>

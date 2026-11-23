@@ -1,5 +1,5 @@
 // Colis du centre : éléments partagés entre client, livreur et administration.
-import { state, t, api, esc, $, ar, km, dt, time, hm, modal, toast, toastErr, confirmBox, promptBox, phoneFmt, geocode, reverse, getPosition } from './core.js';
+import { state, t, api, esc, $, ar, km, dt, time, hm, modal, toast, toastErr, confirmBox, promptBox, phoneFmt, geocode, reverse, getPosition, vehIcon } from './core.js';
 
 const L_FR = {
   sh_pending: 'À programmer', sh_assigned: 'Programmé', sh_picked_up: 'Récupéré · en route', sh_delivered: 'Livré', sh_refused: 'Refusé', sh_cancelled: 'Annulé',
@@ -86,7 +86,7 @@ export async function scheduleHtml(map, onDeps) {
   return `<div class="small muted" style="margin-bottom:8px">🏢 ${esc(r.centre?.name || '')} · ${esc(c('fee'))} : <b>${ar(r.default_fee)}</b></div>
     ${Object.entries(groups).map(([day, list]) => `<h3>${esc(day)}</h3><div class="list">${list.map((d) => `<div class="card row" style="padding:10px 12px">
       <div style="text-align:center;min-width:56px"><div style="font-size:1.25rem;font-weight:850">${time(d.departure_at)}</div><div class="tiny muted">${c('back_at')} ${time(d.return_at)}</div></div>
-      <div class="grow"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(d.color)}"></span> ${esc(d.axe)}</b><div class="small muted">${d.trip ? '🛣' : '🚲'} ${esc(d.courier)} · ${d.load}${d.capacity ? '/' + d.capacity : ''} ${c('parcels')}${d.started ? ' · 🟢' : ''}</div></div></div>`).join('')}</div>`).join('') || `<p class="muted">${c('no_schedule')}</p>`}
+      <div class="grow"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(d.color)}"></span> ${esc(d.axe)}</b>${d.from_addr ? `<div class="small">📍 ${esc(d.from_addr.split(',')[0])} → 🏁 ${esc(d.to_addr.split(',')[0])}</div>` : ''}<div class="small muted">${d.trip ? '🛣' : vehIcon(d.vehicle)} ${esc(d.courier)} · ${d.load}${d.capacity ? '/' + d.capacity : ''} ${c('parcels')}${d.started ? ' · 🟢' : ''}</div></div></div>`).join('')}</div>`).join('') || `<p class="muted">${c('no_schedule')}</p>`}
     ${r.axes.length ? `<h3 style="margin-top:12px">Axes</h3><div class="chips">${r.axes.map((a) => `<span class="chip" style="border-color:${esc(a.color)}">${esc(a.name)}${a.fee ? ` · ${ar(a.fee)}` : ''}</span>`).join('')}</div>` : ''}`;
 }
 
@@ -120,7 +120,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const v = Number(el.querySelector('[data-v]').value.replace(/\D/g, '')) || 0;
     box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div><div class="row between"><span>${c('to_collect')}</span><b>${ar(v + r.fee)}</b></div>
       <label class="field" style="margin-top:8px"><span>${c('departure')}</span><select class="input" data-dep><option value="">${c('auto_dep')}</option>
-      ${r.departures.map((d) => `<option value="${d.slot_id}|${d.departure_at}">${dayLabel(d.departure_at)} ${time(d.departure_at)} · ${esc(d.axe)} · 🚲 ${esc(d.courier)}</option>`).join('')}</select></label>
+      ${r.departures.map((d) => `<option value="${d.slot_id}|${d.departure_at}">${dayLabel(d.departure_at)} ${time(d.departure_at)} · ${esc(d.axe)}${d.from_addr ? ` (${esc(d.from_addr.split(',')[0])} → ${esc(d.to_addr.split(',')[0])})` : ''} · ${vehIcon(d.vehicle)} ${esc(d.courier)}</option>`).join('')}</select></label>
       ${r.departures.length ? '' : `<div class="tiny" style="color:var(--orange)">${c('no_dep')}</div>`}`;
   };
   el.addEventListener('input', (e) => {
@@ -418,6 +418,7 @@ export async function courierScheduleEditor(container) {
   container.innerHTML = `<div class="small muted" style="margin-bottom:8px">${mg ? 'Ny centre no mametraka ny axe sy ny ora iaingananao. Hitan\'ny client rehetra izany.' : 'Vos axes et heures de départ sont fixés par le centre. Tous les clients les voient.'}</div>
     <div class="list">${slots.sort((a, b) => a.start_min - b.start_min).map((x) => `<div class="card" style="padding:10px">
       <div class="row between"><b>🧭 ${esc(x.axe_name || x.name || '')}</b><span class="small">${hm(x.start_min)} → ${x.end_min >= 1440 ? '24:00' : hm(x.end_min)}</span></div>
+      ${x.from_addr ? `<div class="small">📍 ${esc(x.from_addr)} → 🏁 ${esc(x.to_addr)}${x.km ? ` · ${x.km} km` : ''}</div>` : ''}
       <div class="chips" style="margin-top:6px">${DAYS.map((d, j) => `<span class="chip ${String(x.days).includes(String(j + 1)) ? 'on' : ''}" style="padding:.2rem .5rem">${d}</span>`).join('')}</div></div>`).join('') || `<p class="muted">${mg ? 'Mbola tsy nomen\'ny centre axe ianao.' : 'Le centre ne vous a pas encore attribué d\'axe.'}</p>`}</div>`;
 }
 
@@ -587,7 +588,7 @@ const L_TRIP = {
   mg: { title: 'Ny diako', help: 'Ampidiro ny toerana iaingananao, ny alehanao ary ny ora : homena anao ny entana halaina sy haterina eo amin\'ny lalanao.',
     from: 'Iaingana', to: 'Alehana', when: 'Ora iaingana', cap: 'Entana farafahabetsany', here: '📍 Toerana misy ahy', add: '＋ Ampidiro ity dia ity', none: 'Tsy misy dia voalahatra.', del: 'Foanana', route: 'Jereo ny lalana', day: 'Andro', load: 'entana' },
 };
-export async function courierTripsEditor(container, { map, bikeRoute, onChange, base = '/api/courier/trips', readOnly = false } = {}) {
+export async function courierTripsEditor(container, { map, bikeRoute, onChange, base = '/api/courier/trips', readOnly = false, vehicle } = {}) {
   const T = L_TRIP[state.lang] || L_TRIP.fr;
   let layer = null, from = null, to = null, route = null;
   const draw = (coords) => { if (!map || !window.L) return; layer?.remove(); layer = L.polyline(coords, { color: '#0f7a55', weight: 5, opacity: .8 }).addTo(map); try { map.fitBounds(layer.getBounds(), { padding: [30, 30] }); } catch {} };
@@ -619,7 +620,7 @@ export async function courierTripsEditor(container, { map, bikeRoute, onChange, 
     from = await resolve(container.querySelector('[data-from]'), from);
     to = await resolve(container.querySelector('[data-to]'), to);
     if (!from || !to) throw new Error(state.lang === 'mg' ? 'Fenoy ny iaingana sy ny alehana' : 'Indiquez le départ et la destination');
-    const r = await bikeRoute([from.lat, from.lng], [to.lat, to.lng]);
+    const r = await bikeRoute([from.lat, from.lng], [to.lat, to.lng], vehicle);
     route = r.coords; draw(route);
     container.querySelector('[data-info]').textContent = `≈ ${r.km.toFixed(1)} km${r.approx ? ' (ligne droite)' : ''}`;
   };

@@ -1,11 +1,11 @@
 // Alefa Livraison — API (Cloudflare Worker + D1).
 // Clients, livreurs (vélo) et administrateurs ; négociation de prix à la inDrive ; suivi GPS par actualisation 5 s.
-import {
+import { speedKmh, vehicleOf, VEHICLES,
   HttpError, fail, json, withSecurityHeaders, readJson, str, int, coord, normalizePhone,
   randomHex, randomPin, hashPassword, safeEqual, haversineKm, bbox, suggestPrice, csv, fmtDate, now,
 } from './lib.js';
 import { registerTsenaRoutes, syncTsena } from './tsena.js';
-import { registerTripRoutes, rateLimit, purgeLogs } from './trips.js';
+import { registerTripRoutes, rateLimit, purgeLogs, nearest, simplify } from './trips.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -179,14 +179,32 @@ async function nearbyCouriers(env, lat, lng, km) {
 
 // ---------------------------------------------------------------- axes (secteurs) et planning
 export const mgNow = () => { const d = new Date(now() + 3 * 3600e3); return { min: d.getUTCHours() * 60 + d.getUTCMinutes(), day: ((d.getUTCDay() + 6) % 7) + 1 }; };
-export const inAxe = (a, lat, lng) => haversineKm(lat, lng, a.center_lat, a.center_lng) <= a.radius_km;
+// Un point est dans l'axe s'il est dans le cercle de l'axe, ou à moins de AXE_CORRIDOR_M du chemin départ → arrivée du créneau.
+export const AXE_CORRIDOR_M = 800;
+const routeCache = new Map();
+export function slotRoute(a) {
+  if (!a) return null;
+  if (Array.isArray(a.route)) return a.route.length ? a.route : null;
+  if (typeof a.route === 'string' && a.route) {
+    let r = routeCache.get(a.route);
+    if (!r) { try { r = JSON.parse(a.route); } catch { r = []; } if (routeCache.size > 500) routeCache.clear(); routeCache.set(a.route, r); }
+    return r.length ? r : null;
+  }
+  return a.from_lat != null && a.to_lat != null ? [[a.from_lat, a.from_lng], [a.to_lat, a.to_lng]] : null;
+}
+export const inAxe = (a, lat, lng) => {
+  if (a.center_lat != null && haversineKm(lat, lng, a.center_lat, a.center_lng) <= a.radius_km) return true;
+  const r = slotRoute(a);
+  return !!r && nearest(r, [lat, lng]).d <= AXE_CORRIDOR_M;
+};
+const slotPath = (x) => (x.from_lat != null ? { from_addr: x.from_addr, from_lat: x.from_lat, from_lng: x.from_lng, to_addr: x.to_addr, to_lat: x.to_lat, to_lng: x.to_lng, route: slotRoute(x), km: x.km } : {});
 export const SLOT_SQL = `SELECT ca.*, a.name, a.center_lat, a.center_lng, a.radius_km, a.color, a.active FROM courier_axes ca JOIN axes a ON a.id = ca.axe_id`;
 
 export function axeState(slots) {
   if (!slots.length) return { free: true, slots: [] };
   const { min, day } = mgNow();
   const today = slots.filter((x) => String(x.days).includes(String(day)) && x.active).sort((a, b) => a.start_min - b.start_min);
-  const pick = (x) => x && { id: x.axe_id, name: x.name, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km, color: x.color, start_min: x.start_min, end_min: x.end_min };
+  const pick = (x) => x && { id: x.axe_id, name: x.name, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km, color: x.color, start_min: x.start_min, end_min: x.end_min, ...slotPath(x) };
   return { free: false, current: pick(today.find((x) => x.start_min <= min && min < x.end_min)), next: pick(today.find((x) => x.start_min > min)), today: today.map(pick) };
 }
 export async function courierAxeState(env, courierId) {
@@ -457,7 +475,7 @@ async function postLocation(ctx, env) {
   if (c.last_seen && t - c.last_seen < 2500) return json({ ok: true, throttled: true });
   if (c.lat != null && c.last_seen) {
     const km = haversineKm(c.lat, c.lng, lat, lng), h = (t - c.last_seen) / 3600e3;
-    if (h > 0 && km > 0.3 && km / h > 70) {
+    if (h > 0 && km > 0.3 && km / h > (c.vehicle === 'moto' ? 110 : 70)) {
       await alertAdmins(env, 'alert', `Saut GPS suspect : ${u.name} (${Math.round(km / h)} km/h)`, active?.id ?? null, u.id, lat, lng);
     }
   }
@@ -510,7 +528,7 @@ async function makeOffer(ctx, env) {
   if (!axeAllows(axe, d.pickup_lat, d.pickup_lng)) fail(403, 'out_of_axe', axe.current ? `Cette demande est hors de votre axe (${axe.current.name})` : 'Vous êtes hors de vos horaires de travail');
   const price = ctx.body.price == null ? d.proposed_price : int(ctx.body.price, { min: Number(s.min_price), max: 1_000_000, name: 'Prix' });
   const dist = c.lat != null ? haversineKm(c.lat, c.lng, d.pickup_lat, d.pickup_lng) : null;
-  const eta = dist != null ? Math.max(2, Math.round((dist * 1.3 / Number(s.bike_speed_kmh)) * 60)) : null;
+  const eta = dist != null ? Math.max(2, Math.round((dist * 1.3 / speedKmh(s, c.vehicle)) * 60)) : null;
   await run(env, `INSERT INTO offers (delivery_id, courier_id, price, distance_km, eta_min, status, created_at) VALUES (?,?,?,?,?, 'pending', ?)
     ON CONFLICT(delivery_id, courier_id) DO UPDATE SET price = excluded.price, distance_km = excluded.distance_km, eta_min = excluded.eta_min,
     status = 'pending', created_at = excluded.created_at`, d.id, u.id, price, dist != null ? Math.round(dist * 100) / 100 : null, eta, now());
@@ -650,7 +668,7 @@ async function adminStats(ctx, env) {
 }
 
 async function adminLive(ctx, env) {
-  const couriers = await all(env, `SELECT u.id, u.name, u.phone, c.available, c.lat, c.lng, c.last_seen,
+  const couriers = await all(env, `SELECT u.id, u.name, u.phone, c.vehicle, c.available, c.lat, c.lng, c.last_seen,
       (SELECT d.id FROM deliveries d WHERE d.courier_id = u.id AND d.status IN ('assigned','picked_up') LIMIT 1) AS delivery_id,
       (SELECT d.status FROM deliveries d WHERE d.courier_id = u.id AND d.status IN ('assigned','picked_up') LIMIT 1) AS delivery_status
     FROM users u JOIN couriers c ON c.user_id = u.id
@@ -685,7 +703,7 @@ async function adminUsers(ctx, env) {
   const status = p.get('status');
   const search = (p.get('q') || '').trim();
   let sql = `SELECT u.id, u.phone, u.name, u.role, u.status, u.is_business, u.company, u.cancel_count, u.created_at,
-      c.cin, c.address, c.emergency_contact, c.doc_note, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen, c.subscription_until,
+      c.vehicle, c.cin, c.address, c.emergency_contact, c.doc_note, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen, c.subscription_until,
       (SELECT COUNT(*) FROM deliveries d WHERE (d.client_id = u.id OR d.courier_id = u.id) AND d.status='delivered') AS delivered
     FROM users u LEFT JOIN couriers c ON c.user_id = u.id WHERE 1=1`;
   const args = [];
@@ -707,7 +725,7 @@ async function adminCreateUser(ctx, env) {
     await hashPassword(str(b.password, { min: 6, max: 128, name: 'Mot de passe (6 caractères min.)' }), salt, iterations(env)), salt, 'active',
     b.is_business ? 1 : 0, str(b.company, { max: 120 }) || null, now());
   if (role === 'courier') await run(env, 'INSERT INTO couriers (user_id, vehicle, cin, address, emergency_contact, doc_note, validated_at) VALUES (?,?,?,?,?,?,?)',
-    res.meta.last_row_id, 'velo', str(b.cin, { min: 5, max: 30, name: 'Numéro CIN' }), str(b.address, { max: 200 }), str(b.emergency_contact, { max: 60 }), str(b.doc_note, { max: 500 }), now());
+    res.meta.last_row_id, vehicleOf(b.vehicle), str(b.cin, { min: 5, max: 30, name: 'Numéro CIN' }), str(b.address, { max: 200 }), str(b.emergency_contact, { max: 60 }), str(b.doc_note, { max: 500 }), now());
   await audit(env, ctx, 'admin_user_create', { id: res.meta.last_row_id, role });
   return json({ id: res.meta.last_row_id }, 201);
 }
@@ -760,7 +778,7 @@ async function adminSettingsGet(ctx, env) {
 }
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
-  'bike_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m'];
+  'bike_speed_kmh', 'moto_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -926,6 +944,12 @@ async function adminCourierAxesGet(ctx, env) {
   const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id = ? ORDER BY ca.start_min`, ctx.params.id);
   return json({ slots, state: axeState(slots) });
 }
+function slotPlace(v, label) {
+  if (!v || (v.lat == null && !v.address)) return null;
+  const lat = Number(v.lat), lng = Number(v.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) fail(400, 'invalid', `${label} : choisissez le lieu dans la liste (position GPS manquante)`);
+  return { addr: str(v.address || '', { max: 200 }) || `${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng };
+}
 async function adminCourierAxesPut(ctx, env) {
   const cid = ctx.params.id;
   if (!(await one(env, 'SELECT user_id FROM couriers WHERE user_id = ?', cid))) fail(404, 'not_found', 'Livreur introuvable');
@@ -935,12 +959,31 @@ async function adminCourierAxesPut(ctx, env) {
     const start = int(x.start_min, { min: 0, max: 1439, name: 'Heure de début' }), end = int(x.end_min, { min: 1, max: 1440, name: 'Heure de fin' });
     if (end <= start) fail(400, 'invalid', 'L\'heure de fin doit être après l\'heure de début');
     const days = String(x.days || '1234567').replace(/[^1-7]/g, '') || '1234567';
-    stmts.push(q(env, 'INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days) VALUES (?,?,?,?,?)', cid, int(x.axe_id), start, end, days));
+    const p = slotPlace(x.from, 'Départ'), d = slotPlace(x.to, 'Arrivée');
+    if (!!p !== !!d) fail(400, 'invalid', 'Indiquez le lieu de départ ET le lieu d\'arrivée du créneau');
+    let route = null, km = null;
+    if (p) {
+      route = Array.isArray(x.route) ? simplify(x.route) : [];
+      if (route.length < 2) route = [[p.lat, p.lng], [d.lat, d.lng]];
+      km = Number.isFinite(+x.km) && +x.km > 0 ? Math.round(+x.km * 100) / 100 : Math.round(haversineKm(p.lat, p.lng, d.lat, d.lng) * 1.3 * 100) / 100;
+    }
+    stmts.push(q(env, `INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days, from_addr, from_lat, from_lng, to_addr, to_lat, to_lng, route, km)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, cid, int(x.axe_id), start, end, days,
+      p?.addr ?? null, p?.lat ?? null, p?.lng ?? null, d?.addr ?? null, d?.lat ?? null, d?.lng ?? null, route ? JSON.stringify(route) : null, km));
   }
   await env.DB.batch(stmts);
   await notify(env, [cid], 'axe', 'Planning mis à jour', 'Vos axes de travail ont été modifiés par l\'administration.');
   await audit(env, ctx, 'admin_courier_axes', { courier: cid, slots: slots.length });
   return json({ ok: true });
+}
+async function adminSetVehicle(ctx, env) {
+  const v = ctx.body.vehicle;
+  if (!VEHICLES.includes(v)) fail(400, 'invalid', 'Véhicule : velo ou moto');
+  const c = await one(env, 'SELECT user_id FROM couriers WHERE user_id = ?', ctx.params.id);
+  if (!c) fail(404, 'not_found', 'Livreur introuvable');
+  await run(env, 'UPDATE couriers SET vehicle = ? WHERE user_id = ?', v, c.user_id);
+  await audit(env, ctx, 'admin_courier_vehicle', { id: c.user_id, vehicle: v });
+  return json({ ok: true, vehicle: v });
 }
 async function adminResetPassword(ctx, env) {
   const target = await one(env, 'SELECT id FROM users WHERE id = ?', ctx.params.id);
@@ -1037,6 +1080,7 @@ route('DELETE', '/api/admin/axes/:id', ['admin'], adminAxeDelete);
 route('GET', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesGet);
 route('PUT', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesPut);
 route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
+route('POST', '/api/admin/users/:id/vehicle', ['admin'], adminSetVehicle);
 
 registerShipmentRoutes(route);
 registerTsenaRoutes(route);

@@ -76,11 +76,17 @@ try {
     const st = Math.min(1380, min + 30), hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
     await admin.fill('.modal [data-k=start]', hhmm(st)); await admin.fill('.modal [data-k=end]', hhmm(Math.min(1439, st + 120)));
     await admin.dispatchEvent('.modal [data-k=end]', 'change'); await admin.dispatchEvent('.modal [data-k=start]', 'change');
+    await admin.click('.modal [data-save]'); await admin.waitForSelector('text=indiquez le lieu de départ et le lieu d\'arrivée');
+    await admin.fill('.modal [data-k=from]', 'Analakely'); await admin.dispatchEvent('.modal [data-k=from]', 'change');
+    await admin.fill('.modal [data-k=to]', 'Ivandry'); await admin.dispatchEvent('.modal [data-k=to]', 'change');
+    await admin.waitForSelector('.modal >> text=✓ Analakely → Ivandry');
+    await admin.screenshot({ path: 'tests/screens/20-admin-axe-depart-arrivee.png' });
     await admin.click('.modal [data-save]'); await admin.waitForSelector('text=Planning enregistré');
     await courier.goto(BASE + '/livreur');
     await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'velo1234'); await courier.click('[type=submit]');
     await courier.waitForSelector('[data-t=plan]');
     await courier.click('[data-t=plan]'); await courier.waitForSelector('[data-plan] >> text=Centre-ville');
+    await courier.waitForSelector('[data-plan] >> text=Analakely → 🏁 Ivandry');
     if (await courier.locator('[data-plan] [data-save], [data-plan] [data-add]').count()) throw new Error('le livreur peut encore modifier son planning');
     await courier.waitForSelector('[data-allsched] >> text=Centre-ville');
     await courier.screenshot({ path: 'tests/screens/21-livreur-departs.png' });

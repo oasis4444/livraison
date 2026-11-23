@@ -219,14 +219,17 @@ export function makeMap(el, { center = TANA, zoom = 14, zoomControl = false, lay
   setTimeout(() => map.invalidateSize(), 120);
   return map;
 }
+// Véhicule du livreur : vélo (par défaut) ou moto.
+export const vehIcon = (v) => (v === 'moto' ? '🏍️' : '🚲');
+export const vehLabel = (v, mg) => (v === 'moto' ? 'Moto' : mg ? 'Bisikileta' : 'Vélo');
 const icon = (html, size = [38, 38], anchor) => window.L && L.divIcon({ className: 'mk', html, iconSize: size, iconAnchor: anchor || [size[0] / 2, size[1] / 2] });
 export const icons = {
   me: () => icon('<div class="mk-me"></div>', [20, 20]),
   a: () => icon('<div class="mk-pin mk-a"><b>A</b></div>', [34, 34], [17, 34]),
   b: () => icon('<div class="mk-pin mk-b"><b>B</b></div>', [34, 34], [17, 34]),
-  bike: (cls = '', label = '') => label
-    ? icon(`<div class="mk-bike ${cls}">🚲</div><div class="mk-label">${esc(label)}</div>`, [38, 38])
-    : icon(`<div class="mk-bike ${cls}">🚲</div>`),
+  bike: (cls = '', label = '', vehicle) => label
+    ? icon(`<div class="mk-bike ${cls}">${vehIcon(vehicle)}</div><div class="mk-label">${esc(label)}</div>`, [38, 38])
+    : icon(`<div class="mk-bike ${cls}">${vehIcon(vehicle)}</div>`),
   dot: (color, label = '') => icon(`<div class="mk-dot" style="background:${color}"></div>${label ? `<div class="mk-label">${esc(label)}</div>` : ''}`, [16, 16]),
   req: (label) => icon(`<div class="mk-req">${esc(label)}</div>`, [80, 24], [40, 12]),
   sos: () => icon('<div class="mk-sos">!</div>', [30, 30]),
@@ -244,13 +247,15 @@ export function pruneMarkers(store, keep) {
 
 // Itinéraire vélo (OSRM, profil vélo) ; repli en ligne droite si le service ne répond pas.
 const routeCache = new Map();
-export async function bikeRoute(from, to) {
-  const key = [from, to].flat().map((x) => x.toFixed(4)).join(',');
+// Itinéraire selon le véhicule : vélo (routed-bike) ou moto (routed-car).
+export async function bikeRoute(from, to, vehicle) {
+  const prof = vehicle === 'moto' ? 'routed-car' : 'routed-bike';
+  const key = prof + [from, to].flat().map((x) => x.toFixed(4)).join(',');
   if (routeCache.has(key)) return routeCache.get(key);
   const straight = { coords: [from, to], km: haversine(from[0], from[1], to[0], to[1]) * 1.3, approx: true };
   try {
     const ctl = new AbortController(); setTimeout(() => ctl.abort(), 6000);
-    const r = await fetch(`https://routing.openstreetmap.de/routed-bike/route/v1/driving/${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`, { signal: ctl.signal });
+    const r = await fetch(`https://routing.openstreetmap.de/${prof}/route/v1/driving/${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`, { signal: ctl.signal });
     const j = await r.json();
     const rt = j.routes?.[0];
     if (!rt) throw 0;
@@ -259,7 +264,7 @@ export async function bikeRoute(from, to) {
     return out;
   } catch { return straight; }
 }
-export function etaMin(kmv) { return Math.max(2, Math.round((kmv / 14) * 60)); }
+export function etaMin(kmv, vehicle) { return Math.max(2, Math.round((kmv / (vehicle === 'moto' ? 25 : 14)) * 60)); }
 
 // Recherche d'adresse (Nominatim, limité à Madagascar, priorité Antananarivo)
 export async function geocode(qs) {

@@ -2,7 +2,7 @@
 // un colis est confié au livreur dont l'itinéraire passe près du point de récupération PUIS près du point de livraison
 // (sens du trajet), dans ses horaires, sans dépasser sa capacité, avec le plus petit détour.
 // + lien de suivi public, journal des échanges et limitation de l'API.
-import { fail, json, str, int, now, haversineKm, normalizePhone } from './lib.js';
+import { fail, json, str, int, now, haversineKm, normalizePhone, speedKmh } from './lib.js';
 import { one, all, run, settings } from './worker.js';
 
 const MAX_PTS = 200;
@@ -133,7 +133,7 @@ async function cancelTrip(ctx, env) {
 
 // ---------------------------------------------------------------- suivi public (lien envoyé au destinataire / logiciel de vente)
 async function trackPublic(ctx, env) {
-  const s = await one(env, `SELECT s.*, u.name AS courier_name, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen
+  const s = await one(env, `SELECT s.*, u.name AS courier_name, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen, c.vehicle
     FROM shipments s LEFT JOIN users u ON u.id = s.courier_id LEFT JOIN couriers c ON c.user_id = s.courier_id WHERE s.track_token = ?`, ctx.params.ref);
   if (!s) fail(404, 'not_found', 'Lien de suivi invalide');
   const { stepOf, STEP_LABELS } = await import('./shipments.js');
@@ -144,10 +144,10 @@ async function trackPublic(ctx, env) {
   if (live && s.drop_lat != null && (!s.relay || s.centre_out_at)) { // pas d'heure d'arrivée tant que le colis va au centre
     const km = (s.status === 'assigned' && s.pickup_lat != null ? haversineKm(s.clat, s.clng, s.pickup_lat, s.pickup_lng) + haversineKm(s.pickup_lat, s.pickup_lng, s.drop_lat, s.drop_lng)
       : haversineKm(s.clat, s.clng, s.drop_lat, s.drop_lng)) * 1.3;
-    eta = now() + Math.round((km / 12) * 60 + (s.status === 'assigned' ? 5 : 0)) * 60e3;
+    eta = now() + Math.round((km / speedKmh(await settings(env), s.vehicle)) * 60 + (s.status === 'assigned' ? 5 : 0)) * 60e3;
   }
   return json({ ref: s.ref, external_ref: s.external_ref, step, step_label: STEP_LABELS[step], recipient: s.recipient_name.split(' ')[0], drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
-    pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: s.courier_name ? s.courier_name.split(' ')[0] : null,
+    pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: s.courier_name ? s.courier_name.split(' ')[0] : null, vehicle: s.courier_name ? (s.vehicle || 'velo') : null,
     position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at,
     can_confirm: s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at)) && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at,
     relay: !!s.relay, contents: s.description || null, size: s.dim_l ? `${s.dim_l}×${s.dim_w}×${s.dim_h} cm` : null });

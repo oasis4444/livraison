@@ -2,7 +2,7 @@
 // selon les départs (heure + axe) déclarés par les livreurs. Le destinataire paie valeur + frais ;
 // le centre reverse la valeur à l'expéditeur une fois l'argent remis par le livreur.
 import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
-import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL } from './worker.js';
+import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL, slotRoute } from './worker.js';
 import { matchTrip, logSync } from './trips.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
@@ -128,7 +128,7 @@ async function broadcast(env, s, title, body) {
 // ---------------------------------------------------------------- départs (heure + axe déclarés par les livreurs)
 export async function departures(env, { days = 2, includePast = false } = {}) {
   const slots = (await all(env, `${SLOT_SQL} JOIN users u ON u.id = ca.courier_id JOIN couriers c ON c.user_id = ca.courier_id
-    WHERE a.active = 1 AND u.status = 'active'`.replace('SELECT ca.*,', 'SELECT ca.*, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen,')));
+    WHERE a.active = 1 AND u.status = 'active'`.replace('SELECT ca.*,', 'SELECT ca.*, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen, c.vehicle,')));
   if (!slots.length) return [];
   const names = await all(env, `SELECT id, name FROM users WHERE id IN (${[...new Set(slots.map((x) => x.courier_id))].map(() => '?').join(',')})`, ...new Set(slots.map((x) => x.courier_id)));
   const loads = await all(env, `SELECT slot_id, departure_at, COUNT(*) AS n FROM shipments WHERE departure_at >= ? AND status IN ('assigned','picked_up') GROUP BY slot_id, departure_at`, mgMidnight(0));
@@ -141,7 +141,8 @@ export async function departures(env, { days = 2, includePast = false } = {}) {
       if (!includePast && end < now()) continue;
       out.push({
         slot_id: x.id, courier_id: x.courier_id, courier: (names.find((n) => n.id === x.courier_id)?.name || '').split(' ')[0],
-        axe_id: x.axe_id, axe: x.name, color: x.color, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km,
+        axe_id: x.axe_id, axe: x.name, color: x.color, center_lat: x.center_lat, center_lng: x.center_lng, radius_km: x.radius_km, vehicle: x.vehicle || 'velo',
+        from_addr: x.from_addr || null, to_addr: x.to_addr || null, route: slotRoute(x),
         departure_at: dep, return_at: end, started: dep <= now(),
         load: loads.find((l) => l.slot_id === x.id && l.departure_at === dep)?.n || 0,
         lat: dep <= now() ? x.clat : null, lng: dep <= now() ? x.clng : null, last_seen: dep <= now() ? x.cseen : null,
@@ -311,14 +312,14 @@ async function schedule(ctx, env) {
   const { upcomingTrips } = await import('./trips.js');
   const trips = (await upcomingTrips(env)).filter((t) => t.depart_at < now() + 2 * 864e5)
     .map((t) => ({ id: t.id, courier: t.courier, departure_at: t.depart_at, return_at: t.end_at, from: t.from.address, to: t.to.address, load: t.load, capacity: t.capacity, started: t.depart_at <= now() }));
-  return json({ departures: await departures(env, { days: 2, includePast: false }), trips, axes, default_fee: Number(st.default_fee || 3000), centre: { name: st.centre_name, address: st.centre_addr } });
+  return json({ departures: (await departures(env, { days: 2, includePast: false })).map(({ route, ...d }) => d), trips, axes, default_fee: Number(st.default_fee || 3000), centre: { name: st.centre_name, address: st.centre_addr } });
 }
 
 async function quoteShipment(ctx, env) {
   const [lat, lng] = optCoord(ctx.body.drop_lat, ctx.body.drop_lng);
   const fee = await feeFor(env, lat, lng);
   const deps = lat == null ? [] : (await departures(env)).filter((d) => !d.started && inAxe(d, lat, lng));
-  return json({ fee, departures: deps });
+  return json({ fee, departures: deps.map(({ route, ...d }) => d) });
 }
 
 async function appCreate(ctx, env) {
@@ -519,7 +520,7 @@ async function suggestCouriers(ctx, env) {
   const s = await loadShipment(env, ctx.params.id);
   const P = s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, D = s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null;
   const C = await centrePoint(env);
-  const cs = await all(env, `SELECT u.id, u.name, u.phone, c.lat, c.lng, c.last_seen, c.available,
+  const cs = await all(env, `SELECT u.id, u.name, u.phone, c.lat, c.lng, c.last_seen, c.available, c.vehicle,
       (SELECT COUNT(*) FROM shipments x WHERE x.courier_id = u.id AND x.status IN ('assigned','picked_up')) AS load
     FROM users u LEFT JOIN couriers c ON c.user_id = u.id WHERE u.role = 'courier' AND u.status = 'active'`);
   const deps = (await departures(env)).filter((d) => !d.started);
@@ -534,7 +535,7 @@ async function suggestCouriers(ctx, env) {
     const next = [...myDeps.map((d) => ({ at: d.departure_at, label: d.axe })), ...trips.filter((t) => t.courier_id === c.id).map((t) => ({ at: t.depart_at, label: `${t.from.address.split(',')[0]} → ${t.to.address.split(',')[0]}` }))].sort((x, y) => x.at - y.at)[0] || null;
     const dist = km(pos, pt);
     const rank = (trip ? 0 : axe ? 1 : 3) * 100 + (online && dist != null ? Math.min(dist, 50) : 60) + c.load * 2;
-    return { id: c.id, name: c.name, phone: c.phone, online, position: pos, position_at: c.last_seen, dist_km: dist, on_trip: !!trip, axe: axe?.axe ?? null,
+    return { id: c.id, name: c.name, phone: c.phone, vehicle: c.vehicle || 'velo', online, position: pos, position_at: c.last_seen, dist_km: dist, on_trip: !!trip, axe: axe?.axe ?? null,
       next_departure: next, load: c.load, refused: refusedBy(s).includes(c.id), rank };
   }).sort((x, y) => x.rank - y.rank);
   return json({ centre: C, pickup: score(P, null), delivery: score(D, s.relay || (P && C) ? C : P), current: { pickup: s.pickup_courier_id, delivery: s.delivery_courier_id } });
@@ -765,18 +766,6 @@ async function returned(ctx, env) {
 }
 
 // ---------------------------------------------------------------- planning du livreur (heures de départ + axes)
-export async function saveSlots(env, cid, slotsIn) {
-  const slots = Array.isArray(slotsIn) ? slotsIn.slice(0, 96) : [];
-  const stmts = [q(env, 'DELETE FROM courier_axes WHERE courier_id = ?', cid)];
-  for (const x of slots) {
-    const start = int(x.start_min, { min: 0, max: 1439, name: 'Heure de départ' }), end = int(x.end_min, { min: 1, max: 1440, name: 'Heure de retour' });
-    if (end <= start) fail(400, 'invalid', 'L\'heure de retour doit être après l\'heure de départ');
-    if (!(await one(env, 'SELECT id FROM axes WHERE id = ?', int(x.axe_id)))) fail(400, 'invalid', 'Axe inconnu');
-    const days = String(x.days || '1234567').replace(/[^1-7]/g, '') || '1234567';
-    stmts.push(q(env, 'INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days) VALUES (?,?,?,?,?)', cid, int(x.axe_id), start, end, days));
-  }
-  await env.DB.batch(stmts);
-}
 async function mySchedule(ctx, env) {
   const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id = ? ORDER BY ca.start_min`, ctx.user.id);
   const axes = await all(env, 'SELECT id, name, color, center_lat, center_lng, radius_km FROM axes WHERE active = 1 ORDER BY name');

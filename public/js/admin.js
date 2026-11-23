@@ -1,7 +1,7 @@
 // Tableau de bord Administrateur.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute,
+  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode,
 } from './core.js';
 import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTripsEditor } from './colis.js';
 
@@ -120,7 +120,7 @@ const VIEWS = {
         if (!c.available && !busy && stale) continue;
         pos[c.id] = [c.lat, c.lng];
         keep.add('c' + c.id);
-        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : busy ? 'busy' : '', c.name.split(' ')[0]), { refreshIcon: true, zIndexOffset: 1000 })
+        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : busy ? 'busy' : '', c.name.split(' ')[0], c.vehicle), { refreshIcon: true, zIndexOffset: 1000 })
           ?.bindTooltip(`<b>${esc(c.name)}</b> · ${esc(phoneFmt(c.phone))}<br>${c.delivery_id ? `Course #${c.delivery_id}` : busy ? 'Colis en cours' : 'Disponible'}${c.axe ? ` · 🧭 ${esc(c.axe)}` : ''}<br>${stale ? '⚠ GPS perdu — ' : ''}Vu à ${time(c.last_seen)}`)
           .off('click').on('click', () => courierTrack(c));
         // chemin parcouru (mis à jour en continu)
@@ -389,14 +389,14 @@ async function usersView(role) {
     <div class="filters"><select class="input" data-u="status"><option value="">Tous</option>${(isC ? ['pending', 'active', 'suspended', 'rejected'] : ['active', 'suspended']).map((s) => `<option value="${s}" ${st === s ? 'selected' : ''}>${{ pending: 'À valider', active: 'Actifs', suspended: 'Suspendus', rejected: 'Refusés' }[s]}</option>`).join('')}</select>
     <input class="input" data-u="q" placeholder="Nom ou téléphone" value="${esc(qv)}"><button class="btn sm primary" data-act="ufilter" data-role="${role}">Filtrer</button></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nom</th><th>Téléphone</th>${isC ? '<th>CIN</th><th>Note</th><th class="num">Solde</th><th>En ligne</th>' : '<th>Type</th><th>Annulations</th>'}<th class="num">Livraisons</th><th>Inscrit</th><th>Statut</th><th></th></tr></thead><tbody>
-    ${r.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.company ? `<div class="tiny muted">${esc(u.company)}</div>` : ''}${isC && u.doc_note ? `<div class="tiny muted">${esc(u.doc_note)}</div>` : ''}</td><td><a href="tel:${esc(u.phone)}">${esc(phoneFmt(u.phone))}</a></td>
+    ${r.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${isC ? ` <button class="btn sm ghost" data-act="veh" data-id="${u.id}" data-v="${u.vehicle === 'moto' ? 'velo' : 'moto'}" title="Changer de véhicule (vélo / moto)">${vehIcon(u.vehicle)} ${u.vehicle === 'moto' ? 'Moto' : 'Vélo'}</button>` : ''}${u.company ? `<div class="tiny muted">${esc(u.company)}</div>` : ''}${isC && u.doc_note ? `<div class="tiny muted">${esc(u.doc_note)}</div>` : ''}</td><td><a href="tel:${esc(u.phone)}">${esc(phoneFmt(u.phone))}</a></td>
       ${isC ? `<td class="small">${esc(u.cin || '')}${u.address ? `<div class="tiny muted">${esc(u.address)}</div>` : ''}${u.emergency_contact ? `<div class="tiny muted">🆘 ${esc(u.emergency_contact)}</div>` : ''}</td><td>${stars(u.rating_count ? Math.round((u.rating_sum / u.rating_count) * 10) / 10 : null)}</td><td class="num">${ar(u.balance)}</td><td class="small">${u.available && u.last_seen > Date.now() - 600e3 ? '🟢' : '⚪'} ${u.last_seen ? dt(u.last_seen) : ''}</td>`
       : `<td class="small">${u.is_business ? '🏢 Entreprise' : 'Particulier'}</td><td>${u.cancel_count}</td>`}
       <td class="num">${u.delivered}</td><td class="small">${dt(u.created_at)}</td><td>${statusPill(u.status)}</td>
       <td style="white-space:nowrap">${u.status !== 'active' ? `<button class="btn sm primary" data-act="ustatus" data-id="${u.id}" data-s="active">${u.status === 'pending' ? 'Valider' : 'Activer'}</button>` : ''}
         ${u.status === 'pending' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="rejected">Refuser</button>` : ''}
         ${u.status === 'active' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="suspended">Suspendre</button>` : ''}
-        ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button>` : ''}
+        ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" data-veh="${u.vehicle || 'velo'}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button>` : ''}
         <button class="btn sm ghost" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}" title="Nouveau mot de passe">🔑</button></td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
     </tbody></table></div>`;
 }
@@ -575,7 +575,8 @@ const actions = {
     modal('Nouvelle clé API', `<p>Copiez-la maintenant, elle ne sera plus affichée :</p><pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:12px;border-radius:10px">${esc(r.api_key)}</pre>`); show();
   },
   mactive: async (el) => { await api('POST', `/api/admin/merchants/${el.dataset.id}`, { active: el.dataset.v === '1' }); show(); },
-  planning: (el) => planningForm(+el.dataset.id, el.dataset.name),
+  planning: (el) => planningForm(+el.dataset.id, el.dataset.name, el.dataset.veh),
+  veh: async (el) => { await api('POST', `/api/admin/users/${el.dataset.id}/vehicle`, { vehicle: el.dataset.v }); toast(el.dataset.v === 'moto' ? 'Livreur passé à moto 🏍️' : 'Livreur passé à vélo 🚲', 'ok'); show(); },
   pwreset: async (el) => {
     const pw = await promptBox(`Nouveau mot de passe — ${el.dataset.name}`, { label: 'Mot de passe provisoire (6 caractères min.)', value: Math.random().toString(36).slice(2, 10) });
     if (!pw) return;
@@ -602,7 +603,8 @@ function courierForm() {
     <div class="row"><label class="field grow"><span>Numéro CIN</span><input class="input" data-v="cin"></label><label class="field grow"><span>Mot de passe provisoire</span><input class="input" data-v="password" value="${Math.random().toString(36).slice(2, 10)}"></label></div>
     <label class="field"><span>Adresse</span><input class="input" data-v="address"></label>
     <label class="field"><span>Contact d'urgence</span><input class="input" data-v="emergency_contact" placeholder="Nom + téléphone"></label>
-    <label class="field"><span>Vélo / documents vérifiés</span><textarea class="input" data-v="doc_note" rows="2" placeholder="Type et couleur du vélo, documents contrôlés…"></textarea></label>
+    <label class="field"><span>Véhicule</span><select class="input" data-v="vehicle"><option value="velo">🚲 Vélo</option><option value="moto">🏍️ Moto</option></select></label>
+    <label class="field"><span>Véhicule / documents vérifiés</span><textarea class="input" data-v="doc_note" rows="2" placeholder="Type, couleur, immatriculation de la moto, permis, documents contrôlés…"></textarea></label>
     <button class="btn primary block" data-ok>Créer le livreur</button></div>`);
   m.el.querySelector('[data-ok]').onclick = async () => {
     const b = { role: 'courier' }; m.el.querySelectorAll('[data-v]').forEach((i) => (b[i.dataset.v] = i.value));
@@ -639,12 +641,21 @@ function axeForm(a) {
 
 const DAYS = ['L', 'Ma', 'Me', 'J', 'V', 'S', 'D'];
 const toMin = (v) => { const [h, mi] = String(v || '0:0').split(':').map(Number); return h * 60 + (mi || 0); };
-async function planningForm(courierId, name) {
+async function planningForm(courierId, name, vehicle = 'velo') {
   const [{ axes, slot_minutes }, cur] = await Promise.all([api('GET', '/api/admin/axes'), api('GET', `/api/admin/couriers/${courierId}/axes`)]);
   if (!axes.length) { toast('Créez d\'abord un axe (menu Axes & planning)', 'err'); location.hash = 'axes'; return; }
-  let slots = cur.slots.map((x) => ({ axe_id: x.axe_id, start_min: x.start_min, end_min: x.end_min, days: x.days }));
-  const m = modal(`Axes & horaires — ${name}`, `<div class="stack">
-    <div class="small muted">Sans aucun créneau, le livreur travaille sur toute la zone autour de lui. Avec des créneaux, il ne reçoit que les demandes de l'axe du créneau en cours (heure de Madagascar).</div>
+    const place = (a, lat, lng) => (lat != null ? { address: a, lat, lng } : null);
+  const placeTxt = (x) => (x.from && x.to
+    ? `<span class="tiny muted">✓ ${esc(x.from.address)} → ${esc(x.to.address)}${x.km ? ` · ${String(x.km).replace('.', ',')} km` : ''}</span>`
+    : `<span class="tiny" style="color:var(--red)">${x.from ? '✓ départ · ' : ''}${x.to ? '✓ arrivée · ' : ''}Indiquez le départ et l'arrivée</span>`);
+  let slots = cur.slots.map((x) => ({ axe_id: x.axe_id, start_min: x.start_min, end_min: x.end_min, days: x.days,
+    from: place(x.from_addr, x.from_lat, x.from_lng), to: place(x.to_addr, x.to_lat, x.to_lng), route: x.route ? (typeof x.route === 'string' ? JSON.parse(x.route) : x.route) : null, km: x.km }));
+  // Même axe = mêmes lieux de départ et d'arrivée par défaut (repris d'un autre créneau de cet axe).
+  const sameAxe = (axeId) => slots.find((y) => y.axe_id === axeId && y.from && y.to);
+  const fillFromAxe = (x) => { const o = sameAxe(x.axe_id); if (o && !x.from && !x.to) { x.from = { ...o.from }; x.to = { ...o.to }; x.route = o.route; x.km = o.km; } return x; };
+  const m = modal(`Axes & horaires — ${name} (${vehIcon(vehicle)} ${vehicle === 'moto' ? 'Moto' : 'Vélo'})`, `<div class="stack">
+    <div class="small muted">Pour chaque créneau : l'axe, les heures, les jours, et le <b>lieu de départ</b> et le <b>lieu d'arrivée</b> du livreur. Les colis dont l'adresse est dans l'axe ou à moins de 800 m de ce chemin lui sont confiés. Sans aucun créneau, le livreur travaille sur toute la zone autour de lui.</div>
+    <div data-smap style="height:220px;border-radius:12px;overflow:hidden"></div>
     <div class="card" style="background:var(--bg);border:0"><b>⚡ Générer une rotation</b>
       <div class="small muted" style="margin:4px 0 8px">Ex : de 07:00 à 19:00, créneaux de ${slot_minutes} min, en alternant les axes cochés.</div>
       <div class="chips" data-gax>${axes.filter((a) => a.active).map((a) => `<label class="chip"><input type="checkbox" value="${a.id}" style="margin-right:4px">${esc(a.name)}</label>`).join('')}</div>
@@ -660,7 +671,7 @@ async function planningForm(courierId, name) {
     <div data-tmap style="height:220px;border-radius:12px;overflow:hidden"></div>
     <div data-trips></div></div>`, { wide: true });
   const tmap = makeMap(m.el.querySelector('[data-tmap]'), { zoom: 12 });
-  courierTripsEditor(m.el.querySelector('[data-trips]'), { map: tmap, bikeRoute, base: `/api/admin/couriers/${courierId}/trips` }).catch(toastErr);
+  courierTripsEditor(m.el.querySelector('[data-trips]'), { map: tmap, bikeRoute, vehicle, base: `/api/admin/couriers/${courierId}/trips` }).catch(toastErr);
   const box = m.el.querySelector('[data-slots]');
   const render = () => {
     slots.sort((a, b) => a.start_min - b.start_min);
@@ -668,12 +679,56 @@ async function planningForm(courierId, name) {
       <select class="input" data-k="axe_id" style="width:auto;min-width:160px">${axes.map((a) => `<option value="${a.id}" ${a.id === x.axe_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
       <input class="input" type="time" data-k="start" value="${hm(x.start_min)}" style="width:auto"> → <input class="input" type="time" data-k="end" value="${x.end_min >= 1440 ? '23:59' : hm(x.end_min)}" style="width:auto">
       <span class="chips">${DAYS.map((d, j) => `<button class="chip ${String(x.days).includes(String(j + 1)) ? 'on' : ''}" data-day="${j + 1}" style="padding:.25rem .5rem">${d}</button>`).join('')}</span>
-      <button class="btn sm danger" data-del>✕</button></div>`).join('') || '<p class="muted small">Aucun créneau : le livreur travaille sur toute la zone.</p>';
+      <button class="btn sm danger" data-del>✕</button>
+      <div class="row wrap" style="width:100%">
+        <label class="field grow"><span>📍 Départ</span><input class="input" data-k="from" value="${esc(x.from?.address || '')}" placeholder="Ex : Analakely"></label>
+        <label class="field grow"><span>🏁 Arrivée</span><input class="input" data-k="to" value="${esc(x.to?.address || '')}" placeholder="Ex : Ivandry"></label></div>
+      <div data-st style="width:100%">${placeTxt(x)}</div></div>`).join('') || '<p class="muted small">Aucun créneau : le livreur travaille sur toute la zone.</p>';
+    drawSlots();
+  };
+  const smap = makeMap(m.el.querySelector('[data-smap]'), { zoom: 12 });
+  let sLayers = [];
+  // Mise à jour d'une ligne sans tout redessiner (ne pas effacer ce que l'admin est en train de taper ailleurs).
+  const refreshRow = (y) => {
+    const row = box.querySelector(`[data-i="${slots.indexOf(y)}"]`); if (!row) return;
+    row.querySelector('[data-st]').innerHTML = placeTxt(y);
+    for (const k of ['from', 'to']) { const inp = row.querySelector(`[data-k=${k}]`); if (inp && document.activeElement !== inp && y[k]) inp.value = y[k].address; }
+  };
+  const drawSlots = () => {
+    if (!smap || !window.L) return;
+    sLayers.forEach((l) => l.remove()); sLayers = [];
+    const pts = [];
+    for (const x of slots) {
+      if (!x.from || !x.to) continue;
+      const color = axes.find((a) => a.id === x.axe_id)?.color || '#0f7a55';
+      const line = x.route?.length > 1 ? x.route : [[x.from.lat, x.from.lng], [x.to.lat, x.to.lng]];
+      sLayers.push(L.polyline(line, { color, weight: 5, opacity: .75 }).addTo(smap).bindTooltip(`${hm(x.start_min)} · ${esc(x.from.address)} → ${esc(x.to.address)}`));
+      sLayers.push(L.marker([x.from.lat, x.from.lng], { icon: icons.a() }).addTo(smap), L.marker([x.to.lat, x.to.lng], { icon: icons.b() }).addTo(smap));
+      pts.push(...line);
+    }
+    if (pts.length) try { smap.fitBounds(pts, { padding: [25, 25], maxZoom: 15 }); } catch {}
+  };
+  // Lieu saisi → position (Nominatim) puis itinéraire selon le véhicule du livreur.
+  const locate = async (x, k, v) => {
+    v = v.trim();
+    if (!v) { x[k] = null; x.route = null; x.km = null; return; }
+    const r = await geocode(v); if (!r.length) { x[k] = null; throw new Error(`Lieu introuvable : « ${v} »`); }
+    x[k] = { address: v, lat: r[0].lat, lng: r[0].lng };
+    if (x.from && x.to) { const rt = await bikeRoute([x.from.lat, x.from.lng], [x.to.lat, x.to.lng], vehicle); x.route = rt.coords; x.km = Math.round(rt.km * 10) / 10; }
   };
   render();
   box.addEventListener('change', (e) => {
     const row = e.target.closest('[data-i]'); if (!row) return; const x = slots[+row.dataset.i];
-    if (e.target.dataset.k === 'axe_id') x.axe_id = +e.target.value;
+    if (e.target.dataset.k === 'axe_id') { x.axe_id = +e.target.value; fillFromAxe(x); render(); }
+    if (e.target.dataset.k === 'from' || e.target.dataset.k === 'to') {
+      const k = e.target.dataset.k; x.route = null;
+      locate(x, k, e.target.value).then(() => {
+        refreshRow(x);
+        // les autres créneaux du même axe encore vides reprennent ces lieux
+        if (x.from && x.to) for (const y of slots) if (y !== x && y.axe_id === x.axe_id && !y.from && !y.to) { Object.assign(y, { from: { ...x.from }, to: { ...x.to }, route: x.route, km: x.km }); refreshRow(y); }
+        drawSlots();
+      }).catch((er) => { toastErr(er); refreshRow(x); });
+    }
     if (e.target.dataset.k === 'start') x.start_min = toMin(e.target.value);
     if (e.target.dataset.k === 'end') { const v = toMin(e.target.value); x.end_min = v === 1439 ? 1440 : v; }
   });
@@ -683,19 +738,27 @@ async function planningForm(courierId, name) {
     const d = e.target.closest('[data-day]')?.dataset.day;
     if (d) { x.days = String(x.days).includes(d) ? String(x.days).replace(d, '') : [...String(x.days) + d].sort().join(''); render(); }
   });
-  m.el.querySelector('[data-add]').onclick = () => { const last = slots[slots.length - 1]; const st = last ? last.end_min % 1440 : 420; slots.push({ axe_id: axes[0].id, start_min: st, end_min: Math.min(1440, st + slot_minutes), days: '1234567' }); render(); };
+  m.el.querySelector('[data-add]').onclick = () => { const last = slots[slots.length - 1]; const st = last ? last.end_min % 1440 : 420; slots.push(fillFromAxe({ axe_id: last?.axe_id || axes[0].id, start_min: st, end_min: Math.min(1440, st + slot_minutes), days: '1234567', from: last?.from ? { ...last.from } : null, to: last?.to ? { ...last.to } : null, route: last?.route || null, km: last?.km || null })); render(); };
   m.el.querySelector('[data-clear]').onclick = () => { slots = []; render(); };
   m.el.querySelector('[data-gen]').onclick = () => {
     const ids = [...m.el.querySelectorAll('[data-gax] input:checked')].map((i) => +i.value);
     if (!ids.length) return toast('Cochez au moins un axe', 'err');
     const from = toMin(m.el.querySelector('[data-gfrom]').value), to = toMin(m.el.querySelector('[data-gto]').value) || 1440, step = Math.max(15, Number(m.el.querySelector('[data-gstep]').value) || 60);
     if (to <= from) return toast('Heure de fin invalide', 'err');
-    slots = []; let k = 0;
-    for (let t0 = from; t0 < to; t0 += step) slots.push({ axe_id: ids[k++ % ids.length], start_min: t0, end_min: Math.min(to, t0 + step), days: '1234567' });
+    const prev = slots; slots = []; let k = 0;
+    for (let t0 = from; t0 < to; t0 += step) {
+      const id = ids[k++ % ids.length], o = prev.find((y) => y.axe_id === id && y.from && y.to);
+      slots.push({ axe_id: id, start_min: t0, end_min: Math.min(to, t0 + step), days: '1234567', from: o?.from || null, to: o?.to || null, route: o?.route || null, km: o?.km || null });
+    }
     render();
   };
   m.el.querySelector('[data-save]').onclick = async () => {
-    try { await api('PUT', `/api/admin/couriers/${courierId}/axes`, { slots }); m.close(); toast('Planning enregistré', 'ok'); } catch (e) { toastErr(e); }
+    const miss = slots.findIndex((x) => !x.from || !x.to);
+    if (miss >= 0) return toast(`Créneau de ${hm(slots[miss].start_min)} : indiquez le lieu de départ et le lieu d'arrivée`, 'err');
+    try {
+      await api('PUT', `/api/admin/couriers/${courierId}/axes`, { slots: slots.map((x) => ({ axe_id: x.axe_id, start_min: x.start_min, end_min: x.end_min, days: x.days, from: x.from, to: x.to, route: x.route, km: x.km })) });
+      m.close(); toast('Planning enregistré', 'ok');
+    } catch (e) { toastErr(e); }
   };
 }
 
@@ -732,14 +795,14 @@ async function suggestBox(d, s, canPick) {
   box.className = 'card stack';
   const row = (c, leg) => `<label class="row" style="gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line);cursor:pointer">
       <input type="radio" name="${leg}" value="${c.id}" ${String(leg === 'p' ? pick : del) === String(c.id) ? 'checked' : ''} style="margin-top:4px">
-      <span class="grow small"><b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'} · <a href="tel:${esc(c.phone)}" onclick="event.stopPropagation()">📞 ${esc(phoneFmt(c.phone))}</a>${c.refused ? ' <span style="color:var(--red)">a refusé</span>' : ''}
+      <span class="grow small">${vehIcon(c.vehicle)} <b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'} · <a href="tel:${esc(c.phone)}" onclick="event.stopPropagation()">📞 ${esc(phoneFmt(c.phone))}</a>${c.refused ? ' <span style="color:var(--red)">a refusé</span>' : ''}
         <span class="muted">${c.dist_km != null ? ` · 📍 ${String(c.dist_km).replace('.', ',')} km maintenant` : ''}${c.on_trip ? ' · 🛣 trajet passe par là' : ''}${c.axe ? ` · 🧭 axe ${esc(c.axe)}` : ''}
         ${c.next_departure ? ` · 🕘 ${dt(c.next_departure.at)} ${esc(c.next_departure.label || '')}` : ''} · ${c.load} colis en cours</span></span></label>`;
   const list = (arr, leg) => arr.slice(0, 6).map((c) => row(c, leg)).join('') + (arr.length > 6 ? `<details class="small"><summary>${arr.length - 6} autre(s)</summary>${arr.slice(6).map((c) => row(c, leg)).join('')}</details>` : '');
-  box.innerHTML = `<b>🚲 Livreurs proposés</b>
+  box.innerHTML = `<b>🚲🏍️ Livreurs proposés</b>
     <div class="tiny muted">En tête : ceux dont le trajet ou l'axe passe par l'adresse, puis les plus proches (GPS en direct). Deux livreurs différents = passage par le centre.</div>
     <div data-smap style="height:260px;border-radius:12px;overflow:hidden"></div>
-    <div class="tiny muted">🟢 A = récupération · 🟠 B = livraison · 🏢 centre · 🚲 livreurs en direct (mis à jour toutes les 5 s)</div>
+    <div class="tiny muted">🟢 A = récupération · 🟠 B = livraison · 🏢 centre · 🚲/🏍️ livreurs en direct (mis à jour toutes les 5 s)</div>
     ${canPick ? `<div><div class="small"><b>🟢 Récupération</b> — ${esc(s.sender.address)}</div>${list(g.pickup, 'p')}</div>` : ''}
     <div><div class="small"><b>🟠 Livraison</b> — ${esc(s.recipient.address)}${canPick ? '' : ' (depuis le centre)'}</div>${list(g.delivery, 'd')}</div>
     <div class="small" data-plan></div>
@@ -758,8 +821,8 @@ async function suggestBox(d, s, canPick) {
     for (const c of [...new Map([...data.pickup, ...data.delivery].map((x) => [x.id, x])).values()]) {
       if (!c.position) continue;
       const k = 'k' + c.id; seen.add(k);
-      upsertMarker(smap, mk, k, c.position, icons.bike('', c.name.split(' ')[0]));
-      mk[k].bindTooltip(`<b>${esc(c.name)}</b><br>📞 ${esc(phoneFmt(c.phone))}<br>${c.online ? '🟢 en ligne' : '⚪ hors ligne'}${c.position_at ? ' · ' + time(c.position_at) : ''}`);
+      upsertMarker(smap, mk, k, c.position, icons.bike('', c.name.split(' ')[0], c.vehicle));
+      mk[k].bindTooltip(`<b>${esc(c.name)}</b><br>${vehIcon(c.vehicle)} ${c.vehicle === 'moto' ? 'Moto' : 'Vélo'} · 📞 ${esc(phoneFmt(c.phone))}<br>${c.online ? '🟢 en ligne' : '⚪ hors ligne'}${c.position_at ? ' · ' + time(c.position_at) : ''}`);
       if (c.online) pts.push(c.position);
     }
     pruneMarkers(mk, seen);
