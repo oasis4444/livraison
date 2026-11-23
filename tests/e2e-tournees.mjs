@@ -84,9 +84,10 @@ try {
     await client.click('[data-gps]'); await client.waitForFunction(() => document.querySelector('[data-a=pickup]').value.length > 3);
     await client.fill('[data-rn]', 'Rivo'); await client.fill('[data-rp]', '034 55 555 55');
     await client.fill('[data-a=drop]', 'Analakely gare Kofmad'); await client.click('[data-s=drop] button >> nth=0');
-    await client.fill('[data-v]', '40000'); await client.waitForSelector('[data-dep]');
+    await client.fill('[data-v]', '40000'); await client.waitForSelector('[data-qok]');
     await client.fill('[data-d]', 'Sac de riz'); await client.click('[data-sz^="45|"]');
-    await client.click('[data-pv=mm]'); await client.fill('[data-pref]', 'MVola 556677');
+    await client.click('[data-pv=mm]');
+    if (await client.locator('[data-pref]').count()) throw new Error('pas de référence Mobile Money à saisir');
     await client.check('[data-prov]');
     await client.click('.modal [data-ok]'); await client.waitForSelector('text=Ville de destination');
     await client.fill('[data-city]', 'Fianarantsoa'); await client.fill('[data-coop]', 'Kofmad');

@@ -102,15 +102,15 @@ try {
     await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.click('[type=submit]');
     await client.waitForSelector('text=CMD-1042');
     await client.screenshot({ path: 'tests/screens/22-client-colis.png' });
-    await client.click('[data-t=sched]'); await client.waitForSelector('[data-sched] >> text=Centre-ville');
-    await client.screenshot({ path: 'tests/screens/23-client-heures-axes.png' });
+    if (await client.locator('[data-t=sched]').count()) throw new Error('le client ne doit pas voir les heures & axes');
   });
   await step('client (expéditeur) : envoie un colis depuis l\'application', async () => {
     await client.click('[data-t=colis]'); await client.click('[data-act=sendparcel]');
     await client.click('[data-gps]'); await client.waitForFunction(() => document.querySelector('[data-a=pickup]').value.length > 3);
     await client.fill('[data-rn]', 'Koto'); await client.fill('[data-rp]', '034 77 777 77');
     await client.fill('[data-a=drop]', 'Behoririka'); await client.click('[data-s=drop] button >> nth=0');
-    await client.fill('[data-v]', '12000'); await client.waitForSelector('[data-dep]');
+    await client.fill('[data-v]', '12000'); await client.waitForSelector('[data-qok]');
+    if (await client.locator('[data-dep]').count()) throw new Error('le client ne doit pas choisir le départ');
     // contenu et taille obligatoires
     await client.click('.modal [data-ok]'); await client.waitForSelector('text=Indiquez ce que contient le colis');
     await client.fill('[data-d]', 'Chaussures'); await client.click('[data-sz^="30|"]');
@@ -124,7 +124,7 @@ try {
     await client.goto(BASE + '/envoyer?ref=L-77&nom=Koto&tel=0347777777&adresse=Behoririka&valeur=15000&desc=Sac');
     await client.waitForSelector('text=Commande reçue du logiciel de vente');
     await client.waitForSelector('[data-s=drop] button');
-    await client.click('[data-s=drop] button >> nth=0'); await client.waitForSelector('[data-dep]');
+    await client.click('[data-s=drop] button >> nth=0'); await client.waitForSelector('[data-qok]');
     await client.screenshot({ path: 'tests/screens/32-lien-alefa.png' });
     await client.click('.modal [data-ok]'); await client.waitForSelector('.pin-box');
     await client.click('.modal-back [data-x]');

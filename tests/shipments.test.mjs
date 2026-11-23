@@ -45,8 +45,11 @@ test('mise en place : axe, livreur, planning, marchand API', async () => {
   recipient = (await call('POST', '/api/auth/register', { phone: '0331234567', name: 'Rasoa Mpandray', password: 'secret1' })).data.token;
 });
 
-test('tout client voit les heures et axes des livreurs', async () => {
-  const s = (await call('GET', '/api/schedule', null, recipient)).data;
+test('les clients ne voient pas les heures et axes ; le centre et les livreurs si', async () => {
+  assert.equal((await call('GET', '/api/schedule', null, recipient)).status, 403);
+  const q = (await call('POST', '/api/shipments/quote', { drop_lat: -18.9055, drop_lng: 47.5255 }, recipient)).data;
+  assert.equal(q.fee, 3000); assert.deepEqual(q.departures, [], 'pas de départs proposés au client');
+  const s = (await call('GET', '/api/schedule', null, admin)).data;
   assert.equal(s.departures.length >= 1, true); assert.equal(s.departures[0].axe, 'Centre-ville'); assert.equal(s.departures[0].courier, 'Hery'); assert.equal(s.default_fee, 3000);
 });
 

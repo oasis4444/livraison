@@ -109,7 +109,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label>
     <div class="field"><span>💳 ${mg ? 'Ny vidin\'entana' : 'Paiement de la marchandise'}</span>
       <div class="seg" data-pay><button type="button" class="on" data-pv="cash">💵 ${mg ? 'Vola an-tanana, raisin\'ny livreur' : 'Espèces, à encaisser par le livreur'}</button><button type="button" data-pv="mm">📱 ${mg ? 'Efa nalefa Mobile Money' : 'Déjà payée par Mobile Money'}</button></div>
-      <input class="input hidden" data-pref placeholder="${mg ? 'Référence MVola / Orange / Airtel (tsy voatery)' : 'Référence MVola / Orange / Airtel (facultatif)'}" style="margin-top:6px"></div>
+</div>
     <label class="row" style="gap:8px;align-items:center"><input type="checkbox" data-prov> <b>🚌 ${mg ? 'Alefa any amin\'ny province (amin\'ny koperativa)' : 'Envoi en province (par coopérative)'}</b></label>
     <div class="stack hidden" data-provf style="gap:8px"><label class="field"><span>${mg ? 'Tanàna hanaterana' : 'Ville de destination'} *</span><input class="input" data-city placeholder="Fianarantsoa"></label>
       <label class="field"><span>${mg ? 'Koperativa' : 'Coopérative'} *</span><input class="input" data-coop placeholder="Kofmad, Sonatra…"></label>
@@ -130,9 +130,9 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const due = prov ? 0 : (f.pay === 'mm' ? 0 : v) + r.fee;
     box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div><div class="row between"><span>${c('to_collect')}</span><b>${ar(due)}</b></div>
       ${prov ? `<div class="tiny muted">${mg ? 'Province : tsy misy vola raisina any amin\'ny koperativa ; esorina amin\'ny vola aloa anao ny frais Alefa.' : 'Province : rien à encaisser à la coopérative ; les frais Alefa sont retenus sur votre paiement.'}</div>` : f.pay === 'mm' ? `<div class="tiny muted">${mg ? 'Efa voaloa ny entana : ny frais ihany no raisin\'ny livreur.' : 'Marchandise déjà payée : le livreur n\'encaisse que les frais.'}</div>` : ''}
-      <label class="field" style="margin-top:8px"><span>${c('departure')}</span><select class="input" data-dep><option value="">${c('auto_dep')}</option>
+      ${adminMode ? `<label class="field" style="margin-top:8px"><span>${c('departure')}</span><select class="input" data-dep><option value="">${c('auto_dep')}</option>
       ${r.departures.map((d) => `<option value="${d.slot_id}|${d.departure_at}">${dayLabel(d.departure_at)} ${time(d.departure_at)} · ${esc(d.axe)}${d.from_addr ? ` (${esc(d.from_addr.split(',')[0])} → ${esc(d.to_addr.split(',')[0])})` : ''} · ${vehIcon(d.vehicle)} ${esc(d.courier)}</option>`).join('')}</select></label>
-      ${r.departures.length ? '' : `<div class="tiny" style="color:var(--orange)">${c('no_dep')}</div>`}`;
+      ${r.departures.length ? '' : `<div class="tiny" style="color:var(--orange)">${c('no_dep')}</div>`}` : `<div class="tiny muted" data-qok>${mg ? 'Ny centre no mandahatra ny livreur haka ny entana.' : 'Le centre programme le livreur qui viendra récupérer le colis.'}</div>`}`;
   };
   el.addEventListener('input', (e) => {
     const k = e.target.dataset.a;
@@ -159,7 +159,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
       if (k === 'drop') quote();
     }
     const pv = e.target.closest('[data-pv]');
-    if (pv) { f.pay = pv.dataset.pv; el.querySelectorAll('[data-pv]').forEach((x) => x.classList.toggle('on', x === pv)); el.querySelector('[data-pref]').classList.toggle('hidden', f.pay !== 'mm'); quote(); }
+    if (pv) { f.pay = pv.dataset.pv; el.querySelectorAll('[data-pv]').forEach((x) => x.classList.toggle('on', x === pv)); quote(); }
     if (e.target.matches('[data-prov]')) { el.querySelector('[data-provf]').classList.toggle('hidden', !e.target.checked); quote(); }
     const sz = e.target.closest('[data-sz]');
     if (sz) { const [l, w, h] = sz.dataset.sz.split('|'); el.querySelector('[data-dl]').value = l; el.querySelector('[data-dw]').value = w; el.querySelector('[data-dh]').value = h; }
@@ -184,7 +184,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         size: txt('[data-dl]') || txt('[data-dw]') || txt('[data-dh]') ? { l: txt('[data-dl]').replace(',', '.'), w: txt('[data-dw]').replace(',', '.'), h: txt('[data-dh]').replace(',', '.') } : undefined,
         weight: txt('[data-kg]') ? txt('[data-kg]').replace(',', '.') : undefined,
         slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
-        value_paid: f.pay === 'mm', value_paid_ref: f.pay === 'mm' ? txt('[data-pref]') || undefined : undefined,
+        value_paid: f.pay === 'mm',
         province: el.querySelector('[data-prov]').checked || undefined, dest_city: txt('[data-city]') || undefined, coop_name: txt('[data-coop]') || undefined,
       });
       m.close();

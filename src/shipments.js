@@ -338,7 +338,8 @@ async function schedule(ctx, env) {
 async function quoteShipment(ctx, env) {
   const [lat, lng] = optCoord(ctx.body.drop_lat, ctx.body.drop_lng);
   const fee = await feeFor(env, lat, lng);
-  const deps = lat == null ? [] : (await departures(env)).filter((d) => !d.started && inAxe(d, lat, lng));
+  // Les heures & axes des livreurs ne sont pas montrés aux clients : c'est le centre qui programme.
+  const deps = lat == null || ctx.user?.role !== 'admin' ? [] : (await departures(env)).filter((d) => !d.started && inAxe(d, lat, lng));
   return json({ fee, departures: deps.map(({ route, ...d }) => d) });
 }
 
@@ -349,6 +350,7 @@ async function appCreate(ctx, env) {
     const phone = normalizePhone(ctx.body.sender_phone);
     sender = await one(env, 'SELECT * FROM users WHERE phone = ?', phone) || fail(404, 'not_found', 'Expéditeur introuvable : créez d\'abord son compte client');
   }
+  if (u.role !== 'admin') { delete ctx.body.slot_id; delete ctx.body.departure_at; delete ctx.body.value_paid_ref; } // le client ne choisit pas le départ
   const r = await createShipment(env, ctx.body, { sender, source: u.role === 'admin' ? 'admin' : 'app', actor: u, requireDetails: u.role !== 'admin' && !ctx.body.external_ref });
   if (!r.duplicate) await audit(env, ctx, 'shipment_create', { ref: r.shipment.ref });
   return json({ duplicate: !!r.duplicate, shipment: { ...publicShipment(r.shipment), delivery_pin: r.shipment.pin } }, r.duplicate ? 200 : 201);
@@ -1196,7 +1198,7 @@ export async function liveFeed(env) {
 // ---------------------------------------------------------------- enregistrement des routes
 export function registerShipmentRoutes(route) {
   const ANY = ['client', 'courier', 'admin'];
-  route('GET', '/api/schedule', ANY, schedule);
+  route('GET', '/api/schedule', ['admin', 'courier'], schedule); // heures & axes : centre et livreurs seulement (pas les clients)
   route('POST', '/api/shipments/quote', ANY, quoteShipment);
   route('GET', '/api/shipments', ANY, listMine);
   route('POST', '/api/shipments', ['client', 'admin'], appCreate);
