@@ -114,8 +114,11 @@ try {
     const list = n.data.notifications || n.data.items || [];
     if (!list.some((x) => /Nouveau colis à répartir/.test(x.title) && x.body.includes(ref))) throw new Error('notification admin absente');
     if (!list.some((x) => x.title.includes(`${ref} pris par Hery`))) throw new Error('notification « pris par Hery » absente');
-    await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', ''); await admin.click('[data-act=pfilter]');
-    await admin.click(`text=${ref}`); await admin.waitForSelector('text=Fianarantsoa');
+    // clic sur la notification « … pris par Hery » → fiche du colis
+    await admin.click('[data-act=notifs]'); await admin.waitForSelector(`.modal [data-ni] >> text=${ref} pris par Hery`);
+    await admin.screenshot({ path: 'tests/screens/45-admin-notifications.png' });
+    await admin.click(`.modal [data-ni] >> text=${ref} pris par Hery`);
+    await admin.waitForSelector('text=Fianarantsoa');
     await admin.waitForSelector('text=Marchandise déjà payée par Mobile Money');
     await admin.screenshot({ path: 'tests/screens/43-admin-colis-province.png' });
   });

@@ -88,6 +88,14 @@ test('nouveau colis sur le chemin de deux livreurs : le premier qui confirme le 
   assert.equal((await call('POST', `/api/courier/offers/${id2}/take`, {}, c3)).status, 404, 'jamais proposé à ce livreur');
 });
 
+test('notifications cliquables : chacune indique le colis à ouvrir', async () => {
+  const n = (await call('GET', '/api/notifications?after=0', null, admin)).data.notifications;
+  const pris = n.find((x) => x.title.includes('pris par Naina'));
+  assert.deepEqual(pris.target, { type: 'shipment', id: id2 });
+  const c = (await call('GET', '/api/notifications?after=0', null, c1)).data.notifications.find((x) => x.title === '📦 Colis sur ton chemin');
+  assert.equal(c.target.type, 'shipment');
+});
+
 test('l\'admin répartit lui-même : l\'offre se ferme pour les autres', async () => {
   const r = await call('POST', `/api/shipments/${id1}/assign`, { courier_id: uid('+261341000003') }, admin);
   assert.equal(r.status, 200);

@@ -639,7 +639,22 @@ async function notifications(ctx, env) {
   const after = Number(ctx.url.searchParams.get('after') || 0);
   const rows = await all(env, 'SELECT * FROM notifications WHERE user_id = ? AND id > ? ORDER BY id DESC LIMIT 50', ctx.user.id, after);
   const unread = await one(env, 'SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read = 0', ctx.user.id);
-  return json({ notifications: rows, unread: unread.n });
+  // Cible de chaque notification (pour l'ouvrir d'un clic) : le colis cité (ALxxxx), la course, ou un écran selon le type.
+  const REF = /\bAL[A-Z0-9]{5,}\b/;
+  const refs = [...new Set(rows.map((n) => (`${n.title} ${n.body || ''}`.match(REF) || [])[0]).filter(Boolean))];
+  const ids = new Map();
+  if (refs.length) for (const r of await all(env, `SELECT id, ref FROM shipments WHERE ref IN (${refs.map(() => '?').join(',')})`, ...refs)) ids.set(r.ref, r.id);
+  const target = (n) => {
+    const ref = (`${n.title} ${n.body || ''}`.match(REF) || [])[0];
+    if (ref && ids.has(ref)) return { type: 'shipment', id: ids.get(ref) };
+    if (n.delivery_id) return { type: 'delivery', id: n.delivery_id };
+    if (n.kind === 'payout') return { type: 'payouts' };
+    if (n.kind === 'axe') return { type: 'plan' };
+    if (['sos', 'alert', 'complaint', 'incident'].includes(n.kind) || /^(⚠️ Alerte|🚨 SOS|Nouvelle réclamation)/.test(n.title)) return { type: 'alerts' };
+    if (n.kind === 'shipment_pending') return { type: 'parcels' };
+    return null;
+  };
+  return json({ notifications: rows.map((n) => ({ ...n, target: target(n) })), unread: unread.n });
 }
 async function readNotifications(ctx, env) {
   await run(env, 'UPDATE notifications SET read = 1 WHERE user_id = ?', ctx.user.id);

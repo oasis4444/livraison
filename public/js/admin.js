@@ -1,7 +1,7 @@
 // Tableau de bord Administrateur.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode,
+  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode, setNotifOpener,
 } from './core.js';
 import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTripsEditor } from './colis.js';
 
@@ -26,6 +26,13 @@ export async function mount(el) {
   bind(root, actions);
   window.addEventListener('hashchange', () => { view = location.hash.replace('#', '') || 'dash'; show(); });
   startNotifications(() => { refreshCounts(); if (view === 'dash' || view === 'complaints') show(); });
+  // clic sur une notification : fiche du colis, course, réclamations, colis à répartir, paiements
+  setNotifOpener((tg) => {
+    if (tg.type === 'shipment') return parcelDetail(tg.id);
+    if (tg.type === 'delivery') return deliveryDetail(tg.id);
+    const v = { alerts: 'complaints', parcels: 'parcels', payouts: 'cash', plan: 'couriers' }[tg.type];
+    if (v) location.hash = v;
+  });
   every(30000, refreshCounts);
   show();
 }

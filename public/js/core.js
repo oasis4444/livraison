@@ -133,10 +133,11 @@ export function every(ms, fn, immediate = true) {
 export function stopAll() { for (const h of [...timers]) h.stop(); }
 
 // ---------------------------------------------------------------- toasts, modales
-export function toast(msg, kind = '', title = '') {
+export function toast(msg, kind = '', title = '', onClick = null) {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.innerHTML = title ? `<b>${esc(title)}</b>${esc(msg)}` : esc(msg);
+  if (onClick) { el.style.cursor = 'pointer'; el.style.pointerEvents = 'auto'; el.title = 'Ouvrir'; el.onclick = () => { el.remove(); onClick(); }; }
   $('#toasts').append(el);
   setTimeout(() => el.remove(), kind === 'err' ? 5000 : 3800);
 }
@@ -301,6 +302,14 @@ export function beep() {
   } catch {}
   navigator.vibrate?.([120, 60, 120]);
 }
+// Ouverture d'une notification : chaque espace (admin, livreur, client) enregistre comment ouvrir la cible.
+let notifOpener = null;
+export const setNotifOpener = (fn) => { notifOpener = fn; };
+export function openNotif(n) {
+  if (!n?.target || !notifOpener) return false;
+  try { notifOpener(n.target, n); } catch (e) { toastErr(e); }
+  return true;
+}
 export function startNotifications(onNew) {
   if ('Notification' in window && Notification.permission === 'default') setTimeout(() => Notification.requestPermission().catch(() => {}), 4000);
   let first = true;
@@ -312,8 +321,11 @@ export function startNotifications(onNew) {
     $$('[data-unread]').forEach((el) => { el.textContent = r.unread || ''; el.classList.toggle('hidden', !r.unread); });
     if (!first) {
       for (const n of fresh.reverse()) {
-        toast(n.body || '', n.kind === 'sos' ? 'err' : '', n.title);
-        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(n.title, { body: n.body || '', icon: '/icon-192.png', tag: 'alefa-' + n.id });
+        toast(n.body || '', n.kind === 'sos' ? 'err' : '', n.title, n.target && notifOpener ? () => openNotif(n) : null);
+        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+          const sys = new Notification(n.title, { body: n.body || '', icon: '/icon-192.png', tag: 'alefa-' + n.id });
+          sys.onclick = () => { window.focus(); sys.close(); openNotif(n); };
+        }
       }
       if (fresh.length) { beep(); onNew?.(fresh); }
     }
@@ -322,7 +334,14 @@ export function startNotifications(onNew) {
 }
 export async function showNotifications() {
   const r = await api('GET', '/api/notifications?after=0');
-  const m = modal(t('notifications'), `<div class="list">${r.notifications.map((n) => `<div class="card" style="${n.read ? '' : 'border-color:var(--green)'}"><div class="row between"><b>${esc(n.title)}</b><span class="tiny muted">${dt(n.at)}</span></div>${n.body ? `<div class="small muted">${esc(n.body)}</div>` : ''}</div>`).join('') || `<p class="muted">${t('empty')}</p>`}</div>`);
+  const m = modal(t('notifications'), `<div class="list">${r.notifications.map((n, i) => `<div class="card${n.target && notifOpener ? ' notif-link' : ''}" data-ni="${i}" style="${n.read ? '' : 'border-color:var(--green)'}${n.target && notifOpener ? ';cursor:pointer' : ''}">
+      <div class="row between"><b>${esc(n.title)}</b><span class="tiny muted">${dt(n.at)}</span></div>${n.body ? `<div class="small muted">${esc(n.body)}</div>` : ''}
+      ${n.target && notifOpener ? `<div class="tiny" style="color:var(--green);margin-top:4px">${state.lang === 'mg' ? 'Tsindrio raha hijery ›' : 'Toucher pour ouvrir ›'}</div>` : ''}</div>`).join('') || `<p class="muted">—</p>`}</div>`);
+  m.el.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-ni]'); if (!c) return;
+    const n = r.notifications[+c.dataset.ni];
+    if (n?.target && notifOpener) { m.close(); openNotif(n); }
+  });
   await api('POST', '/api/notifications/read', {});
   $$('[data-unread]').forEach((el) => el.classList.add('hidden'));
   return m;

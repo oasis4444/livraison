@@ -1,7 +1,7 @@
 // Application Client : demande, négociation, suivi GPS en direct, paiement, évaluation.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications, setNotifOpener,
   profileForm, sendSOS, complaintForm, chatHtml, TANA, haversine,
 } from './core.js';
 import { c, shipCard, scheduleHtml, sendForm, shipDetail, stepLabel, stepBar, importForm } from './colis.js';
@@ -35,6 +35,16 @@ export async function mount(el) {
   bind(root, actions);
   root.addEventListener('input', onInput);
   root.addEventListener('change', onInput);
+  // clic sur une notification : le colis (fiche), la course express ou les paiements reçus
+  setNotifOpener((tg) => {
+    if (tg.type === 'shipment') {
+      if (tab !== 'colis') { tab = 'colis'; renderHome(); }
+      const s = ($('[data-colis]')?._list || []).find((x) => x.id === tg.id);
+      return shipDetail(tg.id, { role: s?.mine_as === 'recipient' ? 'recipient' : 'sender', onChange: () => renderHome() });
+    }
+    if (tg.type === 'delivery') { tab = 'home'; return renderHome(); }
+    if (tg.type === 'payouts') { tab = 'colis'; return renderHome(); }
+  });
   startNotifications((fresh) => {
     if (current && fresh.some((n) => n.delivery_id === current.id)) refreshCurrent();
     if (!current && ['colis', 'sched'].includes(tab) && fresh.some((n) => ['shipment', 'payout'].includes(n.kind))) renderHome();

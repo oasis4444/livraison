@@ -1,7 +1,7 @@
 // Application Livreur (vélo) : disponibilité, partage GPS, demandes proches, négociation, livraison avec PIN, revenus.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, profileForm,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel } from './colis.js';
@@ -28,6 +28,12 @@ export async function mount(el) {
   map = makeMap($('#map'), { zoom: 15 });
   bind(root, actions);
   if (state.user.status !== 'active') return renderPending();
+  // clic sur une notification : le colis concerné, la course express, ou le planning
+  setNotifOpener((tg) => {
+    if (tg.type === 'shipment') { if (tab !== 'colis') { tab = 'colis'; lastSig = ''; render(); } return openShip(tg.id); }
+    if (tg.type === 'plan') { tab = 'plan'; lastSig = ''; return render(); }
+    if (tg.type === 'delivery') { tab = 'req'; lastSig = ''; render(); return openRequest?.(tg.id); }
+  });
   startNotifications((fresh) => {
     if (fresh.some((n) => n.kind === 'offer_accepted')) checkActive();
     if (fresh.some((n) => ['new_request', 'price_raised'].includes(n.kind))) loadRequests();
