@@ -8,6 +8,7 @@ import { hashPassword } from '../src/lib.js';
 
 const dir = fileURLToPath(new URL('../migrations', import.meta.url));
 const env = { DB: createD1(dir), PBKDF2_ITER: '1000', APP_VERSION: 'test' };
+env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 
 async function call(method, path, body, token) {
   const headers = { 'content-type': 'application/json' };

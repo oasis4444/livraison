@@ -790,6 +790,7 @@ async function adminSettingsPut(ctx, env) {
     if (k === 'courier_can_edit_fee') val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
     if (['delivery_photo_required', 'relay_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
+    if (k === 'dispatch_mode' && !['admin', 'auto'].includes(val)) fail(400, 'invalid', 'Mode de répartition invalide');
     stmts.push(q(env, 'UPDATE settings SET value = ? WHERE key = ?', val, k));
     // Nouvelle adresse du centre : sa position GPS sera recherchée de nouveau (relais).
     if (k === 'centre_addr' && val !== cur.centre_addr && !('centre_lat' in (ctx.body.settings || {}))) stmts.push(q(env, "UPDATE settings SET value = '' WHERE key IN ('centre_lat','centre_lng')"));

@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql);
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode';"); // parcours historique : attribution automatique
 
 const LEAFLET_STUB = `
 (() => {
@@ -164,7 +164,15 @@ try {
   });
   await step('livreur part du centre → le client le voit en direct (statut + carte)', async () => {
     await courier.click('[data-t=colis]'); await courier.waitForSelector('text=CMD-1042');
-    await courier.click('[data-act=depart]'); await courier.waitForSelector('text=Chez l\'expéditeur', { timeout: 15000 });
+    await courier.click('[data-act=depart]'); await courier.waitForSelector('.modal [data-go]');
+    // destination : l'arrivée du créneau en cours si elle existe, sinon le livreur la tape
+    if (!(await courier.inputValue('.modal [data-dest]'))) {
+      await courier.fill('.modal [data-dest]', 'Ivandry'); await courier.click('.modal [data-sg] [data-i="0"]');
+    }
+    await courier.screenshot({ path: 'tests/screens/28-livreur-je-pars.png' });
+    await courier.click('.modal [data-go]');
+    await courier.waitForSelector('text=Chez l\'expéditeur', { timeout: 15000 });
+    await courier.waitForSelector('[data-act=endrun]');
     await client.click('[data-t=colis]'); await client.waitForSelector('.live-card', { timeout: 15000 });
     await client.waitForSelector('.live-card >> text=Chez l\'expéditeur');
     await client.screenshot({ path: 'tests/screens/29-client-suivi-direct.png' });

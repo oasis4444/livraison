@@ -1,12 +1,12 @@
 // Application Livreur (vélo) : disponibilité, partage GPS, demandes proches, négociation, livraison avec PIN, revenus.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, startNotifications, showNotifications, profileForm,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel } from './colis.js';
 
-let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null;
+let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null, myRun = null, runLayer = null, toLeaveN = 0;
 const mk = {};
 let axeLayer = null, axe = null, routeLayer = null, tab = 'colis', shipTimer = null, requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
 
@@ -307,8 +307,44 @@ async function loadWallet() {
   </div>`;
 }
 
+// « Je pars du centre » : où vas-tu ? (par défaut : l'arrivée du créneau en cours). Les colis sur ce chemin te seront proposés.
+async function departForm() {
+  const mg = state.lang === 'mg';
+  const cur = (await api('GET', '/api/courier/schedule').catch(() => ({}))).current;
+  let dest = cur?.to_lat != null ? { label: cur.to_addr, lat: cur.to_lat, lng: cur.to_lng } : null, res = [], tmr;
+  const m = modal(`🚀 ${mg ? 'Miala amin\'ny centre' : 'Je pars du centre'}`, `<div class="stack">
+    <label class="field"><span>🏁 ${mg ? 'Ho aiza ianao?' : 'Où vas-tu ?'}</span><div class="addr"><input class="input" data-dest autocomplete="off" value="${esc(dest?.label || '')}" placeholder="${mg ? 'Ohatra : Ivandry' : 'Ex : Ivandry'}"><div class="suggest hidden" data-sg></div></div></label>
+    <p class="tiny muted">${mg ? 'Ho tonga aminao ny colis rehetra eny amin\'ny lalanao. Izay manamarina voalohany no maka.' : 'Les colis à récupérer sur ton chemin te seront proposés ; le premier qui confirme les prend.'}</p>
+    <button class="btn primary lg block" data-go>🚀 ${mg ? 'Handeha' : 'Partir'}</button>
+    ${toLeaveN ? `<button class="btn block" data-nodest>${mg ? 'Handeha tsy misy toerana' : 'Partir sans destination'} (${toLeaveN} ${c('parcels')})</button>` : ''}</div>`);
+  const inp = m.el.querySelector('[data-dest]'), box = m.el.querySelector('[data-sg]');
+  inp.addEventListener('input', () => {
+    dest = null; clearTimeout(tmr);
+    const v = inp.value.trim(); if (v.length < 3) return box.classList.add('hidden');
+    tmr = setTimeout(async () => {
+      res = await geocode(v + ', Antananarivo').catch(() => []);
+      box.innerHTML = res.map((x, i) => `<button data-i="${i}">${esc(x.label)}</button>`).join('') || `<div class="tiny muted" style="padding:8px">${mg ? 'Tsy hita' : 'Introuvable'}</div>`;
+      box.classList.remove('hidden');
+    }, 400);
+  });
+  box.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (!b) return; dest = res[+b.dataset.i]; inp.value = dest.label; box.classList.add('hidden'); });
+  const go = async (withDest) => {
+    if (withDest && !dest) return toast(mg ? 'Safidio ao amin\'ny lisitra ny toerana halehanao' : 'Choisis ta destination dans la liste', 'err');
+    let route = null;
+    if (withDest && pos) try { route = (await bikeRoute(pos, [dest.lat, dest.lng], state.courier?.vehicle)).coords; } catch {}
+    try {
+      const r = await api('POST', '/api/courier/depart', withDest ? { to: { address: dest.label, lat: dest.lat, lng: dest.lng }, route, lat: pos?.[0], lng: pos?.[1] } : {});
+      m.close();
+      toast(`🚀 ${r.shipments ? `${r.shipments} ${c('parcels')} · ` : ''}${r.offers ? `${r.offers} ${mg ? 'colis eny an-dalana' : 'colis sur ton chemin'}` : (mg ? 'Mandeha soa!' : 'Bonne route !')}`, 'ok');
+      await sendPos(); loadMissions();
+    } catch (e) { toastErr(e); }
+  };
+  m.el.querySelector('[data-go]').onclick = () => go(true);
+  m.el.querySelector('[data-nodest]')?.addEventListener('click', () => go(false));
+}
+
 async function loadMissions() {
-  const [{ shipments }, st] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/courier/stats').catch(() => null)]);
+  const [{ shipments }, st, rn] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/courier/stats').catch(() => null), api('GET', '/api/courier/run').catch(() => ({ run: null, offers: [] }))]);
   const el = $('[data-colis]'); if (!el) return;
   const me = state.user?.id, mg = state.lang === 'mg';
   const mine = (x) => x.courier?.id === me;
@@ -325,11 +361,27 @@ async function loadMissions() {
   const cash = shipments.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + (x.collected || 0), 0);
   const toLeave = shipments.filter((x) => x.step === 'scheduled' && mine(x)).length;
   const stats = st?.today ? `<div class="row" style="gap:8px;margin-bottom:10px">${[[mg ? 'Nalaina' : 'Récupérés', st.today.picked + st.today.from_centre], [mg ? 'Natolotra' : 'Livrés', st.today.delivered], [mg ? 'Mandeha' : 'En cours', st.today.open]].map(([k, v]) => `<div class="card grow" style="text-align:center;padding:8px"><div style="font-size:1.3rem;font-weight:850">${v}</div><div class="tiny muted">${k} ${mg ? 'androany' : "aujourd'hui"}</div></div>`).join('')}</div>` : '';
-  el.innerHTML = stats + (toLeave ? `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${state.lang === 'mg' ? 'Miala amin\'ny centre' : 'Je pars du centre'} (${toLeave} ${c('parcels')})</button>` : '') + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
+  myRun = rn.run; toLeaveN = toLeave;
+  const runBox = rn.run
+    ? `<div class="card" style="margin-bottom:10px;background:var(--green-soft);border:0"><div class="row between"><span>🚀 <b>${mg ? 'Mandeha' : 'En tournée'}</b> → ${esc(rn.run.to || '')}<div class="tiny muted">${mg ? 'nanomboka' : 'depuis'} ${time(rn.run.started_at)} · ${mg ? 'ho tonga aminao ny colis eny an-dalana' : 'les colis sur ton chemin te sont proposés'}</div></div>
+        <button class="btn sm" data-act="endrun">🏁 ${mg ? 'Vita' : 'Fin'}</button></div></div>`
+    : `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${mg ? 'Miala amin\'ny centre' : 'Je pars du centre'}${toLeave ? ` (${toLeave} ${c('parcels')})` : ''}</button>`;
+  const offerCard = (o) => `<div class="card" style="${o.status === 'lost' ? 'opacity:.55' : 'border:2px solid var(--sun)'}">
+      <div class="row between"><b>${esc(o.ref)}</b><span>${o.province ? `🚌 ${esc(o.province.city)} ` : ''}${o.value_paid ? '📱 ' : ''}<b>${ar(o.amount_to_collect)}</b></span></div>
+      <div class="small">🟢 ${esc(o.pickup.address)}<br>🟠 ${esc(o.drop.address)}</div>
+      ${o.contents || o.size ? `<div class="tiny muted">📦 ${esc([o.contents, o.size].filter(Boolean).join(' · '))}</div>` : ''}
+      ${o.status === 'lost' ? `<div class="small" style="color:var(--red)">❌ ${mg ? 'Efa nisy naka' : 'Déjà pris'}${o.taken_by ? ` (${esc(o.taken_by)})` : ''}</div>`
+        : `<div class="row" style="margin-top:6px"><button class="btn primary grow" data-act="take" data-id="${o.id}">✋ ${mg ? 'Raisiko' : 'Je le prends'}</button><button class="btn" data-act="skip" data-id="${o.id}">✕</button></div>`}</div>`;
+  const offersBox = rn.offers.length ? `<h3>📦 ${mg ? 'Colis eny an-dalanao' : 'Colis sur ton chemin'} (${rn.offers.filter((o) => o.status === 'open').length})</h3>
+    <p class="tiny muted">${mg ? 'Izay manamarina voalohany no maka azy.' : 'Le premier qui confirme le prend.'}</p><div class="list">${rn.offers.map(offerCard).join('')}</div>` : '';
+  el.innerHTML = stats + runBox + offersBox + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
     + grp.filter(([, l]) => l.length).map(([title, l]) => `<h3>${esc(title)} (${l.length})</h3><div class="list">${l.map((x) => shipCard(x)).join('')}</div>`).join('')
     || `<p class="muted" style="text-align:center;padding:16px">${c('empty')}</p>`;
-  // repères sur la carte
-  for (const k of Object.keys(mk)) if (k.startsWith('s')) { mk[k].remove(); delete mk[k]; }
+  // repères sur la carte (+ colis proposés et chemin de la tournée)
+  for (const k of Object.keys(mk)) if (k.startsWith('s') || k.startsWith('o')) { mk[k].remove(); delete mk[k]; }
+  for (const o of rn.offers) if (o.status === 'open' && o.pickup.lat != null) upsertMarker(map, mk, 'o' + o.id, [o.pickup.lat, o.pickup.lng], icons.a());
+  runLayer?.remove?.(); runLayer = null;
+  if (rn.run?.route?.length > 1 && window.L && map) runLayer = L.polyline(rn.run.route, { color: '#f5a524', weight: 5, opacity: .7, dashArray: '8 8' }).addTo(map);
   for (const x of shipments) {
     if (x.status === 'assigned' && x.sender.lat != null) upsertMarker(map, mk, 's' + x.id, [x.sender.lat, x.sender.lng], icons.a())?.on('click', () => openShip(x.id));
     if (x.status === 'picked_up' && mine(x) && !['to_centre', 'at_centre'].includes(x.step) && x.recipient.lat != null) upsertMarker(map, mk, 's' + x.id, [x.recipient.lat, x.recipient.lng], icons.b())?.on('click', () => openShip(x.id));
@@ -356,12 +408,14 @@ const actions = {
   tab: (el) => { tab = el.dataset.t; lastSig = ''; render(); },
   open: (el) => openRequest(+el.dataset.id),
   ship: (el) => openShip(+el.dataset.id),
-  depart: async () => {
-    if (!pos) return toast(t('gps_off_title'), 'err');
-    const r = await api('POST', '/api/courier/depart', {});
-    toast(`🚀 ${r.shipments} ${c('parcels')}`, 'ok');
-    await sendPos(); loadMissions();
+  depart: () => { if (!pos) return toast(t('gps_off_title'), 'err'); departForm(); },
+  endrun: async () => { await api('POST', '/api/courier/run/end', {}); toast(state.lang === 'mg' ? '🏁 Vita ny fihodinana' : '🏁 Tournée terminée', 'ok'); loadMissions(); },
+  take: async (el) => {
+    try { const r = await api('POST', `/api/courier/offers/${el.dataset.id}/take`, {}); toast(`✅ ${r.shipment.ref} — ${state.lang === 'mg' ? 'anao io colis io' : 'colis à toi'}`, 'ok'); }
+    catch (e) { toastErr(e); }
+    loadMissions();
   },
+  skip: async (el) => { await api('POST', `/api/courier/offers/${el.dataset.id}/decline`, {}); loadMissions(); },
   toggle: async () => {
     if (!available && (!pos || Date.now() - lastFix > 60e3)) { showGate(pos ? 'lost' : 'off'); return toast(t('gps_off_title'), 'err'); }
     const r = await api('POST', '/api/courier/availability', { available: !available });

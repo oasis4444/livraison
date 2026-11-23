@@ -7,6 +7,7 @@ import { handleApi } from '../src/worker.js';
 import { hashPassword } from '../src/lib.js';
 
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
+env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 const hooks = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => { if (String(url).startsWith('https://vente.test')) { hooks.push({ url, init }); return new Response('ok'); } return realFetch(url, init); };

@@ -64,7 +64,7 @@ export function shipCard(s, extra = '') {
     <div class="route-line" style="margin:6px 0"><span class="dot"></span><span class="small ellipsis">${esc(s.sender.name)} — ${esc(s.sender.address)}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small ellipsis">${esc(s.recipient.name)} — ${esc(s.recipient.address)}</span></div>
     ${sizeTxt(s) ? `<div class="tiny muted ellipsis">📦 ${esc(sizeTxt(s))}</div>` : ''}
     ${s.relay ? `<div class="tiny" style="color:var(--blue,#2563eb)">🏢 ${state.lang === 'mg' ? 'Relais' : 'Relais'} : ${esc(s.pickup_courier?.name?.split(' ')[0] || '?')} → centre → ${esc(s.delivery_courier?.name?.split(' ')[0] || '?')}</div>` : ''}
-    <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
+    <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${s.province ? `🚌 ${esc(s.province.city)}` : ''}${s.payment?.value_paid ? '📱 ' : ''}${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
 }
 
 // ---------------------------------------------------------------- heures & axes (visibles par tous les clients)
@@ -92,7 +92,8 @@ export async function scheduleHtml(map, onDeps) {
 
 // ---------------------------------------------------------------- formulaire d'envoi (client ou centre)
 export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
-  const f = { pickup: null, drop: null, slot: '' };
+  const f = { pickup: null, drop: null, slot: '', pay: 'cash' };
+  const mg = state.lang === 'mg';
   const P = prefill || {};
   const m = modal(c('send_parcel'), `<div class="stack">
     ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel" value="${esc(P.vendeur || '')}"></label>` : ''}
@@ -106,6 +107,13 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         <input class="input" data-kg inputmode="decimal" placeholder="kg" style="width:80px" title="${state.lang === 'mg' ? 'Lanja (kg), tsy voatery' : 'Poids (kg), facultatif'}"></div>
       <div class="row wrap" style="gap:6px;margin-top:6px">${[['S', 20, 15, 5], ['M', 30, 25, 15], ['L', 45, 35, 25], ['XL', 60, 40, 40]].map(([k, l, w, h]) => `<button type="button" class="btn sm" data-sz="${l}|${w}|${h}">${k} · ${l}×${w}×${h}</button>`).join('')}</div></div>
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label>
+    <div class="field"><span>💳 ${mg ? 'Ny vidin\'entana' : 'Paiement de la marchandise'}</span>
+      <div class="seg" data-pay><button type="button" class="on" data-pv="cash">💵 ${mg ? 'Vola an-tanana, raisin\'ny livreur' : 'Espèces, à encaisser par le livreur'}</button><button type="button" data-pv="mm">📱 ${mg ? 'Efa nalefa Mobile Money' : 'Déjà payée par Mobile Money'}</button></div>
+      <input class="input hidden" data-pref placeholder="${mg ? 'Référence MVola / Orange / Airtel (tsy voatery)' : 'Référence MVola / Orange / Airtel (facultatif)'}" style="margin-top:6px"></div>
+    <label class="row" style="gap:8px;align-items:center"><input type="checkbox" data-prov> <b>🚌 ${mg ? 'Alefa any amin\'ny province (amin\'ny koperativa)' : 'Envoi en province (par coopérative)'}</b></label>
+    <div class="stack hidden" data-provf style="gap:8px"><label class="field"><span>${mg ? 'Tanàna hanaterana' : 'Ville de destination'} *</span><input class="input" data-city placeholder="Fianarantsoa"></label>
+      <label class="field"><span>${mg ? 'Koperativa' : 'Coopérative'} *</span><input class="input" data-coop placeholder="Kofmad, Sonatra…"></label>
+      <div class="tiny muted">${mg ? 'Ny « adiresy fanaterana » dia ny toeram-pijanonan\'ny koperativa eto Antananarivo. Ny livreur no manatitra any, maka sary, ary manoratra ny fiara sy ny saran-dalana (PA na efa voaloa).' : 'L\'« adresse de livraison » est la gare de la coopérative à Antananarivo. Le livreur y remet le colis, photographie, et note le véhicule et les frais de transport (PA ou déjà payés).'}</div></div>
     <label class="field"><span>${state.lang === 'mg' ? 'Laharan\'ny baiko (tsy voatery)' : 'N° de commande (facultatif)'}</span><input class="input" data-ref value="${esc(P.ref || '')}" placeholder="CMD-1042"></label>
     <div class="card" style="background:var(--bg);border:0" data-q><span class="small muted">${c('fee')} : —</span></div>
     <p class="tiny muted">${c('pay_info')}</p>
@@ -118,7 +126,10 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const r = await api('POST', '/api/shipments/quote', { drop_lat: f.drop.lat, drop_lng: f.drop.lng }).catch(() => null);
     if (!r) return;
     const v = Number(el.querySelector('[data-v]').value.replace(/\D/g, '')) || 0;
-    box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div><div class="row between"><span>${c('to_collect')}</span><b>${ar(v + r.fee)}</b></div>
+    const prov = el.querySelector('[data-prov]').checked;
+    const due = prov ? 0 : (f.pay === 'mm' ? 0 : v) + r.fee;
+    box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div><div class="row between"><span>${c('to_collect')}</span><b>${ar(due)}</b></div>
+      ${prov ? `<div class="tiny muted">${mg ? 'Province : tsy misy vola raisina any amin\'ny koperativa ; esorina amin\'ny vola aloa anao ny frais Alefa.' : 'Province : rien à encaisser à la coopérative ; les frais Alefa sont retenus sur votre paiement.'}</div>` : f.pay === 'mm' ? `<div class="tiny muted">${mg ? 'Efa voaloa ny entana : ny frais ihany no raisin\'ny livreur.' : 'Marchandise déjà payée : le livreur n\'encaisse que les frais.'}</div>` : ''}
       <label class="field" style="margin-top:8px"><span>${c('departure')}</span><select class="input" data-dep><option value="">${c('auto_dep')}</option>
       ${r.departures.map((d) => `<option value="${d.slot_id}|${d.departure_at}">${dayLabel(d.departure_at)} ${time(d.departure_at)} · ${esc(d.axe)}${d.from_addr ? ` (${esc(d.from_addr.split(',')[0])} → ${esc(d.to_addr.split(',')[0])})` : ''} · ${vehIcon(d.vehicle)} ${esc(d.courier)}</option>`).join('')}</select></label>
       ${r.departures.length ? '' : `<div class="tiny" style="color:var(--orange)">${c('no_dep')}</div>`}`;
@@ -147,6 +158,9 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
       inp.value = f[k].label; box.classList.add('hidden');
       if (k === 'drop') quote();
     }
+    const pv = e.target.closest('[data-pv]');
+    if (pv) { f.pay = pv.dataset.pv; el.querySelectorAll('[data-pv]').forEach((x) => x.classList.toggle('on', x === pv)); el.querySelector('[data-pref]').classList.toggle('hidden', f.pay !== 'mm'); quote(); }
+    if (e.target.matches('[data-prov]')) { el.querySelector('[data-provf]').classList.toggle('hidden', !e.target.checked); quote(); }
     const sz = e.target.closest('[data-sz]');
     if (sz) { const [l, w, h] = sz.dataset.sz.split('|'); el.querySelector('[data-dl]').value = l; el.querySelector('[data-dw]').value = w; el.querySelector('[data-dh]').value = h; }
     if (e.target.closest('[data-gps]')) {
@@ -170,6 +184,8 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         size: txt('[data-dl]') || txt('[data-dw]') || txt('[data-dh]') ? { l: txt('[data-dl]').replace(',', '.'), w: txt('[data-dw]').replace(',', '.'), h: txt('[data-dh]').replace(',', '.') } : undefined,
         weight: txt('[data-kg]') ? txt('[data-kg]').replace(',', '.') : undefined,
         slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
+        value_paid: f.pay === 'mm', value_paid_ref: f.pay === 'mm' ? txt('[data-pref]') || undefined : undefined,
+        province: el.querySelector('[data-prov]').checked || undefined, dest_city: txt('[data-city]') || undefined, coop_name: txt('[data-coop]') || undefined,
       });
       m.close();
       modal(r.duplicate ? (state.lang === 'mg' ? 'Efa nalefa io baiko io' : 'Commande déjà envoyée') : '✅ ' + r.shipment.ref, `<div class="stack" style="text-align:center">
@@ -225,6 +241,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     ${s.delivery_proof && (isAdmin || role === 'sender') ? `<div class="card small" style="background:var(--bg);border:0">🧾 <b>${state.lang === 'mg' ? 'Porofo fanaterana' : 'Preuve de livraison'}</b>
       ${s.delivery_proof.dist_m != null ? ` · 📍 ${s.delivery_proof.dist_m} m ${state.lang === 'mg' ? 'miala ny adiresy' : 'de l\'adresse'}${s.delivery_proof.dist_m > 300 ? ' ⚠️' : ' ✅'}` : ' · 📍 —'}
       ${s.delivery_proof.photo ? `<img data-dph alt="" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;margin-top:6px;background:var(--bg)">` : ''}</div>` : ''}
+    ${provinceCard(s)}
+    ${s.payment?.value_paid ? `<div class="card small" style="background:var(--green-soft);border:0">📱 <b>${state.lang === 'mg' ? 'Efa voaloa Mobile Money ny entana' : 'Marchandise déjà payée par Mobile Money'}</b>${s.payment.ref ? ` · ${esc(s.payment.ref)}` : ''}<br>${state.lang === 'mg' ? 'Ny frais ihany no raisina.' : 'Seuls les frais sont à encaisser.'}</div>` : ''}
     <div class="card" style="background:var(--bg);border:0">
       <div class="row between small"><span>${c('value')}</span><b>${ar(s.value ?? s.declared_value)}${s.value != null && s.value !== s.declared_value && s.declared_value ? ` <span class="muted">(annoncée ${ar(s.declared_value)})</span>` : ''}</b></div>
       <div class="row between small"><span>${c('fee')}</span><b>${ar(s.fee)} ${(isAdmin || isCourier) && ['pending', 'assigned', 'picked_up'].includes(s.status) ? '<button class="btn sm" data-fee>✎</button>' : ''}</b></div>
@@ -275,7 +293,7 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     else if (s.relay && s.status === 'assigned' && s.delivery_courier?.id === me && s.pickup_courier?.id !== me)
       acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">🏢 ${state.lang === 'mg' ? `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} no maka azy ary mametraka azy ao amin'ny centre ; avy eo ianao no manatitra.` : `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} le récupère et le dépose au centre ; vous le livrez ensuite.`}</div>`);
     if (s.status === 'picked_up' && !['to_centre', 'at_centre'].includes(s.step)) {
-      if (!s.courier_confirmed_at) btn(`${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', () => { m.close(); deliverForm(s, () => onChange?.()); });
+      if (!s.courier_confirmed_at) btn(s.province ? `🚌 ${state.lang === 'mg' ? 'Atolotra amin\'ny koperativa' : 'Remettre à la coopérative'} ${esc(s.province.coop)}` : `${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', () => { m.close(); deliverForm(s, () => onChange?.()); });
       else acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">⏳ ${esc(stepLabel('awaiting_recipient'))}</div>`);
       btn(c('refused_btn'), 'sun', async () => {
         const note = await promptBox(c('refused_btn'), { label: c('reason') }); if (!note) return;
@@ -316,7 +334,51 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
 }
 
 // Remise au destinataire : code PIN (preuve immédiate) ou confirmation par le destinataire dans son application.
+// Province : carte « coopérative » (ville, coopérative, véhicule, frais de transport PA / payé).
+export function provinceCard(s) {
+  const p = s.province; if (!p) return '';
+  const mg = state.lang === 'mg';
+  return `<div class="card small" style="background:var(--sun-soft);border:0">🚌 <b>${mg ? 'Alefa any' : 'Envoi en province'} : ${esc(p.city)}</b> · ${mg ? 'koperativa' : 'coopérative'} <b>${esc(p.coop)}</b>
+    ${p.plate ? `<br>🚐 ${mg ? 'Fiara' : 'Véhicule'} : <b>${esc(p.plate)}</b>${p.driver_phone ? ` · 📞 <a href="tel:${esc(p.driver_phone)}">${esc(phoneFmt(p.driver_phone))}</a>` : ''}
+      <br>💰 ${mg ? 'Saran-dalana' : 'Transport'} : <b>${ar(p.fee || 0)}</b> · ${p.fee_status === 'pa' ? `<b>PA</b> (${mg ? 'aloa rehefa tonga' : 'payé à l\'arrivée'})` : `✅ ${mg ? 'efa voaloa' : 'déjà payé'}`}` : ''}</div>`;
+}
+
+// Remise à la coopérative (province) : photo, véhicule, téléphone du chauffeur, frais de transport PA ou déjà payés.
+function coopForm(s, done) {
+  const mg = state.lang === 'mg';
+  const p = s.province;
+  const m = modal(`🚌 ${s.ref} → ${esc(p.city)}`, `<div class="stack">
+    <div class="small">${mg ? 'Atolory' : 'Remettez à'} <b>${esc(p.coop)}</b> (${esc(s.recipient.address)}) · ${mg ? 'ho an\'i' : 'pour'} <b>${esc(s.recipient.name)}</b> ${esc(phoneFmt(s.recipient.phone))}</div>
+    <label class="field"><span>📷 ${mg ? 'Sarin\'ny entana natolotra *' : 'Photo du colis remis *'}</span><input class="input" data-dphoto type="file" accept="image/*" capture="environment"></label>
+    <img data-dprev alt="" style="display:none;width:100%;max-height:180px;object-fit:cover;border-radius:10px">
+    <label class="field"><span>🚐 ${mg ? 'Fiara : laharana (plaque) / marika *' : 'Véhicule : immatriculation / repère *'}</span><input class="input" data-plate placeholder="1234 TBA"></label>
+    <label class="field"><span>📞 ${mg ? 'Laharan\'ny mpamily na koperativa' : 'Téléphone du chauffeur ou de la coopérative'}</span><input class="input" data-dphone type="tel" placeholder="034 12 345 67"></label>
+    <label class="field"><span>💰 ${mg ? 'Saran-dalan\'ny fiara (Ar) *' : 'Frais de transport (Ar) *'}</span><input class="input" data-cfee inputmode="numeric" placeholder="15000" style="font-size:1.2rem;font-weight:800"></label>
+    <div class="seg" data-cst><button type="button" class="on" data-st="pa"><b>PA</b> · ${mg ? 'aloa rehefa tonga' : 'payé à l\'arrivée'}</button><button type="button" data-st="paid">✅ ${mg ? 'Efa voaloa' : 'Déjà payé'}</button></div>
+    <button class="btn primary lg block" data-ok>✅ ${mg ? 'Voatolotra amin\'ny koperativa' : 'Remis à la coopérative'}</button></div>`);
+  let photo = null, st = 'pa';
+  m.el.querySelector('[data-dphoto]').onchange = async (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    try { photo = await compressImage(f); const im = m.el.querySelector('[data-dprev]'); im.src = photo; im.style.display = 'block'; } catch (err) { toastErr(err); }
+  };
+  m.el.querySelector('[data-cst]').onclick = (e) => { const b = e.target.closest('[data-st]'); if (!b) return; st = b.dataset.st; m.el.querySelectorAll('[data-st]').forEach((x) => x.classList.toggle('on', x === b)); };
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    const v = (k) => m.el.querySelector(k).value.trim();
+    if (!photo) return toast(mg ? 'Makà sary ny entana natolotra' : 'Prenez une photo du colis remis', 'err');
+    if (!v('[data-plate]')) return toast(mg ? 'Soraty ny laharan\'ny fiara' : 'Indiquez le véhicule', 'err');
+    if (v('[data-cfee]') === '') return toast(mg ? 'Soraty ny saran-dalana' : 'Indiquez les frais de transport', 'err');
+    let pos = [];
+    try { pos = await getPosition({ timeout: 5000 }); } catch {}
+    try {
+      await api('POST', `/api/shipments/${s.id}/deliver`, { photo, lat: pos[0], lng: pos[1], coop_plate: v('[data-plate]'), coop_driver_phone: v('[data-dphone]') || undefined,
+        coop_fee: Number(v('[data-cfee]').replace(/\D/g, '')) || 0, coop_fee_status: st });
+      m.close(); toast(mg ? 'Voatolotra amin\'ny koperativa ✅' : 'Remis à la coopérative ✅', 'ok'); done();
+    } catch (err) { toastErr(err); }
+  };
+}
+
 function deliverForm(s, done) {
+  if (s.province) return coopForm(s, done);
   const mg = state.lang === 'mg';
   const got = s.delivery_pin && s.recipient_confirmed_at; // le client a appuyé sur « J'ai reçu » : code déjà transmis
   const m = modal(`${c('deliver_btn')} · ${s.ref}`, `<div class="stack">
@@ -376,7 +438,8 @@ function pickupForm(s, done) {
     <button class="btn primary lg block" data-ok>✅ ${c('pickup_btn')}</button></div>`);
   let photo = null;
   const el = m.el;
-  const tot = () => { el.querySelector('[data-tot]').innerHTML = `${c('to_collect')} : <b>${ar((Number(el.querySelector('[data-v]').value) || 0) + (Number(el.querySelector('[data-fee]').value) || 0))}</b>`; };
+  const tot = () => { el.querySelector('[data-tot]').innerHTML = s.province ? `🚌 ${esc(s.province.city)} · ${esc(s.province.coop)} — ${state.lang === 'mg' ? 'tsy misy vola raisina' : 'rien à encaisser'}`
+    : `${c('to_collect')} : <b>${ar((s.payment?.value_paid ? 0 : Number(el.querySelector('[data-v]').value) || 0) + (Number(el.querySelector('[data-fee]').value) || 0))}</b>${s.payment?.value_paid ? ` <span class="muted">(📱 ${state.lang === 'mg' ? 'efa voaloa ny entana' : 'marchandise déjà payée'})</span>` : ''}`; };
   tot(); el.addEventListener('input', tot);
   el.querySelector('[data-file]').addEventListener('change', async (e) => {
     const f = e.target.files?.[0]; if (!f) return;

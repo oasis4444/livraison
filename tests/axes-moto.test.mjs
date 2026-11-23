@@ -7,6 +7,7 @@ import { handleApi } from '../src/worker.js';
 import { hashPassword } from '../src/lib.js';
 
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
+env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 async function call(method, path, body, token, headers = {}) {
   const h = { 'content-type': 'application/json', ...headers };
   if (token) h.authorization = `Bearer ${token}`;

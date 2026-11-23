@@ -150,7 +150,11 @@ async function trackPublic(ctx, env) {
     pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: s.courier_name ? s.courier_name.split(' ')[0] : null, vehicle: s.courier_name ? (s.vehicle || 'velo') : null,
     position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at,
     can_confirm: s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at)) && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at,
-    relay: !!s.relay, contents: s.description || null, size: s.dim_l ? `${s.dim_l}×${s.dim_w}×${s.dim_h} cm` : null });
+    relay: !!s.relay, contents: s.description || null, size: s.dim_l ? `${s.dim_l}×${s.dim_w}×${s.dim_h} cm` : null,
+    // à payer au livreur : marchandise (sauf si déjà payée par Mobile Money) + frais ; rien pour un envoi en province
+    amount_to_pay: s.province ? 0 : (s.value_paid ? 0 : s.value ?? s.declared_value) + s.fee, value_paid: !!s.value_paid,
+    province: s.province ? { city: s.dest_city, coop: s.coop_name, plate: s.status === 'delivered' || s.courier_confirmed_at ? s.coop_plate : null,
+      driver_phone: s.courier_confirmed_at ? s.coop_driver_phone : null, fee: s.courier_confirmed_at ? s.coop_fee : null, fee_status: s.courier_confirmed_at ? s.coop_fee_status : null } : null });
 }
 
 // « Suivre mon colis » : numéro du colis (ALxxxx) ou de la commande du logiciel de vente (L-00004, C-A0001)

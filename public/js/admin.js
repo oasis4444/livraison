@@ -272,6 +272,7 @@ const VIEWS = {
         <div class="panel stack"><h3>Colis du centre</h3><div class="row">${f('default_fee', 'Frais de livraison par défaut (Ar)', 'Modifiable par axe et par colis')}
           <label class="field grow"><span>Le livreur peut modifier les frais</span><select class="input" data-s="courier_can_edit_fee"><option value="1" ${s.courier_can_edit_fee === '1' ? 'selected' : ''}>Oui</option><option value="0" ${s.courier_can_edit_fee !== '1' ? 'selected' : ''}>Non</option></select></label></div>
           <div class="row">${f('centre_name', 'Nom du centre', '', 'text')}${f('centre_addr', 'Adresse du centre', 'Point de relais : quartier, rue (ex : Ampandrana, Lot II M 45)', 'text')}</div>
+          <label class="field"><span>Répartition des nouveaux colis</span><select class="input" data-s="dispatch_mode"><option value="admin" ${s.dispatch_mode !== 'auto' ? 'selected' : ''}>Par l'admin (+ proposés aux livreurs en tournée sur le chemin, le premier qui confirme)</option><option value="auto" ${s.dispatch_mode === 'auto' ? 'selected' : ''}>Automatique (planning et trajets)</option></select></label>
           <div class="row"><label class="field grow"><span>Relais par le centre (2 livreurs)</span><select class="input" data-s="relay_enabled"><option value="1" ${s.relay_enabled !== '0' ? 'selected' : ''}>Oui</option><option value="0" ${s.relay_enabled === '0' ? 'selected' : ''}>Non</option></select></label><label class="field grow"><span>Photo obligatoire à la remise</span><select class="input" data-s="delivery_photo_required"><option value="1" ${s.delivery_photo_required !== '0' ? 'selected' : ''}>Oui</option><option value="0" ${s.delivery_photo_required === '0' ? 'selected' : ''}>Non</option></select></label></div>
           ${f('delivery_max_dist_m', 'Alerte si « remis » loin de l\'adresse (m)', 'Position GPS du livreur au moment de la remise')}</div>
         <div class="panel stack"><h3>Plateforme & paiements</h3>${f('platform_name', 'Nom', '', 'text')}${f('support_phone', 'Téléphone support', '', 'tel')}
@@ -796,7 +797,7 @@ async function suggestBox(d, s, canPick) {
   const row = (c, leg) => `<label class="row" style="gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line);cursor:pointer">
       <input type="radio" name="${leg}" value="${c.id}" ${String(leg === 'p' ? pick : del) === String(c.id) ? 'checked' : ''} style="margin-top:4px">
       <span class="grow small">${vehIcon(c.vehicle)} <b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'} · <a href="tel:${esc(c.phone)}" onclick="event.stopPropagation()">📞 ${esc(phoneFmt(c.phone))}</a>${c.refused ? ' <span style="color:var(--red)">a refusé</span>' : ''}
-        <span class="muted">${c.dist_km != null ? ` · 📍 ${String(c.dist_km).replace('.', ',')} km maintenant` : ''}${c.on_trip ? ' · 🛣 trajet passe par là' : ''}${c.axe ? ` · 🧭 axe ${esc(c.axe)}` : ''}
+        <span class="muted">${c.dist_km != null ? ` · 📍 ${String(c.dist_km).replace('.', ',')} km maintenant` : ''}${c.run?.passes ? ` · <b style="color:var(--green)">🚀 en tournée, passe par là</b> (→ ${esc(c.run.to)})` : c.run ? ` · 🚀 en tournée → ${esc(c.run.to)}` : ''}${c.offer === 'open' ? ' · 🔔 offre envoyée' : c.offer === 'declined' ? ' · a passé l\'offre' : ''}${c.on_trip ? ' · 🛣 trajet passe par là' : ''}${c.axe ? ` · 🧭 axe ${esc(c.axe)}` : ''}
         ${c.next_departure ? ` · 🕘 ${dt(c.next_departure.at)} ${esc(c.next_departure.label || '')}` : ''} · ${c.load} colis en cours</span></span></label>`;
   const list = (arr, leg) => arr.slice(0, 6).map((c) => row(c, leg)).join('') + (arr.length > 6 ? `<details class="small"><summary>${arr.length - 6} autre(s)</summary>${arr.slice(6).map((c) => row(c, leg)).join('')}</details>` : '');
   box.innerHTML = `<b>🚲🏍️ Livreurs proposés</b>
@@ -822,7 +823,7 @@ async function suggestBox(d, s, canPick) {
       if (!c.position) continue;
       const k = 'k' + c.id; seen.add(k);
       upsertMarker(smap, mk, k, c.position, icons.bike('', c.name.split(' ')[0], c.vehicle));
-      mk[k].bindTooltip(`<b>${esc(c.name)}</b><br>${vehIcon(c.vehicle)} ${c.vehicle === 'moto' ? 'Moto' : 'Vélo'} · 📞 ${esc(phoneFmt(c.phone))}<br>${c.online ? '🟢 en ligne' : '⚪ hors ligne'}${c.position_at ? ' · ' + time(c.position_at) : ''}`);
+      mk[k].bindTooltip(`<b>${esc(c.name)}</b><br>${vehIcon(c.vehicle)} ${c.vehicle === 'moto' ? 'Moto' : 'Vélo'} · 📞 ${esc(phoneFmt(c.phone))}${c.run ? `<br>🚀 En tournée → ${esc(c.run.to)}` : ''}<br>${c.online ? '🟢 en ligne' : '⚪ hors ligne'}${c.position_at ? ' · ' + time(c.position_at) : ''}`);
       if (c.online) pts.push(c.position);
     }
     pruneMarkers(mk, seen);
