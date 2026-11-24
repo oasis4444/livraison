@@ -11,7 +11,7 @@ const dayLbl = (ms) => {
   return new Date(ms).toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' });
 };
 const winLbl = (w) => `${dayLbl(w.from)} ${w.part === 'am' ? L2('matin', 'maraina') : L2('après-midi', 'tolakandro')} · ${time(w.from)}–${time(w.to)}`;
-const KINDS = [['colis', 'Colis', 'Colis', 'Vêtements, objets, cartons', 'Akanjo, entana, baoritra', '📦'], ['document', 'Document', 'Taratasy', 'Enveloppe, dossier', 'Valopy, antontan-taratasy', '📄'], ['alimentaire', 'Alimentaire', 'Sakafo', 'Repas ou produits frais, bien fermés', 'Sakafo voafono tsara', '🍲']];
+const KINDS = [['colis', 'Colis', 'Colis', 'Vêtements, objets, cartons', 'Akanjo, entana, baoritra', '📦'], ['document', 'Document', 'Taratasy', 'Enveloppe, dossier, papiers', 'Valopy, antontan-taratasy', '📄']];
 
 export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}) {
   const P = prefill || {};
@@ -30,11 +30,19 @@ export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}
       <div class="sp-head"><h1>${L2('Nouvel envoi', 'Fandefasana vaovao')}</h1><p>${L2(`Étape ${f.step} sur 4 — ${STEPS[f.step - 1]}`, `Dingana ${f.step} amin'ny 4 — ${STEPS[f.step - 1]}`)}</p></div>
       <div class="wz-prog">${STEPS.map((s, i) => `<div class="${i < f.step ? 'on' : ''}"><i></i><span>${s}</span></div>`).join('')}</div>
       ${P.ref ? `<div class="sp-note">${L2('Commande reçue du logiciel de vente', 'Baiko avy amin\'ny logiciel de vente')} : <b>${esc(P.ref)}</b></div>` : ''}
-      <div class="wz-grid ${f.step === 1 ? 'with-map' : ''}"><div class="sp-card wz-body" data-body></div>${f.step === 1 ? '<div class="sp-card wz-map"><div data-map></div><div class="wz-route" data-route></div></div>' : ''}</div></div>`;
+      <div class="wz-grid ${f.step === 1 ? 'with-map' : ''}"><div class="sp-card wz-body" data-body></div>${f.step === 1 ? `<div class="sp-card wz-map"><div data-map></div><div class="wz-maphint">${L2('Faites glisser les repères jusqu\'au point exact, en bord de route.', 'Tariho ny marika mankany amin\'ny toerana marina, amoron-dalana.')}</div><div class="wz-route" data-route></div></div>` : ''}</div></div>`;
     const body = root.querySelector('[data-body]');
     body.innerHTML = [step1, step2, step3, step4][f.step - 1]();
     wire(body);
-    if (f.step === 1) { map = makeMap(root.querySelector('[data-map]'), { zoom: 12, zoomControl: true }); mk = {}; drawMap(); }
+    if (f.step === 1) {
+      map = makeMap(root.querySelector('[data-map]'), { zoom: 12, zoomControl: true }); mk = {}; drawMap();
+      // Toucher la carte : place le point de récupération, puis celui de livraison.
+      map?.on('click', async (e) => {
+        const k = !f.pickup?.lat ? 'pickup' : !f.drop?.lat ? 'drop' : null; if (!k) return;
+        const label = await reverse(e.latlng.lat, e.latlng.lng);
+        f[k] = { label, lat: e.latlng.lat, lng: e.latlng.lng }; const inp = root.querySelector(`[data-a=${k}]`); if (inp) inp.value = label; drawMap(); quote();
+      });
+    }
     root.scrollIntoView?.({ block: 'start' }); window.scrollTo?.(0, 0);
   };
 
@@ -47,6 +55,7 @@ export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}
       <label class="wz-f"><span>${L2('Téléphone du destinataire', 'Findain\'ny mpandray')}</span><input data-k="rphone" type="tel" inputmode="tel" value="${esc(f.rphone)}" placeholder="034 12 345 67"></label></div>
     ${addr('drop', f.prov ? L2('Gare de la coopérative (à Tana)', 'Fijanonan\'ny koperativa (eto Tana)') : L2('Où livrer ?', 'Aiza no hanaterana?'), 'o', L2('Quartier, rue, repère…', 'Fokontany, arabe, marika…'))}
     <label class="wz-toggle"><input type="checkbox" data-k="prov" ${f.prov ? 'checked' : ''}><span><b>🚌 ${L2('Envoi en province', 'Alefa any amin\'ny faritany')}</b><small>${L2('Remis à une coopérative (taxi-brousse) à Tana', 'Atolotra amin\'ny koperativa eto Tana')}</small></span><i></i></label>
+    <p class="wz-note">${L2('Récupération et livraison <b>en bord de route</b> ou dans un bâtiment de premier plan. Le livreur n\'entre pas dans les ruelles ou cours intérieures : précisez un repère (portail, boutique…).', 'Fakana sy fanaterana <b>amoron-dalana</b> na trano voalohany manatrika ny lalana. Tsy miditra lalan-kely ny livreur : omeo marika mazava (vavahady, fivarotana…).')}</p>
     ${f.prov ? `<div class="wz-row"><label class="wz-f"><span>${L2('Ville de destination', 'Tanàna hanaterana')}</span><input data-k="city" value="${esc(f.city)}" placeholder="Fianarantsoa"></label>
       <label class="wz-f"><span>${L2('Coopérative', 'Koperativa')}</span><input data-k="coop" value="${esc(f.coop)}" placeholder="Kofmad, Sonatra…"></label></div>` : ''}
     ${nav(false)}`;
@@ -55,7 +64,7 @@ export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}
   const step2 = () => {
     const cats = cond?.categories || [];
     return `
-    <div class="wz-f"><span>${L2('Type d\'envoi', 'Karazana entana')}</span><div class="wz-choice c3">${KINDS.map(([k, fr, mg, dfr, dmg, em]) => `<button type="button" data-kind="${k}" class="${f.kind === k ? 'on' : ''}"><span class="wz-em">${em}</span><b>${L2(fr, mg)}</b><small>${L2(dfr, dmg)}</small></button>`).join('')}</div></div>
+    <div class="wz-f"><span>${L2('Type d\'envoi', 'Karazana entana')}</span><div class="wz-choice c2">${KINDS.map(([k, fr, mg, dfr, dmg, em]) => `<button type="button" data-kind="${k}" class="${f.kind === k ? 'on' : ''}"><span class="wz-em">${em}</span><b>${L2(fr, mg)}</b><small>${L2(dfr, dmg)}</small></button>`).join('')}</div></div>
     <label class="wz-f"><span>${L2('Que contient le colis ?', 'Inona no ao anatiny?')}</span><input data-k="desc" value="${esc(f.desc)}" placeholder="${L2('Ex : 2 robes, chaussures', 'Ohatra : akanjo 2, kiraro')}" maxlength="300"></label>
     <div class="wz-f"><span>${L2('Taille du colis', 'Haben\'ny colis')} <a href="#" data-cond>${L2('Voir les conditions', 'Jereo ny fepetra')}</a></span>
       <div class="wz-choice c4">${cats.map((k, i) => `<button type="button" data-cat="${k.k}" class="${f.cat === k.k ? 'on' : ''}"><b class="big">${k.k}</b><em>${k.fee == null ? L2('sur devis', 'devis') : k.fee ? '+' + ar(k.fee) : L2('inclus', 'tafiditra')}</em>
@@ -137,14 +146,22 @@ export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}
         centre_drop: f.pick === 'centre', qty: f.qty, weight: f.kg, value: f.pay === 'none' ? 0 : Number(f.value) || 0, value_paid: f.pay === 'mm',
       });
       if (f.quote.category && f.cat && f.quote.category !== f.cat && f.step === 2) { f.cat = f.quote.category; toast(L2(`Avec ce poids, le colis passe en ${f.cat}`, `Noho ny lanjany dia lasa ${f.cat} ny colis`)); shell(); return; }
-    } catch { f.quote = null; }
-    const pb = root.querySelector('[data-price]'); if (pb && f.quote) pb.innerHTML = priceTxt();
+      f.bigErr = null;
+    } catch (e) { f.quote = null; f.bigErr = e.code === 'too_big' ? e.message : null; }
+    const pb = root.querySelector('[data-price]');
+    if (pb && f.bigErr) { pb.classList.add('err'); pb.innerHTML = `<span>${esc(f.bigErr)}</span>`; }
+    else if (pb && f.quote) { pb.classList.remove('err'); pb.innerHTML = priceTxt(); }
   };
   const drawMap = () => {
     if (!map) return;
     const pts = [];
     for (const [k, ic] of [['pickup', icons.a()], ['drop', icons.b()]]) {
-      if (f[k]?.lat != null) { upsertMarker(map, mk, k, [f[k].lat, f[k].lng], ic); pts.push([f[k].lat, f[k].lng]); } else if (mk[k]) { mk[k].remove(); delete mk[k]; }
+      if (f[k]?.lat != null) {
+        const m = upsertMarker(map, mk, k, [f[k].lat, f[k].lng], ic, { draggable: true });
+        // Repère déplaçable : on ajuste au portail exact, l'adresse se met à jour.
+        if (m && !m._alefaDrag) { m._alefaDrag = true; m.on?.('dragend', async () => { const p = m.getLatLng(); const label = await reverse(p.lat, p.lng); f[k] = { label, lat: p.lat, lng: p.lng }; const inp = root.querySelector(`[data-a=${k}]`); if (inp) inp.value = label; drawMap(); quote(); }); }
+        pts.push([f[k].lat, f[k].lng]);
+      } else if (mk[k]) { mk[k].remove(); delete mk[k]; }
     }
     if (mk.line) { mk.line.remove(); delete mk.line; }
     const info = root.querySelector('[data-route]'); if (info) info.innerHTML = '';
@@ -175,7 +192,7 @@ export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}
       tmr = setTimeout(async () => {
         const res = await geocode(v + ', Antananarivo').catch(() => []);
         box._res = res;
-        box.innerHTML = res.map((x, i) => `<button type="button" data-i="${i}">${esc(x.label)}</button>`).join('') + `<button type="button" data-i="-1">${L2('Garder', 'Tazomina')} « ${esc(v)} » (${L2('sans GPS', 'tsy misy GPS')})</button>`;
+        box.innerHTML = res.map((x, i) => `<button type="button" data-i="${i}"><b>${esc(x.label)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`).join('') + `<button type="button" data-i="-1">${L2('Garder', 'Tazomina')} « ${esc(v)} » (${L2('sans GPS', 'tsy misy GPS')})</button>`;
         box.classList.remove('hidden');
       }, 450);
     });
@@ -220,8 +237,9 @@ export async function sendWizard(root, { prefill = null, onDone, onCancel } = {}
       if (f.prov && (!f.city.trim() || !f.coop.trim())) return L2('Ville et coopérative', 'Tanàna sy koperativa');
     }
     if (f.step === 2) {
+      if (f.bigErr) return f.bigErr;
       if (f.desc.trim().length < 2) return L2('Dites ce que contient le colis', 'Lazao ny ao anaty colis');
-      if (!f.cat) return L2('Choisissez la taille du colis (S, M, L ou XL)', 'Safidio ny haben\'ny colis (S, M, L na XL)');
+      if (!f.cat) return L2('Choisissez la taille du colis (S, M ou L)', 'Safidio ny haben\'ny colis (S, M na L)');
     }
     if (f.step === 3 && f.pay !== 'none' && !(Number(f.value) > 0)) return L2('Indiquez la valeur de la marchandise', 'Lazao ny vidin\'ny entana');
     return null;

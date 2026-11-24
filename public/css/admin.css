@@ -95,3 +95,44 @@
   .ad .kpi { padding: 14px; } .ad .kpi .v { font-size: 1.3rem; }
 }
 @media print { .ad { background: #fff; } .ad-hello, .ad-alerts { display: none; } }
+
+/* Filtres : appliqués tout seuls, le bouton n'est plus utile */
+.ad .filters [data-act$="filter"] { display: none; }
+.ad .filters { gap: 10px; }
+.ad .filters .dd { min-width: 170px; }
+.ad .filters input.input { flex: 1; min-width: 220px; }
+.ad .main.loading { opacity: .65; transition: opacity .15s; }
+
+/* Tableau Colis : sobre, lisible, une couleur par information */
+.pc-sum { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: .9rem; color: var(--hk2); margin: 4px 0 14px; }
+.pc-sum b { color: var(--hk); }
+.pc-late-n { color: #b42323; } .pc-late-n b { color: #b42323; }
+.pc-tbl td { vertical-align: top; padding: 14px 12px; font-size: .86rem; }
+.pc-tbl tr.late td:first-child { box-shadow: inset 3px 0 0 #d64545; }
+.pc-ref { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700; font-size: .9rem; letter-spacing: .02em; color: var(--hk); }
+.pc-meta { font-size: .76rem; color: #8a928d; margin-top: 2px; }
+.pc-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pc-tags span { font-size: .7rem; font-weight: 700; color: var(--hk2); background: #f3efe5; border-radius: 6px; padding: 2px 6px; }
+.pc-name { font-weight: 700; color: var(--hk); }
+.pc-tel { display: inline-block; font-size: .8rem; color: var(--hk2) !important; text-decoration: none; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.pc-tel:hover { color: var(--hg) !important; text-decoration: underline; }
+.pc-addr { font-size: .8rem; color: #8a928d; margin-top: 2px; max-width: 260px; }
+.pc-win { font-size: .76rem; color: var(--hk2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.pc-c { font-size: .84rem; color: var(--hk); } .pc-c span { color: #8a928d; font-size: .76rem; display: inline-block; min-width: 42px; }
+.pc-none { color: #8a928d; font-style: italic; }
+.pc-amt { font-weight: 700; color: var(--hk); }
+.pc-money { line-height: 1.6; color: var(--hk2); }
+.pc-late { font-size: .76rem; color: #b42323; font-weight: 600; margin-top: 4px; }
+.pt { white-space: nowrap; font-weight: 600; color: var(--hk); }
+.pt::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+.pt.ok::before { background: #0e8a63; } .pt.no::before { background: #e8890c; }
+/* Statuts : fond neutre, seul le point est coloré */
+.ad .status-pill { background: #f4f1ea !important; color: var(--hk) !important; font-weight: 600; }
+.ad .status-pill::before { background: #9aa39e; }
+.ad .st-open::before, .ad .st-pending::before { background: #f5b800; }
+.ad .st-assigned::before { background: #2563eb; }
+.ad .st-picked_up::before { background: #e8890c; }
+.ad .st-delivered::before, .ad .st-active::before { background: #0e8a63; }
+.ad .st-cancelled::before, .ad .st-expired::before, .ad .st-suspended::before, .ad .st-rejected::before { background: #d64545; }
+.ad .tbl tr.click:hover td { background: #fbf8f1; }
+.pc-tbl td:nth-child(4) { min-width: 150px; } .pc-tbl td:nth-child(5) { min-width: 120px; }

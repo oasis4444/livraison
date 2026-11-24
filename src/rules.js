@@ -64,8 +64,14 @@ export function catTable(st) {
     { k: 'S', kg: n('cat_s_kg', 3), cm: n('cat_s_cm', 40), fee: n('cat_s_fee', 0), ex: st.cat_s_ex || '', vehicle: 'velo' },
     { k: 'M', kg: n('cat_m_kg', 10), cm: n('cat_m_cm', 50), fee: n('cat_m_fee', 1000), ex: st.cat_m_ex || '', vehicle: 'velo' },
     { k: 'L', kg: n('cat_l_kg', 25), cm: n('cat_l_cm', 80), fee: n('cat_l_fee', 3000), ex: st.cat_l_ex || '', vehicle: 'moto' },
-    { k: 'XL', kg: null, cm: null, fee: null, ex: st.cat_xl_ex || '', vehicle: 'devis' },
+    ...(st.xl_enabled === '1' ? [{ k: 'XL', kg: null, cm: null, fee: null, ex: st.cat_xl_ex || '', vehicle: 'devis' }] : []),
   ];
+}
+// Alefa ne transporte que ce qui tient sur un vélo ou une moto : au-delà de L, l'envoi est refusé (sauf si les devis XL sont activés).
+export function tooBig(st, category) {
+  return category === 'XL' && st.xl_enabled !== '1'
+    ? `Trop lourd ou trop grand : Alefa ne transporte que ce qui tient sur un vélo ou une moto (jusqu'à ${Number(st.cat_l_kg ?? 25)} kg et ${Number(st.cat_l_cm ?? 80)} cm).`
+    : null;
 }
 // Catégorie retenue : la plus élevée entre celle choisie, le poids et la plus grande dimension.
 export function categoryOf(st, { category = null, weight = null, dims = null } = {}) {

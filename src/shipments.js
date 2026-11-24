@@ -4,7 +4,7 @@
 import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
 import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL, slotRoute, courierAxeState } from './worker.js';
 import { matchTrip, logSync, nearest, simplify, rateLimit } from './trips.js';
-import { planWindows, nextWindows, centreShare, categoryOf, priceOf, catTable, zoneFee } from './rules.js';
+import { planWindows, nextWindows, centreShare, categoryOf, priceOf, catTable, zoneFee, tooBig } from './rules.js';
 import { smsStep } from './sms.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
@@ -316,7 +316,7 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
   // Depuis l'application, le client indique ce qu'il envoie et la taille du colis.
   if (requireDetails) {
     if (!String(b.description || b.contents || '').trim()) fail(400, 'invalid', 'Indiquez ce que contient le colis');
-    if (!size.dims && !b.category && !b.size?.category) fail(400, 'invalid', 'Choisissez la catégorie du colis (S, M, L ou XL)');
+    if (!size.dims && !b.category && !b.size?.category) fail(400, 'invalid', 'Choisissez la taille du colis (S, M ou L)');
   }
   if (b.external_ref) {
     // Une même commande (référence) n'est jamais créée deux fois pour le même vendeur.
@@ -336,6 +336,7 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
   // Conditions de transport : catégorie (la plus élevée entre celle choisie, le poids et la taille) + options.
   const yes = (v) => [true, 1, '1', 'true', 'oui'].includes(v);
   const category = categoryOf(st, { category: b.category ?? b.size?.category, weight: size.weight, dims: size.dims });
+  { const big = tooBig(st, category); if (big) fail(400, 'too_big', big); }
   const express = yes(b.express), fragile = yes(b.fragile), centreDrop = yes(b.centre_drop) && ['L', 'XL'].includes(category) && !express;
   // Livraison directe : récupération et livraison proches → un seul livreur, sans passer par le centre, tarif direct.
   const bf = await baseFee(env, st, plat, plng, dlat, dlng);
@@ -367,7 +368,7 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
       pickup_from = ?, pickup_to = ?, deliver_from = ?, deliver_to = ?, review = ?, moto_only = ?, category = ?, fragile = ?, express = ?, centre_drop = ?, fee_detail = ?, qty = ?, distance_km = ?, kind = ? WHERE id = ?`, randomHex(12),
     size.dims?.[0] ?? null, size.dims?.[1] ?? null, size.dims?.[2] ?? null, size.weight, value_paid, value_paid_ref, province ? 1 : 0, dest_city, coop_name,
     win.pickup_from, win.pickup_to, win.deliver_from, win.deliver_to, review, wr.moto_only ? 1 : 0, category, fragile ? 1 : 0, express ? 1 : 0, centreDrop ? 1 : 0,
-    JSON.stringify(fee === price.fee ? price.lines : [['Frais fixés par le centre', fee]]), qty, bf.km, ['document', 'colis', 'alimentaire'].includes(b.kind) ? b.kind : null, res.meta.last_row_id);
+    JSON.stringify(fee === price.fee ? price.lines : [['Frais fixés par le centre', fee]]), qty, bf.km, ['document', 'colis'].includes(b.kind) ? b.kind : null, res.meta.last_row_id);
   // L / XL déposé par l'expéditeur au centre : la « récupération » se fait au centre.
   if (centreDrop) {
     const C = await centrePoint(env);
@@ -427,6 +428,8 @@ async function quoteShipment(ctx, env) {
   const bf = await baseFee(env, st, plat, plng, lat, lng);
   const express = yes(b.express);
   const value = Number(b.value ?? b.declared_value ?? 0) || 0;
+  const big = tooBig(st, category);
+  if (big) fail(400, 'too_big', big);
   const price = priceOf(st, { base: bf.base, zone: bf.zone, category, fragile: yes(b.fragile), express, centreDrop: yes(b.centre_drop) && ['L', 'XL'].includes(category) && !express,
     qty: b.qty, cashValue: yes(b.value_paid) ? 0 : value });
   const direct = bf.direct, base = bf.base;
@@ -804,6 +807,8 @@ async function pickup(ctx, env) {
   let catChange = null;
   if (b.category && String(b.category).toUpperCase() !== (s.category || '') && ['S', 'M', 'L', 'XL'].includes(String(b.category).toUpperCase())) {
     const cat = String(b.category).toUpperCase();
+    const big = tooBig(st, cat);
+    if (big) fail(400, 'too_big', `${big} Refusez le colis à la récupération.`);
     let lines = []; try { lines = JSON.parse(s.fee_detail || '[]'); } catch { /* ancien colis */ }
     const bl = lines.find((l) => String(l[0]).startsWith('Livraison'));
     const base = bl?.[1] ?? s.fee;

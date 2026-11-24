@@ -30,7 +30,7 @@ const LEAFLET_STUB = `
 })();`;
 
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] }); // micro simulé pour les appels
 const errors = [];
 const watch = (p, name) => { p.on('pageerror', (e) => errors.push(`${name}: ${e.message}`)); p.on('console', (m) => m.type() === 'error' && !/Failed to load resource|ERR_FAILED/.test(m.text()) && errors.push(`${name} console: ${m.text()}`)); };
 const step = async (name, fn) => { process.stdout.write(`• ${name} … `); await fn(); console.log('ok'); };
@@ -43,6 +43,7 @@ async function ctx(geo, vw = { width: 400, height: 860 }) {
       : /analakely/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Analakely, Antananarivo, Madagascar', lat: '-18.9055', lon: '47.5255' }
       : { display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
+  await c.route('https://photon.komoot.io/**', (r) => r.abort());
   await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   return c;
 }
@@ -143,7 +144,7 @@ try {
     await admin.waitForSelector('[data-ops-table] >> text=Hery Vélo');
     await admin.click('[data-ostep] [data-k=delivery]'); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
     await admin.click('[data-ostep] [data-k=pickup]'); await admin.waitForSelector(`[data-ops-list] [data-ref="${ref}"]`);
-    await admin.selectOption('[data-oc]', { label: '🏍️ Naina Moto' }); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
+    await admin.selectOption('[data-oc]', { label: 'Naina Moto' }); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
     await admin.selectOption('[data-oc]', ''); await admin.click('[data-ostep] [data-k=active]');
     await admin.screenshot({ path: 'tests/screens/46-admin-suivi-livraisons.png' });
     await admin.click('[data-v=dash]'); await admin.waitForSelector('text=Livraisons du jour par livreur');
@@ -153,12 +154,27 @@ try {
     await client.fill('.modal [data-cbody]', 'Bonjour, à quelle heure passe le livreur ?'); await client.click('.modal [data-csend]');
     await client.waitForSelector('.modal >> text=à quelle heure passe le livreur');
     await admin.waitForSelector('[data-v=support] .cnt', { timeout: 15000 });
-    await admin.click('[data-act=notifs]'); await admin.click('.modal [data-ni] >> text=💬 Client Soa Boutique');
+    await admin.click('[data-act=notifs]'); await admin.click('.modal [data-ni] >> text=Client Soa Boutique');
     await admin.waitForSelector('[data-sthread] >> text=à quelle heure passe le livreur');
     await admin.fill('[data-sthread] [data-cbody]', 'Il passe entre 13 h et 17 h.'); await admin.click('[data-sthread] [data-csend]');
     await admin.screenshot({ path: 'tests/screens/47-admin-service-client.png' });
     await client.waitForSelector('.modal >> text=Il passe entre 13 h et 17 h.', { timeout: 15000 });
     await client.screenshot({ path: 'tests/screens/48-client-service-client.png' });
+    await client.click('.modal-back [data-x]');
+  });
+  await step('appel dans la plateforme : le client appelle le service client, l\'admin décroche, la voix passe', async () => {
+    await client.click('.sp-tab [data-nav=support]'); await client.click('.modal [data-callsup]');
+    await client.waitForSelector('.call-screen >> text=Ça sonne', { timeout: 15000 });
+    await admin.waitForSelector('.call-screen [data-accept]', { timeout: 15000 });
+    await admin.screenshot({ path: 'tests/screens/56-appel-entrant.png' });
+    await admin.click('.call-screen [data-accept]');
+    // Connexion établie des deux côtés : le compteur de durée démarre (00:0x).
+    await client.waitForFunction(() => /^\d\d:\d\d$/.test(document.querySelector('.call-screen [data-st]')?.textContent || ''), null, { timeout: 20000 });
+    await admin.waitForFunction(() => /^\d\d:\d\d$/.test(document.querySelector('.call-screen [data-st]')?.textContent || ''), null, { timeout: 20000 });
+    await client.screenshot({ path: 'tests/screens/57-appel-en-cours.png' });
+    await client.click('.call-screen [data-hang]');
+    await admin.waitForSelector('.call-screen >> text=Appel terminé', { timeout: 10000 });
+    await admin.waitForSelector('.call-screen', { state: 'detached', timeout: 10000 });
     await client.click('.modal-back [data-x]');
   });
   await step('client : colis à 450 000 Ar → validé par l\'admin', async () => {
@@ -187,26 +203,26 @@ try {
     await courier.fill('.modal [data-code]', 'ZZZZ'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Ce n\'est pas le bon colis');
     await courier.fill('.modal [data-code]', ref.slice(-4).toLowerCase());
     await courier.screenshot({ path: 'tests/screens/44-livreur-cooperative.png' });
-    await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Remis à la coopérative ✅');
-    const s = (await api('GET', '/api/admin/shipments?status=delivered', null, auth(tok.admin))).data.shipments?.find((x) => x.ref === ref);
+    await courier.click('.modal [data-ok]');
+    let s; for (let i = 0; i < 40 && !s; i++) { s = (await api('GET', '/api/admin/shipments?status=delivered', null, auth(tok.admin))).data.shipments?.find((x) => x.ref === ref); if (!s) await courier.waitForTimeout(250); }
     if (!s || s.province.plate !== '1234 TBA' || s.province.fee_status !== 'pa' || s.province.fee !== 15000) throw new Error('remise coopérative : ' + JSON.stringify(s?.province));
   });
   await step('admin : menu Colis — infos complètes, filtre par livreur, payé ou non', async () => {
     while (await admin.locator('.modal-back [data-x]').count()) await admin.click('.modal-back [data-x] >> nth=-1');
     await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', '');
-    await admin.selectOption('[data-pf=courier]', { label: '🚲 Hery Vélo' }); await admin.click('[data-act=pfilter]');
+    await admin.selectOption('[data-pf=courier]', { label: 'Hery Vélo' }); await admin.waitForTimeout(700); // filtre appliqué tout seul
     await admin.waitForSelector(`tr[data-ref="${ref}"]`);
     const row = admin.locator(`tr[data-ref="${ref}"]`);
-    for (const t of ['Soa Boutique', 'Rivo', '034 55 555 55', 'Récup. : Hery Vélo', 'non payé']) if (!(await row.textContent()).includes(t)) throw new Error('ligne colis sans « ' + t + ' »');
+    for (const t of ['Soa Boutique', 'Rivo', '034 55 555 55', 'Récup. Hery Vélo', 'non payé']) if (!(await row.textContent()).includes(t)) throw new Error('ligne colis sans « ' + t + ' »');
     await admin.screenshot({ path: 'tests/screens/50-admin-colis-liste.png' });
-    await admin.selectOption('[data-pf=courier]', { label: '🏍️ Naina Moto' }); await admin.click('[data-act=pfilter]');
+    await admin.selectOption('[data-pf=courier]', { label: 'Naina Moto' }); await admin.waitForTimeout(700); // filtre appliqué tout seul
     await admin.waitForSelector('text=Aucun colis');
-    await admin.selectOption('[data-pf=courier]', ''); await admin.click('[data-act=pfilter]');
+    await admin.selectOption('[data-pf=courier]', ''); await admin.waitForTimeout(700); // filtre appliqué tout seul
     await admin.evaluate(() => { location.hash = 'dash'; }); await admin.waitForSelector('.ad-hello'); await admin.waitForTimeout(400);
     await admin.screenshot({ path: 'tests/screens/51-admin-accueil.png', fullPage: true });
     await admin.setViewportSize({ width: 390, height: 844 }); await admin.click('.main-head [data-act=menu]'); await admin.waitForTimeout(300);
     await admin.screenshot({ path: 'tests/screens/52-admin-menu-mobile.png' });
-    await admin.click('.side-back'); await admin.setViewportSize({ width: 1360, height: 860 });
+    await admin.mouse.click(360, 420); await admin.waitForTimeout(200); await admin.setViewportSize({ width: 1360, height: 860 });
   });
 } catch (e) {
   console.log('ÉCHEC\n', e.message);

@@ -38,6 +38,7 @@ async function ctx(geo) {
     ? r.fulfill({ json: { address: { road: 'Avenue de l\'Indépendance', suburb: 'Analakely' } } })
     : r.fulfill({ json: [{ display_name: 'Ankorondrano, Antananarivo, Analamanga, Madagascar', lat: '-18.8840', lon: '47.5240' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
+  await c.route('https://photon.komoot.io/**', (r) => r.abort());
   await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   await c.route('https://*.basemaps.cartocdn.com/**', (r) => r.abort());
   return c;
@@ -89,7 +90,7 @@ try {
     await admin.fill('.modal [data-k=from]', 'Analakely'); await admin.dispatchEvent('.modal [data-k=from]', 'change');
     await admin.waitForSelector('.modal [data-k=to]');
     await admin.fill('.modal [data-k=to]', 'Behoririka'); await admin.dispatchEvent('.modal [data-k=to]', 'change');
-    await admin.waitForSelector('.modal >> text=✓ Analakely → Behoririka');
+    await admin.waitForSelector('.modal >> text=Analakely → Behoririka');
     await admin.screenshot({ path: 'tests/screens/12-admin-planning.png' });
     await admin.click('[data-save]'); await admin.waitForSelector('text=Planning enregistré');
   });
@@ -186,11 +187,11 @@ try {
     await courier.screenshot({ path: 'tests/screens/07-livreur-revenus.png' });
   });
   await step('admin : tableau de bord, carte, rapports, paramètres', async () => {
-    await admin.click('[data-v=live]'); await admin.waitForSelector('text=🧭');
+    await admin.click('[data-v=live]'); await admin.waitForSelector('.livemap');
     await admin.click('[data-v=dash]'); await admin.waitForSelector('.kpis');
     await admin.screenshot({ path: 'tests/screens/08-admin-dashboard.png' });
     await admin.click('[data-v=live]'); await admin.waitForSelector('text=Livreurs en service (');
-    await admin.click('[data-v=deliveries]'); await admin.selectOption('[data-f=status]', ''); await admin.click('[data-act=dfilter]');
+    await admin.click('[data-v=deliveries]'); await admin.selectOption('[data-f=status]', ''); await admin.waitForTimeout(700); // filtre appliqué tout seul
     await admin.waitForSelector('tr.click'); await admin.click('tr.click'); await admin.waitForSelector('text=Livraison #1');
     await admin.screenshot({ path: 'tests/screens/09-admin-livraison.png' });
     await admin.click('[data-x]');

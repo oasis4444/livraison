@@ -16,7 +16,7 @@ async function call(method, path, body, token, headers = {}) {
 const db = env.DB.raw;
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // tarif normal dans ces tests
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
-db.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé dans ces tests (testé à part)
+db.prepare("UPDATE settings SET value = CASE key WHEN 'xl_enabled' THEN '1' ELSE '0' END WHERE key IN ('scan_required', 'xl_enabled')").run(); // devis XL activé (ancien fonctionnement testé ici) ; code colis non exigé dans ces tests (testé à part)
 const PHOTO = 'data:image/jpeg;base64,' + Buffer.from('fake-jpeg-bytes').toString('base64');
 // Centre à Analakely ; tournées vers le nord (Behoririka → Ankorondrano). Récupération à Behoririka, livraison à Ankorondrano.
 const CENTRE = { lat: -18.9055, lng: 47.5255 }, BEHORIRIKA = { lat: -18.8990, lng: 47.5240 }, ANKORONDRANO = { lat: -18.8840, lng: 47.5240 };

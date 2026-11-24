@@ -34,6 +34,7 @@ export async function mount(el) {
     if (tg.type === 'shipment') { if (tab !== 'colis') { tab = 'colis'; lastSig = ''; render(); } return openShip(tg.id); }
     if (tg.type === 'plan') { tab = 'plan'; lastSig = ''; return render(); }
     if (tg.type === 'support') return supportChat();
+    if (tg.type === 'chat') return import('./talk.js').then((t) => t.openShipChat(tg.id));
     if (tg.type === 'delivery') { tab = 'req'; lastSig = ''; render(); return openRequest?.(tg.id); }
   });
   startNotifications((fresh) => {
@@ -331,7 +332,7 @@ async function departForm() {
     const v = inp.value.trim(); if (v.length < 3) return box.classList.add('hidden');
     tmr = setTimeout(async () => {
       res = await geocode(v + ', Antananarivo').catch(() => []);
-      box.innerHTML = res.map((x, i) => `<button data-i="${i}">${esc(x.label)}</button>`).join('') || `<div class="tiny muted" style="padding:8px">${mg ? 'Tsy hita' : 'Introuvable'}</div>`;
+      box.innerHTML = res.map((x, i) => `<button data-i="${i}"><b>${esc(x.label)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`).join('') || `<div class="tiny muted" style="padding:8px">${mg ? 'Tsy hita' : 'Introuvable'}</div>`;
       box.classList.remove('hidden');
     }, 400);
   });

@@ -10,7 +10,7 @@ const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.ur
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
-env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
+env.DB.raw.prepare("UPDATE settings SET value = CASE key WHEN 'xl_enabled' THEN '1' ELSE '0' END WHERE key IN ('scan_required', 'xl_enabled')").run(); // devis XL activé (ancien fonctionnement testé ici) ; code colis non exigé (testé à part)
 const hooks = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => { if (String(url).startsWith('https://vente.test')) { hooks.push({ url, init }); return new Response('ok'); } return realFetch(url, init); };
@@ -177,7 +177,7 @@ test('centre : attribution manuelle, frais, export', async () => {
   const base = { pickup_addr: 'Chez moi, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng, recipient_name: 'Koto', recipient_phone: '0347777777', drop_addr: 'Behoririka', drop_lat: BEHORIRIKA.lat, drop_lng: BEHORIRIKA.lng, declared_value: 5000 };
   // depuis l'application : contenu et taille obligatoires
   assert.match((await call('POST', '/api/shipments', base, recipient)).data.message, /contient/);
-  assert.match((await call('POST', '/api/shipments', { ...base, description: 'Chaussures' }, recipient)).data.message, /catégorie/);
+  assert.match((await call('POST', '/api/shipments', { ...base, description: 'Chaussures' }, recipient)).data.message, /taille du colis/);
   assert.equal((await call('POST', '/api/shipments', { ...base, description: 'Chaussures', size: '30x20' }, recipient)).status, 400, '3 mesures');
   const c = await call('POST', '/api/shipments', { ...base, description: 'Chaussures', size: '30 x 20 x 12', weight: 1.5 }, recipient);
   assert.deepEqual(c.data.shipment.size, { l: 30, w: 20, h: 12 }); assert.equal(c.data.shipment.weight_kg, 1.5); assert.equal(c.data.shipment.contents, 'Chaussures');

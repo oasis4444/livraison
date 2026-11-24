@@ -99,7 +99,7 @@ function page(c) {
     <div class="h-head2 reveal"><span class="h-kicker">${L2('Fonctionnement', 'Fomba fiasa')}</span><h2>${L2('De votre porte à celle du destinataire.', 'Avy eo am-baravaranao ka hatrany amin\'ny mpandray.')}</h2>
       <p>${L2('Quatre étapes, toutes visibles dans l\'application et sur le lien de suivi envoyé au destinataire.', 'Dingana efatra, hita daholo ao amin\'ny application sy amin\'ny rohy fanarahana alefa amin\'ny mpandray.')}</p></div>
     <ol class="h-steps reveal">
-      ${[['box', L2('Vous créez l\'envoi', 'Mamorona ny fandefasana'), L2('Adresse, taille du colis (S, M, L, XL) et options. Le prix total s\'affiche avant de valider.', 'Adiresy, haben\'ny colis (S, M, L, XL) sy safidy. Hita ny vidiny feno alohan\'ny hanamafisana.')],
+      ${[['box', L2('Vous créez l\'envoi', 'Mamorona ny fandefasana'), L2('Adresse, taille du colis (S, M ou L) et options. Le prix total s\'affiche avant de valider.', 'Adiresy, haben\'ny colis (S, M, L, XL) sy safidy. Hita ny vidiny feno alohan\'ny hanamafisana.')],
         ['cam', L2('Un livreur le récupère', 'Alain\'ny livreur'), L2('Il photographie le colis, vérifie la catégorie et y inscrit son code. Vous êtes prévenu.', 'Alainy sary ny colis, hamarininy ny karazany ary soratany ny kaodiny. Ampahafantarina ianao.')],
         ['route', L2('Il traverse la ville', 'Mamakivaky ny tanàna'), L2('Par notre centre d\'Ampandrana, ou en direct quand le trajet est le même. Créneau annoncé au destinataire.', 'Mandalo ny centre-nay eny Ampandrana, na mivantana raha mitovy làlana. Ampahafantarina ny ora ny mpandray.')],
         ['lock', L2('Remise avec code PIN', 'Atolotra amin\'ny kaody PIN'), L2('Le destinataire paie, donne son code PIN : la livraison est confirmée, photo à l\'appui.', 'Mandoa ny mpandray, omeny ny kaody PIN : voamarina ny fanaterana, misy sary porofo.')]]
@@ -119,7 +119,7 @@ function page(c) {
     </div>
     <div class="h-opts reveal">
       ${[[L2('Fragile', 'Mora vaky'), `+ ${ar(o.fragile)}`], [L2('Express, dans l\'heure', 'Express, ao anatin\'ny ora iray'), `+ ${ar(o.express)}`], [L2('Plusieurs colis, même adresse', 'Colis maromaro, adiresy iray'), `− ${o.multi_discount ?? 50} %`],
-        [L2('Gros colis récupéré (L, XL)', 'Entana lehibe alaina (L, XL)'), L2(`+ ${ar(o.pickup_large)} ou dépôt au centre`, `+ ${ar(o.pickup_large)} na apetraka ao amin'ny centre`)]]
+        [L2('Gros colis récupéré (L)', 'Entana lehibe alaina (L)'), L2(`+ ${ar(o.pickup_large)} ou dépôt au centre`, `+ ${ar(o.pickup_large)} na apetraka ao amin'ny centre`)]]
         .map(([a, b]) => `<div><span>${a}</span><b>${b}</b></div>`).join('')}
       <a href="#" data-terms class="h-link">${L2('Toutes les conditions et tarifs', 'Ny fepetra sy saran-dalana rehetra')} ${ic('arrow')}</a>
     </div></div></section>
@@ -130,7 +130,7 @@ function page(c) {
       <p class="h-muted">${L2('Tapez les deux adresses ou touchez la carte (départ puis arrivée).', 'Soraty ny adiresy roa na tsindrio ny sarintany (fiaingana dia fahatongavana).')}</p>
       <label class="h-field"><span class="dot g"></span><input data-addr="p" placeholder="${L2('Récupération : quartier, repère…', 'Fakana : fokontany, marika…')}" autocomplete="off"><div class="h-sug" data-sug="p"></div></label>
       <label class="h-field"><span class="dot o"></span><input data-addr="d" placeholder="${L2('Livraison : quartier, repère…', 'Fanaterana : fokontany, marika…')}" autocomplete="off"><div class="h-sug" data-sug="d"></div></label>
-      <div class="h-seg" data-cat>${['S', 'M', 'L', 'XL'].map((k, i) => `<button type="button" data-k="${k}" class="${i ? '' : 'on'}">${k}</button>`).join('')}</div>
+      <div class="h-seg" data-cat>${(c?.categories || [{ k: 'S' }, { k: 'M' }, { k: 'L' }]).map((x) => x.k).map((k, i) => `<button type="button" data-k="${k}" class="${i ? '' : 'on'}">${k}</button>`).join('')}</div>
       <div class="h-result" data-res><span class="h-muted">${L2('Le prix apparaîtra ici.', 'Eto no hiseho ny vidiny.')}</span></div>
       <button class="h-btn sun lg block" data-register>${L2('Envoyer ce colis', 'Alefaso ity colis ity')} ${ic('arrow')}</button>
     </div>
@@ -170,7 +170,8 @@ function page(c) {
         [L2('Qui paie, et comment ?', 'Iza no mandoa, ary ahoana?'), L2('Le destinataire paie la marchandise et les frais au livreur, en espèces, MVola, Orange Money ou Airtel Money. Si la marchandise est déjà payée, seuls les frais sont encaissés.', 'Ny mpandray no mandoa ny entana sy ny saran-dalana amin\'ny livreur, vola an-tanana, MVola, Orange Money na Airtel Money. Raha efa voaloa ny entana, ny saran-dalana ihany no raisina.')],
         [L2('Et si mon colis est plus gros que prévu ?', 'Ahoana raha lehibe noho ny voalaza ny entana?'), L2('Le livreur corrige la catégorie à la récupération et vous recevez le nouveau prix. Vous pouvez alors annuler sans frais.', 'Ovain\'ny livreur ny karazany rehefa maka, ary ampahafantarina anao ny vidiny vaovao. Afaka foananao maimaim-poana izany.')],
         [L2('Le destinataire est absent ?', 'Tsy eo ny mpandray?'), L2(`Le livreur fait ${c?.max_attempts || 2} tentatives. Ensuite le colis revient chez vous, et les frais restent dus.`, `Manandrana in-${c?.max_attempts || 2} ny livreur. Avy eo averina aminao ny colis, ary tsy maintsy aloa ny saran-dalana.`)],
-        [L2('Que ne transportez-vous pas ?', 'Inona no tsy entinareo?'), L2('Argent liquide, armes, produits dangereux ou illégaux, animaux vivants.', 'Vola, fitaovam-piadiana, entana mampidi-doza na tsy ara-dalàna, biby velona.')],
+        [L2('Que transportez-vous ?', 'Inona no entinareo?'), L2('Des colis et des documents qui tiennent sur un vélo ou une moto (jusqu\'à 25 kg et 80 cm). Pas de repas, de meubles, de matelas ni de gros électroménager. Interdits : argent liquide, armes, produits dangereux ou illégaux, animaux vivants.', 'Colis sy taratasy zakan\'ny bisikileta na moto (hatramin\'ny 25 kg sy 80 cm). Tsy entinay ny sakafo, fanaka, kidoro na fitaovana lehibe. Voarara : vola, fitaovam-piadiana, entana mampidi-doza na tsy ara-dalàna, biby velona.')],
+        [L2('Où le livreur récupère-t-il et livre-t-il ?', 'Aiza no alain\'ny livreur sy aterany ny entana?'), L2('En bord de route, ou dans un bâtiment de premier plan accessible depuis la rue. Le livreur ne s\'enfonce pas en deuxième plan (cour intérieure, ruelle) : on vient le retrouver au bord de la route. Donnez un repère précis (portail, boutique, pharmacie).', 'Amoron-dalana, na trano voalohany manatrika ny lalana. Tsy miditra any anaty kianja na lalan-kely ny livreur : ianao no mivoaka eny amoron-dalana. Omeo marika mazava (vavahady, fivarotana, fivarotam-panafody).')],
         [L2('Je suis livreur, comment vous rejoindre ?', 'Livreur aho, ahoana no hidirako?'), L2(`Passez au centre (${esc(addr)}) avec votre vélo ou votre moto : nous créons votre compte livreur.`, `Mandalova ao amin'ny centre (${esc(addr)}) miaraka amin'ny bisikileta na moto : izahay no hamorona ny kaonty livreur-nao.`)]]
         .map(([q, a], i) => `<details ${i ? '' : 'open'}><summary>${q}<i></i></summary><p>${a}</p></details>`).join('')}
     </div></div></section>
@@ -269,7 +270,7 @@ function calculator(app, c) {
       if (inp.value.trim().length < 3) { sug.innerHTML = ''; return; }
       tmr = setTimeout(async () => {
         const list = await geocode(inp.value + ', Antananarivo').catch(() => []);
-        sug.innerHTML = list.slice(0, 5).map((x, i) => `<button type="button" data-i="${i}">${esc(x.label)}</button>`).join('');
+        sug.innerHTML = list.slice(0, 5).map((x, i) => `<button type="button" data-i="${i}"><b>${esc(x.label)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`).join('');
         sug.querySelectorAll('button').forEach((b) => (b.onclick = () => { sug.innerHTML = ''; set(k, list[b.dataset.i]); }));
       }, 450);
     });

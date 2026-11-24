@@ -11,7 +11,7 @@ const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.ur
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
-env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
+env.DB.raw.prepare("UPDATE settings SET value = CASE key WHEN 'xl_enabled' THEN '1' ELSE '0' END WHERE key IN ('scan_required', 'xl_enabled')").run(); // devis XL activé (ancien fonctionnement testé ici) ; code colis non exigé (testé à part)
 const fs = { // « Firestore » de Tsena
   d1: { no: 'L-00001', status: 'attente', clientName: 'Hotely Mamy', phone: '033 45 678 90', address: 'Andravoahangy', driver: 'Fidy', fee: 3000, amount: 45000, note: 'Livrer avant 11h' },
   d2: { no: 'L-00002', status: 'cours', clientName: 'Rasoa Hanta', phone: '034 12 345 67', address: 'Ampandrana', fee: 2000, amount: 0 },

@@ -219,9 +219,38 @@ export function makeMap(el, { center = TANA, zoom = 14, zoomControl = false, lay
     L.control.layers(bases, null, { position: 'topright', collapsed: true }).addTo(map);
     map.on('baselayerchange', (e) => { try { localStorage.setItem('alefa_map', e.name); } catch {} });
   }
+  satToggle(map, base);
   map.attributionControl.setPrefix(false);
   setTimeout(() => map.invalidateSize(), 120);
   return map;
+}
+// Bouton « Plan / Satellite » sur toutes les cartes : vue satellite (Esri) avec les noms des rues par-dessus.
+function satToggle(map, plan) {
+  if (!L.Control || !L.DomUtil || !L.tileLayer) return;
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+  let sat = null;
+  const mkSat = () => L.layerGroup([
+    L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 19, maxNativeZoom: 18, attribution: 'Imagerie © Esri, Maxar, Earthstar Geographics' }),
+    L.tileLayer(`${ESRI}/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 19, maxNativeZoom: 18, opacity: .9 }),
+    L.tileLayer(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 19, maxNativeZoom: 18 }),
+  ]);
+  const Ctl = L.Control.extend({
+    onAdd() {
+      const box = L.DomUtil.create('div', 'map-mode');
+      box.innerHTML = '<button type="button" data-m="plan">Plan</button><button type="button" data-m="sat">Satellite</button>';
+      L.DomEvent.disableClickPropagation(box);
+      const set = (m) => {
+        box.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+        if (m === 'sat') { sat ||= mkSat(); if (!map.hasLayer(sat)) { sat.addTo(map); if (map.hasLayer(plan)) map.removeLayer(plan); } }
+        else { if (sat && map.hasLayer(sat)) map.removeLayer(sat); if (!map.hasLayer(plan)) plan.addTo(map); }
+        try { localStorage.setItem('alefa_mapmode', m); } catch {}
+      };
+      box.addEventListener('click', (e) => { const b = e.target.closest('[data-m]'); if (b) set(b.dataset.m); });
+      setTimeout(() => set(localStorage.getItem('alefa_mapmode') === 'sat' ? 'sat' : 'plan'), 0);
+      return box;
+    },
+  });
+  new Ctl({ position: 'topright' }).addTo(map);
 }
 // Véhicule du livreur : vélo (par défaut) ou moto.
 export const vehIcon = (v) => (v === 'moto' ? '🏍️' : '🚲');
@@ -280,11 +309,44 @@ export async function drawRoad(map, from, to, { vehicle, color = '#0b6e4f' } = {
 }
 export function etaMin(kmv, vehicle) { return Math.max(2, Math.round((kmv / (vehicle === 'moto' ? 25 : 14)) * 60)); }
 
-// Recherche d'adresse (Nominatim, limité à Madagascar, priorité Antananarivo)
+// Recherche d'adresse : deux sources libres interrogées ensemble (Photon pour les lieux et commerces, Nominatim pour les rues),
+// résultats fusionnés, sans doublon, ceux d'Antananarivo d'abord. Le repère se règle ensuite sur la carte pour être exact.
+const geoCache = new Map();
+const TANA_BOX = [47.40, -19.02, 47.65, -18.80];
+const inTana = (lat, lng) => lng >= TANA_BOX[0] && lng <= TANA_BOX[2] && lat >= TANA_BOX[1] && lat <= TANA_BOX[3];
 export async function geocode(qs) {
-  const u = `https://nominatim.openstreetmap.org/search?format=json&limit=6&countrycodes=mg&accept-language=fr&viewbox=47.40,-18.80,47.65,-19.02&bounded=0&q=${encodeURIComponent(qs)}`;
-  const r = await fetch(u); return (await r.json()).map((x) => ({ label: x.display_name.split(',').slice(0, 3).join(','), lat: +x.lat, lng: +x.lon }));
+  const q = String(qs || '').replace(/,\s*Antananarivo\s*$/i, '').trim();
+  if (q.length < 2) return [];
+  if (geoCache.has(q)) return geoCache.get(q);
+  const timeout = (ms) => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; };
+  const photon = fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=-18.9100&lon=47.5250&limit=8&lang=fr&bbox=43.0,-25.7,50.6,-11.9`, { signal: timeout(5000) })
+    .then((r) => r.json()).then((j) => (j.features || []).map((f) => {
+      const p = f.properties || {}, [lng, lat] = f.geometry.coordinates;
+      const place = p.name && p.name !== p.street ? p.name : '';
+      const street = [p.street, p.housenumber].filter(Boolean).join(' ');
+      const area = p.district || p.locality || p.suburb || (p.city !== 'Antananarivo' ? p.city : '') || '';
+      const label = [place, street, area].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ') || p.city || q;
+      const kind = p.osm_value && !['house', 'residential', 'yes'].includes(p.osm_value) ? KIND_FR[p.osm_value] || '' : '';
+      return { label, sub: [kind, p.city && p.city !== area ? p.city : ''].filter(Boolean).join(' · '), lat, lng };
+    })).catch(() => []);
+  const nomi = fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=mg&accept-language=fr&viewbox=47.40,-18.80,47.65,-19.02&bounded=0&q=${encodeURIComponent(q + ', Antananarivo')}`, { signal: timeout(6000) })
+    .then((r) => r.json()).then((j) => j.map((x) => {
+      const a = x.address || {};
+      const label = [x.name && x.name !== a.road ? x.name : '', a.road, a.suburb || a.neighbourhood || a.quarter || a.city_district].filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).join(', ') || x.display_name.split(',').slice(0, 3).join(',');
+      return { label, sub: [KIND_FR[x.type] || '', a.city || a.town || ''].filter(Boolean).join(' · '), lat: +x.lat, lng: +x.lon };
+    })).catch(() => []);
+  const all = [...(await photon), ...(await nomi)];
+  const out = [];
+  for (const x of all) if (!out.some((y) => haversine(x.lat, x.lng, y.lat, y.lng) < 0.08 || y.label === x.label)) out.push(x);
+  out.sort((a, b) => Number(inTana(b.lat, b.lng)) - Number(inTana(a.lat, a.lng)));
+  const res = out.slice(0, 7);
+  if (res.length) geoCache.set(q, res);
+  return res;
 }
+const KIND_FR = { pharmacy: 'Pharmacie', school: 'École', university: 'Université', hospital: 'Hôpital', clinic: 'Clinique', bank: 'Banque', marketplace: 'Marché', supermarket: 'Supermarché',
+  restaurant: 'Restaurant', cafe: 'Café', hotel: 'Hôtel', place_of_worship: 'Église / lieu de culte', fuel: 'Station-service', bus_station: 'Gare routière', bus_stop: 'Arrêt de bus', townhall: 'Mairie',
+  police: 'Police', post_office: 'Poste', shop: 'Boutique', mall: 'Centre commercial', suburb: 'Quartier', neighbourhood: 'Quartier', quarter: 'Quartier', village: 'Village', primary: 'Route', secondary: 'Route',
+  tertiary: 'Rue', residential: 'Rue', road: 'Rue', stadium: 'Stade', park: 'Parc', convenience: 'Épicerie', clothes: 'Boutique de vêtements', hardware: 'Quincaillerie', mobile_phone: 'Téléphonie' };
 export async function reverse(lat, lng) {
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=17&accept-language=fr&lat=${lat}&lon=${lng}`);
@@ -305,16 +367,42 @@ export function getPosition(opts = {}) {
 
 // ---------------------------------------------------------------- notifications temps réel (actualisation 5 s)
 let audioCtx;
-export function beep() {
-  try {
-    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination);
-    g.gain.setValueAtTime(.18, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + .35);
-    o.start(); o.stop(audioCtx.currentTime + .35);
-  } catch {}
-  navigator.vibrate?.([120, 60, 120]);
+// Son des notifications : carillon court à deux notes (type messagerie), vibration sur téléphone.
+// Le navigateur n'autorise le son qu'après un premier geste de l'utilisateur : on « déverrouille » l'audio au premier clic.
+function audio() { try { audioCtx ||= new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); } catch {} return audioCtx; }
+['pointerdown', 'keydown', 'touchstart'].forEach((ev) => window.addEventListener(ev, () => audio(), { once: true, passive: true }));
+function tone(ctx, f, t0, dur, vol = .22) {
+  const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain();
+  o.type = 'sine'; o.frequency.value = f; o2.type = 'sine'; o2.frequency.value = f * 2;
+  const g2 = ctx.createGain(); g2.gain.value = .25; o2.connect(g2); g2.connect(g); o.connect(g); g.connect(ctx.destination);
+  g.gain.setValueAtTime(.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + .015); g.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
+  o.start(t0); o2.start(t0); o.stop(t0 + dur + .02); o2.stop(t0 + dur + .02);
 }
+export function beep(kind = 'msg') {
+  if (localStorage.getItem('alefa_mute') === '1') return;
+  try {
+    const ctx = audio(); if (!ctx) return; const t = ctx.currentTime + .01;
+    if (kind === 'alert') { tone(ctx, 880, t, .18, .3); tone(ctx, 660, t + .2, .18, .3); tone(ctx, 880, t + .4, .3, .3); }
+    else { tone(ctx, 1046.5, t, .22); tone(ctx, 1318.5, t + .12, .45); }
+  } catch {}
+  navigator.vibrate?.(kind === 'alert' ? [200, 100, 200, 100, 300] : [90, 60, 90]);
+}
+// Tonalité d'attente pendant qu'on appelle quelqu'un.
+let backTimer = null;
+export function ringback(on) {
+  clearInterval(backTimer); backTimer = null; if (!on) return;
+  const once = () => { try { const ctx = audio(); const t = ctx.currentTime + .01; tone(ctx, 425, t, 1.1, .08); } catch {} };
+  once(); backTimer = setInterval(once, 3500);
+}
+// Sonnerie d'appel entrant (répétée jusqu'à décrocher ou raccrocher).
+let ringTimer = null;
+export function ring(on) {
+  clearInterval(ringTimer); ringTimer = null;
+  if (!on) { navigator.vibrate?.(0); return; }
+  const once = () => { try { const ctx = audio(); const t = ctx.currentTime + .01; for (let i = 0; i < 2; i++) { tone(ctx, 784, t + i * .45, .35, .28); tone(ctx, 988, t + i * .45 + .17, .25, .2); } } catch {} navigator.vibrate?.([400, 200, 400]); };
+  once(); ringTimer = setInterval(once, 2200);
+}
+
 // Ouverture d'une notification : chaque espace (admin, livreur, client) enregistre comment ouvrir la cible.
 let notifOpener = null;
 export const setNotifOpener = (fn) => { notifOpener = fn; };
@@ -324,6 +412,7 @@ export function openNotif(n) {
   return true;
 }
 export function startNotifications(onNew) {
+  import('./talk.js').then((m) => m.watchCalls()).catch(() => {}); // appels entrants (dans la plateforme)
   if ('Notification' in window && Notification.permission === 'default') setTimeout(() => Notification.requestPermission().catch(() => {}), 4000);
   let first = true;
   return every(5000, async () => {
@@ -332,15 +421,20 @@ export function startNotifications(onNew) {
     if (fresh.length) state.lastNotif = Math.max(...fresh.map((n) => n.id));
     state.unread = r.unread;
     $$('[data-unread]').forEach((el) => { el.textContent = r.unread || ''; el.classList.toggle('hidden', !r.unread); });
+    document.title = `${r.unread ? `(${r.unread}) ` : ''}${document.title.replace(/^\(\d+\)\s*/, '')}`; // compteur dans l'onglet
     if (!first) {
       for (const n of fresh.reverse()) {
         toast(n.body || '', n.kind === 'sos' ? 'err' : '', n.title, n.target && notifOpener ? () => openNotif(n) : null);
         if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-          const sys = new Notification(n.title, { body: n.body || '', icon: '/icon-192.png', tag: 'alefa-' + n.id });
-          sys.onclick = () => { window.focus(); sys.close(); openNotif(n); };
+          // Notification du système (téléphone ou ordinateur), comme une messagerie ; passe par le service worker si possible.
+          const opt = { body: n.body || '', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'alefa-' + n.id, renotify: true, vibrate: [90, 60, 90], data: { target: n.target || null } };
+          navigator.serviceWorker?.getRegistration().then((reg) => (reg ? reg.showNotification(n.title, opt) : Promise.reject())).catch(() => {
+            const sys = new Notification(n.title, opt); sys.onclick = () => { window.focus(); sys.close(); openNotif(n); };
+          });
         }
       }
-      if (fresh.length) { beep(); onNew?.(fresh); }
+      if (fresh.length) { beep(fresh.some((n) => n.kind === 'sos') ? 'alert' : 'msg'); onNew?.(fresh); }
+
     }
     first = false;
   });
@@ -408,7 +502,7 @@ const bubbles = (msgs, mineIsCentre) => msgs.map((x) => {
   const mine = mineIsCentre ? x.from_centre : !x.from_centre;
   return `<div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin:4px 0"><div style="max-width:80%;padding:8px 10px;border-radius:12px;background:${mine ? 'var(--green-soft)' : 'var(--bg)'}">
     ${x.shipment ? `<div class="tiny muted">📦 ${esc(x.shipment)}</div>` : ''}<div class="small" style="white-space:pre-wrap">${esc(x.body)}</div>
-    <div class="tiny muted" style="text-align:right">${x.from_centre ? (x.author ? esc(x.author.split(' ')[0]) + ' · ' : '') + 'Alefa' : ''} ${dt(x.at)}</div></div></div>`;
+    <div class="tiny muted" style="text-align:right">${x.label != null ? esc(x.label) : x.from_centre ? (x.author ? esc(x.author.split(' ')[0]) + ' · ' : '') + 'Alefa' : ''} ${dt(x.at)}</div></div></div>`;
 }).join('');
 export function chatPanel(el, { load, send, centre = false, refs = [] }) {
   const mg = state.lang === 'mg';
@@ -436,7 +530,8 @@ export function chatPanel(el, { load, send, centre = false, refs = [] }) {
 // Fenêtre « 💬 Service client » pour un client ou un livreur.
 export async function supportChat(refs = []) {
   const mg = state.lang === 'mg';
-  const m = modal(`💬 ${mg ? 'Service client Alefa' : 'Service client Alefa'}`, '<div data-chat></div>');
+  const m = modal(`💬 ${mg ? 'Service client Alefa' : 'Service client Alefa'}`, `<div class="chat-calls" style="margin-bottom:10px"><button class="btn sm primary" data-callsup>${symbol('phone')} ${mg ? 'Antsoy ny sampana mpanjifa' : 'Appeler le service client'}</button></div><div data-chat></div>`);
+  m.el.querySelector('[data-callsup]').onclick = () => import('./talk.js').then((t) => t.callUser({ to: 'support', name: mg ? 'Sampana mpanjifa Alefa' : 'Service client Alefa' }));
   const p = chatPanel(m.el.querySelector('[data-chat]'), {
     load: async () => (await api('GET', '/api/support')).messages,
     send: (body, ref) => api('POST', '/api/support', { body, ref }), refs,
@@ -464,4 +559,143 @@ export function printLabel(s) {
     <div class="s"><b>À :</b> ${esc(s.recipient.name || '')} · ${esc(phoneFmt(s.recipient.phone || ''))}<br>${esc(s.recipient.address)}${s.province ? `<br><b>${esc(s.province.city)}</b> · ${esc(s.province.coop)}` : ''}</div>
     <div class="s"><b>De :</b> ${esc(s.sender.name || '')} · ${esc(s.sender.address)}</div><div class="s" style="text-align:center">${esc(s.ref)}</div></div><script>setTimeout(()=>print(),300)<\/script>`);
   w.document.close();
+}
+
+// ---------------------------------------------------------------- symboles à la place des émoticônes
+// Toute émoticône affichée (textes, notifications, tableaux, marqueurs) est remplacée par une icône au trait ;
+// celles qui n'ont pas d'équivalent sont simplement retirées. Les listes (option) ne gardent que le texte.
+const P = {
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>', alert: '<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17h.01"/>',
+  bike: '<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-8h5l3 8M10 8l2 8h-6M14 5h2"/>',
+  moto: '<circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M8.5 16.5h5l3-6h-4l-2-3H8M16.5 10.5L15 6h3"/>',
+  van: '<path d="M3 6h11v10H3zM14 9h4l3 3v4h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
+  box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>', pin: '<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  building: '<path d="M4 21V5l8-2v18M12 8h8v13M8 8h.01M8 12h.01M8 16h.01M16 12h.01M16 16h.01M2 21h20"/>',
+  phone: '<path d="M5 3h4l2 5-2.5 1.5a11 11 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2z"/>',
+  mobile: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18h2"/>', bus: '<rect x="4" y="3.5" width="16" height="14" rx="2"/><path d="M4 11h16M7.5 20.5v-3M16.5 20.5v-3"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
+  card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19"/>', send: '<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>', compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/>', camera: '<path d="M4 7h3l2-3h6l2 3h3v12H4z"/><circle cx="12" cy="13" r="3.5"/>', user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>', down: '<path d="M12 4v12M6 11l6 6 6-6M4 20h16"/>', up: '<path d="M12 20V8M6 13l6-6 6 6M4 4h16"/>',
+  back: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-2"/>', receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>', lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>', inbox: '<path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/>', edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>', map: '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>', cal: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  route: '<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/>', print: '<path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', nophone: '<path d="M5 3h4l2 5-2.5 1.5a11 11 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2zM3 3l18 18"/>',
+  doc: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 13h6M9 17h6"/>', store: '<path d="M4 9l1.5-5h13L20 9M4 9v11h16V9M4 9h16M9 20v-6h6v6"/>', star: '<path d="M12 3l2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4l-5.5 2.9 1-6.2L3 9.7l6.2-.9z"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>', tag: '<path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+  clip: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/>', gift: '<rect x="3.5" y="8" width="17" height="5"/><path d="M5 13v8h14v-8M12 8v13M12 8S10 3 7.5 4.5 9 8 12 8zM12 8s2-5 4.5-3.5S15 8 12 8z"/>',
+  stop: '<path d="M7 11V5a1.5 1.5 0 0 1 3 0v5M10 10V4a1.5 1.5 0 0 1 3 0v6M13 10V5a1.5 1.5 0 0 1 3 0v7M16 9a1.5 1.5 0 0 1 3 0v4a7 7 0 0 1-7 7c-3 0-4.5-1.5-6-4l-2-3.5a1.5 1.5 0 0 1 2.5-1.5L7 13"/>',
+  glass: '<path d="M7 3h10l-1 7a4 4 0 0 1-8 0zM12 14v7M8 21h8"/>', mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>', party: '<path d="M4 20l5-14 9 9z"/><path d="M14 4l1 2M19 9l2-1M17 3l-1 3"/>',
+  traffic: '<rect x="8" y="2.5" width="8" height="19" rx="3"/><circle cx="12" cy="7" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="12" cy="17" r="1.3"/>',
+};
+const G = '#0e8a63', O = '#e8890c', R = '#d64545';
+const EMO = {
+  '✅': ['check', G], '✔': ['check', G], '❌': ['x', R], '✖': ['x'], '⚠': ['alert', O], '🚨': ['alert', R], '🆘': ['alert', R], '🚲': ['bike'], '🛵': ['moto'], '🏍': ['moto'], '🚐': ['van'], '🚚': ['van'],
+  '📦': ['box'], '📍': ['pin'], '🏢': ['building'], '📞': ['phone'], '📱': ['mobile'], '🚌': ['bus'], '🏁': ['flag'], '🕘': ['clock'], '⏰': ['clock', O], '⏱': ['clock'], '⏳': ['clock'],
+  '💵': ['cash'], '💰': ['cash'], '💳': ['card'], '🚀': ['send'], '🧭': ['compass'], '💬': ['chat'], '📷': ['camera'], '👤': ['user'], '🔔': ['bell'], '⬇': ['down'], '⬆': ['up'], '📤': ['up'],
+  '↩': ['back'], '🧾': ['receipt'], '🔒': ['lock'], '🔑': ['key'], '📥': ['inbox'], '📝': ['edit'], '✏': ['edit'], '👍': ['check', G], '👎': ['x', R], '⚡': ['bolt'], '🗺': ['map'], '🗓': ['cal'], '📅': ['cal'],
+  '🎉': ['party', G], '🛣': ['route'], '🖨': ['print'], '🔗': ['link'], '📵': ['nophone'], '📄': ['doc'], '🏪': ['store'], '🛒': ['store'], '⭐': ['star', '#f5a400'], '⏸': ['pause'], '🔖': ['tag'],
+  '🔎': ['search'], '📋': ['clip'], '🎁': ['gift'], '✋': ['stop'], '🥚': ['glass'], '✉': ['mail'], '🚦': ['traffic'],
+  '🟢': ['dot', G], '🟠': ['dot', O], '🔴': ['dot', R], '⚪': ['dot', '#c9c3b5'], '🟩': ['dot', G], '🟧': ['dot', O], '🔵': ['dot', '#2563eb'], '🟡': ['dot', '#f5b800'],
+};
+const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const EMO_RE = new RegExp(`(?:${Object.keys(EMO).sort((a, b) => b.length - a.length).map(reEsc).join('|')})\\uFE0F?|[\\u{1F000}-\\u{1FAFF}]\\uFE0F?|\\uFE0F|\\u200D`, 'gu');
+export function symbol(name, color) {
+  if (name === 'dot') return `<i class="sym-dot" style="background:${color}"></i>`;
+  return `<svg class="sym" viewBox="0 0 24 24" aria-hidden="true"${color ? ` style="color:${color}"` : ''}>${P[name] || ''}</svg>`;
+}
+const symFor = (m) => { const k = m.replace(/[️‍]/g, ''); const e = EMO[k]; return e ? symbol(e[0], e[1]) : ''; };
+const SKIP = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT', 'CODE', 'PRE', 'svg']);
+function deEmoji(root) {
+  if (!root) return;
+  if (root.nodeType === 3) { fixText(root); return; }
+  if (root.nodeType !== 1 || SKIP.has(root.nodeName)) return;
+  if (root.nodeName === 'OPTION' || root.nodeName === 'SELECT') { root.querySelectorAll?.('option').forEach((o) => { if (EMO_RE.test(o.textContent)) o.textContent = o.textContent.replace(EMO_RE, '').replace(/^\s+/, ''); EMO_RE.lastIndex = 0; }); if (root.nodeName === 'OPTION' && EMO_RE.test(root.textContent)) root.textContent = root.textContent.replace(EMO_RE, '').trim(); EMO_RE.lastIndex = 0; return; }
+  for (const a of ['placeholder', 'title', 'aria-label']) { const v = root.getAttribute?.(a); if (v && EMO_RE.test(v)) root.setAttribute(a, v.replace(EMO_RE, '').trim()); EMO_RE.lastIndex = 0; }
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, { acceptNode: (n) => (n.nodeType === 1 ? (SKIP.has(n.nodeName) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP) : NodeFilter.FILTER_ACCEPT) });
+  const texts = []; let n; while ((n = w.nextNode())) texts.push(n);
+  texts.forEach(fixText);
+  root.querySelectorAll?.('option, [placeholder], [title]').forEach((el) => { if (el.nodeName === 'OPTION') { if (EMO_RE.test(el.textContent)) el.textContent = el.textContent.replace(EMO_RE, '').trim(); } else for (const a of ['placeholder', 'title']) { const v = el.getAttribute(a); if (v && EMO_RE.test(v)) el.setAttribute(a, v.replace(EMO_RE, '').trim()); } EMO_RE.lastIndex = 0; });
+}
+function fixText(t) {
+  const v = t.nodeValue; if (!v) return;
+  EMO_RE.lastIndex = 0; if (!EMO_RE.test(v)) return; EMO_RE.lastIndex = 0;
+  const p = t.parentNode; if (!p || SKIP.has(p.nodeName)) return;
+  if (p.nodeName === 'OPTION' || p.nodeName === 'TITLE') { t.nodeValue = v.replace(EMO_RE, '').trim(); return; }
+  const span = document.createElement('span'); span.className = 'sym-wrap';
+  span.innerHTML = esc(v).replace(EMO_RE, (m) => symFor(m));
+  const frag = document.createDocumentFragment(); while (span.firstChild) frag.append(span.firstChild);
+  p.replaceChild(frag, t);
+}
+
+// ---------------------------------------------------------------- listes déroulantes soignées
+// Chaque <select> reçoit une vraie liste déroulante (bouton + menu), au clavier comme à la souris.
+// Le <select> d'origine reste en place (invisible) : formulaires, filtres et tests fonctionnent sans changement.
+let ddOpen = null;
+function closeDD() { if (!ddOpen) return; ddOpen.menu.remove(); ddOpen.btn.setAttribute('aria-expanded', 'false'); ddOpen.btn.closest('.dd')?.classList.remove('open'); ddOpen = null; }
+function ddLabel(sel) { const o = sel.options[sel.selectedIndex]; return o ? o.textContent.trim() : ''; }
+function enhanceSelect(sel) {
+  if (sel._dd || sel.multiple || sel.size > 1 || sel.dataset.native != null || !sel.parentNode) return;
+  sel._dd = true;
+  const wrap = document.createElement('span'); wrap.className = 'dd';
+  if (sel.style.width) wrap.style.width = sel.style.width;
+  if (sel.classList.contains('grow')) wrap.classList.add('grow');
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = `dd-btn ${sel.className}`; btn.setAttribute('aria-haspopup', 'listbox'); btn.setAttribute('aria-expanded', 'false');
+  btn.innerHTML = '<span class="dd-v"></span><svg class="dd-ch" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+  sel.parentNode.insertBefore(wrap, sel); wrap.append(sel, btn);
+  sel.classList.add('dd-native'); sel.tabIndex = -1;
+  const sync = () => { btn.querySelector('.dd-v').textContent = ddLabel(sel) || '—'; btn.disabled = sel.disabled; };
+  sync();
+  sel.addEventListener('change', sync);
+  new MutationObserver(sync).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+  const pick = (i) => { if (i < 0 || sel.options[i]?.disabled) return; const changed = sel.selectedIndex !== i; sel.selectedIndex = i; sync(); closeDD(); btn.focus(); if (changed) { sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); } };
+  const open = () => {
+    if (ddOpen?.btn === btn) return closeDD();
+    closeDD();
+    const menu = document.createElement('div'); menu.className = 'dd-menu'; menu.setAttribute('role', 'listbox');
+    let html = '', lastGroup = null;
+    [...sel.options].forEach((o, i) => {
+      const g = o.parentNode.nodeName === 'OPTGROUP' ? o.parentNode.label : null;
+      if (g !== lastGroup && g) html += `<div class="dd-grp">${esc(g)}</div>`; lastGroup = g;
+      html += `<button type="button" role="option" data-i="${i}" class="${i === sel.selectedIndex ? 'on' : ''}" ${o.disabled ? 'disabled' : ''}><span>${esc(o.textContent.trim() || '—')}</span><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>`;
+    });
+    menu.innerHTML = html;
+    document.body.append(menu);
+    const r = btn.getBoundingClientRect(), vh = window.innerHeight;
+    menu.style.minWidth = `${Math.max(r.width, 180)}px`; menu.style.left = `${Math.min(r.left, window.innerWidth - Math.max(r.width, 180) - 8)}px`;
+    const below = vh - r.bottom - 12, above = r.top - 12;
+    if (below < 220 && above > below) { menu.style.bottom = `${vh - r.top + 6}px`; menu.style.maxHeight = `${Math.min(340, above)}px`; } else { menu.style.top = `${r.bottom + 6}px`; menu.style.maxHeight = `${Math.min(340, below)}px`; }
+    menu.addEventListener('mousedown', (e) => e.preventDefault());
+    menu.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) pick(+b.dataset.i); });
+    ddOpen = { btn, menu, sel, pick, hi: sel.selectedIndex };
+    btn.setAttribute('aria-expanded', 'true'); wrap.classList.add('open');
+    menu.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+  };
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); open(); });
+  btn.addEventListener('keydown', (e) => {
+    const d = ddOpen?.btn === btn ? ddOpen : null;
+    if (!d && ['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); return open(); }
+    if (!d) return;
+    const items = [...d.menu.querySelectorAll('[data-i]:not([disabled])')], idx = items.findIndex((b) => +b.dataset.i === d.hi);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const nb = items[Math.max(0, Math.min(items.length - 1, idx + (e.key === 'ArrowDown' ? 1 : -1)))]; if (nb) { d.hi = +nb.dataset.i; items.forEach((b) => b.classList.toggle('hi', b === nb)); nb.scrollIntoView({ block: 'nearest' }); } }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.pick(d.hi); }
+    else if (e.key === 'Escape' || e.key === 'Tab') closeDD();
+  });
+}
+document.addEventListener('click', (e) => { if (ddOpen && !ddOpen.menu.contains(e.target)) closeDD(); });
+window.addEventListener('resize', closeDD);
+document.addEventListener('scroll', (e) => { if (ddOpen && !ddOpen.menu.contains(e.target)) closeDD(); }, true);
+
+// Une seule surveillance de la page : nouvelles listes à habiller, émoticônes à remplacer.
+function polish(node) {
+  if (node.nodeType === 1) {
+    if (node.nodeName === 'SELECT') enhanceSelect(node); else node.querySelectorAll?.('select').forEach(enhanceSelect);
+  }
+  deEmoji(node);
+}
+if (typeof document !== 'undefined' && document.body) {
+  polish(document.body);
+  new MutationObserver((ms) => { for (const m of ms) { if (m.type === 'characterData') fixText(m.target); else m.addedNodes.forEach(polish); } })
+    .observe(document.body, { childList: true, subtree: true, characterData: true });
 }

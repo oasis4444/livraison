@@ -41,8 +41,16 @@ test('mise en place (SMS activés vers une passerelle)', async () => {
   assert.equal((await call('PUT', '/api/admin/settings', { settings: { sms_enabled: '1', sms_gateway_url: 'https://sms.test/send', sms_gateway_token: 'tok' } }, admin)).status, 200);
 });
 
-test('conditions de transport : catégories réglables, exemples sans ventilateur ni micro-ondes', async () => {
-  const c = (await call('GET', '/api/conditions', null, client)).data;
+test('conditions de transport : S, M, L seulement (vélo ou moto) ; au-delà, refusé', async () => {
+  let c = (await call('GET', '/api/conditions', null, client)).data;
+  assert.deepEqual(c.categories.map((x) => [x.k, x.kg, x.fee, x.vehicle]), [['S', 3, 0, 'velo'], ['M', 10, 1000, 'velo'], ['L', 25, 3000, 'moto']]);
+  let r = await call('POST', '/api/shipments/quote', { drop_lat: FAR.lat, drop_lng: FAR.lng, category: 'S', weight: 40 }, client);
+  assert.equal(r.status, 400); assert.equal(r.data.error, 'too_big'); assert.match(r.data.message, /vélo ou une moto/);
+  r = await call('POST', '/api/shipments', body({ category: 'XL' }), client);
+  assert.equal(r.status, 400); assert.equal(r.data.error, 'too_big');
+  // Ancien fonctionnement (devis XL) : réactivable dans les réglages.
+  db.prepare("UPDATE settings SET value = '1' WHERE key = 'xl_enabled'").run();
+  c = (await call('GET', '/api/conditions', null, client)).data;
   assert.deepEqual(c.categories.map((x) => [x.k, x.kg, x.fee, x.vehicle]), [['S', 3, 0, 'velo'], ['M', 10, 1000, 'velo'], ['L', 25, 3000, 'moto'], ['XL', null, null, 'devis']]);
   assert.ok(!/ventilateur|micro/i.test(c.categories.map((x) => x.ex).join(' ')));
   assert.deepEqual(c.options, { fragile: 1000, express: 2000, wait: 500, return_percent: 50, pickup_large: 2000, multi_discount: 50, big_value: 200000, big_value_pct: 1, xl_min: 15000 });

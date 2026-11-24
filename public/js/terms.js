@@ -16,7 +16,8 @@ export function summaryHtml(c) {
   if (mg) return `<b>Alefa raha fintinina</b><ul class="small" style="margin:6px 0 0 18px;padding:0">
     <li><b>Maimaim-poana ny fakana</b> ny entana any amin'ny mpandefa ho an'ny entana kely sy salantsalany (S sy M).</li>
     <li><b>Manomboka amin'ny ${ar(minFee)} ny fanaterana</b> ao Antananarivo. Miankina amin'ny halaviran-dalana sy ny haben'ny entana ny vidiny.</li>
-    <li><b>Entana lehibe :</b> fanampiny ${ar(M.fee)} (M) na ${ar(L.fee)} (L). Ny entana tena mavesatra na be habe (XL) dia arakaraka ny tombana.</li>
+    <li><b>Entana lehibe :</b> fanampiny ${ar(M.fee)} (M) na ${ar(L.fee)} (L). Tsy entinay ny entana tsy zaka ny bisikileta na ny moto.</li>
+    <li><b>Toerana fakana sy fanaterana :</b> amoron-dalana na trano voalohany manatrika ny lalana ihany. Tsy mandeha any anaty kianja na lalan-kely lalina ny livreur.</li>
     <li><b>Aseho mazava ny vidiny marina</b> alohan'ny handefasana. Raha lehibe noho ny voalaza ny entana, afaka manitsy ny sokajy ny livreur ary ampahafantarina ianao.</li>
     <li>Ny mpandray no mandoa <b>ny vidin'ny entana sy ny saran-dalana</b> amin'ny livreur, vola an-tanana na Mobile Money.</li>
     <li>Angatahina ny <b>kaody PIN</b> rehefa atolotra ny entana. Azonao arahina mivantana ny fanaterana.</li>
@@ -24,7 +25,8 @@ export function summaryHtml(c) {
   return `<b>Alefa en bref</b><ul class="small" style="margin:6px 0 0 18px;padding:0">
     <li><b>Récupération gratuite</b> chez l'expéditeur pour les petits et moyens colis (S et M).</li>
     <li><b>Livraison à partir de ${ar(minFee)}</b> dans Antananarivo. Le prix dépend de la distance et de la taille du colis.</li>
-    <li><b>Gros colis :</b> supplément de ${ar(M.fee)} (M) ou ${ar(L.fee)} (L). Les objets très lourds ou encombrants (XL) sont sur devis.</li>
+    <li><b>Gros colis :</b> supplément de ${ar(M.fee)} (M) ou ${ar(L.fee)} (L). Nous ne transportons pas ce qui ne tient pas sur un vélo ou une moto.</li>
+    <li><b>Lieux de récupération et de livraison :</b> en bord de route ou dans un bâtiment de premier plan, accessible depuis la rue. Le livreur ne s'enfonce pas dans les ruelles ou les cours intérieures.</li>
     <li>Le <b>prix exact est affiché avant chaque envoi</b>. Si le colis est plus gros que déclaré, le livreur peut corriger la catégorie et vous êtes prévenu.</li>
     <li>Le destinataire paie <b>la valeur + les frais</b> au livreur, en espèces ou par Mobile Money.</li>
     <li>Un <b>code PIN</b> est demandé à la remise du colis. Vous suivez la livraison en direct.</li>
@@ -54,7 +56,7 @@ export function fullHtml(c) {
     <p>Chaque colis est classé dans une catégorie. On retient la plus élevée des deux : celle du poids ou celle de la taille.</p>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Catégorie</th><th>Exemples</th><th>Limites</th><th>Supplément</th><th>Récupération</th></tr></thead><tbody>
       ${c.categories.map((k, i) => `<tr><td><b>${k.k}</b></td><td>${esc(k.ex)}</td><td>${k.kg ? `${i ? `de ${c.categories[i - 1].kg} à ` : 'jusqu\'à '}${k.kg} kg, jusqu'à ${k.cm} cm` : `plus de ${c.categories[i - 1].kg} kg ou plus de ${c.categories[i - 1].cm} cm`}</td>
-        <td>${k.fee == null ? `sur devis, minimum ${ar(o.xl_min)}` : `+ ${ar(k.fee)}`}</td><td>${k.k === 'XL' ? 'incluse dans le devis' : k.k === 'L' ? `${ar(o.pickup_large)}, ou dépôt au centre gratuit` : 'gratuite'}</td></tr>`).join('')}</tbody></table></div>
+        <td>${k.fee == null ? `sur devis, minimum ${ar(o.xl_min)}` : k.fee ? `+ ${ar(k.fee)}` : 'inclus'}</td><td>${k.k === 'XL' ? 'incluse dans le devis' : k.k === 'L' ? `${ar(o.pickup_large)}, ou dépôt au centre gratuit` : 'gratuite'}</td></tr>`).join('')}</tbody></table></div>
     <p>Exemples de prix : une robe livrée à 2 km : ${ar(z(2))} · un carton de 6 kg livré à 5 km : ${ar(z(5))} + ${ar(cat('M').fee)} = ${ar(z(5) + cat('M').fee)} · un colis L livré à 9 km : ${ar(z(9))} + ${ar(cat('L').fee)} = ${ar(z(9) + cat('L').fee)}, plus ${ar(o.pickup_large)} de récupération s'il n'est pas déposé au centre.</p>
     <p>L'expéditeur déclare la catégorie à la création de l'envoi. Le livreur la vérifie à la récupération et prend une photo. Si le colis est plus gros ou plus lourd que déclaré, la catégorie est corrigée et l'expéditeur reçoit le nouveau prix. Il peut accepter ou annuler sans frais à ce moment-là.</p>
     <p>Limites par véhicule : ${c.limits.bike_kg} kg à vélo, ${c.limits.moto_kg} kg à moto. Au-delà, l'envoi passe obligatoirement sur devis.</p>
@@ -69,7 +71,8 @@ export function fullHtml(c) {
     <h3>Article 5 — Obligations de l'expéditeur et objets interdits</h3>
     <p>L'expéditeur s'engage à : déclarer honnêtement le contenu, la valeur et la catégorie de taille du colis ; emballer le colis correctement, surtout s'il est fragile ; être présent ou joignable à l'heure de récupération ; donner un numéro de téléphone valide pour le destinataire.</p>
     <p>Sont interdits : l'argent liquide, les armes, les produits inflammables ou dangereux, les drogues et produits illégaux, les animaux vivants. Alefa peut refuser ou ouvrir en présence de l'expéditeur un colis douteux.</p>
-    <p>Les repas et produits frais sont acceptés s'ils sont bien fermés. Alefa n'est pas responsable de leur température à l'arrivée.</p>
+    <p>Alefa transporte des colis et des documents. Les repas, produits frais et objets qui ne tiennent pas sur un vélo ou une moto (meubles, matelas, gros électroménager…) ne sont pas acceptés.</p>
+    <p><b>Accès.</b> La récupération et la livraison se font en bord de route ou dans un bâtiment de premier plan, accessible directement depuis la rue. Le livreur ne va pas chercher ou livrer en deuxième plan (cour intérieure, ruelle, escaliers à travers un quartier) : l'expéditeur ou le destinataire vient au bord de la route. Indiquez un repère précis (portail, boutique, pharmacie…).</p>
     <h3>Article 6 — Paiement, refus, annulation et retour</h3>
     <p><b>Paiement.</b> Le destinataire paie au livreur la valeur de la marchandise et les frais de livraison, en espèces, par MVola, Orange Money ou Airtel Money. Alefa reverse la valeur encaissée à l'expéditeur selon le calendrier convenu.</p>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Situation</th><th>Qui paie quoi</th></tr></thead><tbody>

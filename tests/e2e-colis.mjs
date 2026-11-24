@@ -43,6 +43,7 @@ async function ctx(geo, vw = { width: 400, height: 860 }) {
       : /analakely/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Analakely, Antananarivo, Madagascar', lat: '-18.9055', lon: '47.5255' }
       : { display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.fulfill({ json: { routes: [{ geometry: { coordinates: [[47.5255, -18.9055], [47.5290, -18.8990], [47.5280, -18.8900], [47.5328, -18.8752]] }, distance: 5200, duration: 960 }] } }));
+  await c.route('https://photon.komoot.io/**', (r) => r.abort());
   await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   return c;
 }
@@ -55,7 +56,7 @@ try {
   await step('accueil public : présentation, tarifs, calculateur, suivi', async () => {
     const vc = await ctx(null, { width: 1366, height: 800 }), v = await vc.newPage(); watch(v, 'visiteur');
     await v.goto(BASE); await v.waitForSelector('.h-hero h1');
-    if ((await v.locator('.h-cat').count()) !== 4) throw new Error('catégories');
+    if ((await v.locator('.h-cat').count()) !== 3) throw new Error('catégories');
     await v.fill('[data-addr=p]', 'Analakely'); await v.click('[data-sug=p] button');
     await v.fill('[data-addr=d]', 'Ivandry'); await v.click('[data-sug=d] button');
     await v.waitForSelector('.h-res-top b'); if (!/Ar/.test(await v.textContent('.h-res-top b'))) throw new Error('prix');
@@ -96,14 +97,14 @@ try {
     await admin.click('.modal [data-save]'); await admin.waitForSelector('text=indiquez le lieu de départ et le lieu d\'arrivée');
     await admin.fill('.modal [data-k=from]', 'Analakely'); await admin.dispatchEvent('.modal [data-k=from]', 'change');
     await admin.fill('.modal [data-k=to]', 'Ivandry'); await admin.dispatchEvent('.modal [data-k=to]', 'change');
-    await admin.waitForSelector('.modal >> text=✓ Analakely → Ivandry');
+    await admin.waitForSelector('.modal >> text=Analakely → Ivandry');
     await admin.screenshot({ path: 'tests/screens/20-admin-axe-depart-arrivee.png' });
     await admin.click('.modal [data-save]'); await admin.waitForSelector('text=Planning enregistré');
     await courier.goto(BASE + '/livreur');
     await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'velo1234'); await courier.click('[type=submit]');
     await courier.waitForSelector('[data-t=plan]');
     await courier.click('[data-t=plan]'); await courier.waitForSelector('[data-plan] >> text=Centre-ville');
-    await courier.waitForSelector('[data-plan] >> text=Analakely → 🏁 Ivandry');
+    await courier.waitForSelector('[data-plan] >> text=Ivandry');
     if (await courier.locator('[data-plan] [data-save], [data-plan] [data-add]').count()) throw new Error('le livreur peut encore modifier son planning');
     await courier.waitForSelector('[data-allsched] >> text=Centre-ville');
     await courier.screenshot({ path: 'tests/screens/21-livreur-departs.png' });
@@ -164,7 +165,7 @@ try {
     await client.setInputFiles('.modal [data-file]', 'tests/fixture-import.csv');
     await client.waitForSelector('text=IMP-2');
     await client.click('.modal [data-ok]');
-    await client.waitForSelector('text=✅ 2 colis', { timeout: 20000 });
+    await client.waitForSelector('.modal-head h2:has-text("2 colis")', { timeout: 20000 });
     await client.screenshot({ path: 'tests/screens/33-import-resultat.png' });
     await client.click('.modal-back [data-x]');
   });
@@ -175,7 +176,7 @@ try {
     await client.waitForSelector('text=2 commande(s) « En attente de livraison » sur 4');
     await client.screenshot({ path: 'tests/screens/34-import-tsena.png' });
     await client.click('.modal [data-ok]');
-    await client.waitForSelector('text=✅ 2 colis', { timeout: 20000 });
+    await client.waitForSelector('.modal-head h2:has-text("2 colis")', { timeout: 20000 });
     const v = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.filter((x) => /CMD-010/.test(x.external_ref || '')).map((x) => [x.external_ref, x.declared_value, x.recipient.name, x.recipient.address])));
     const m = Object.fromEntries(v.map((x) => [x[0], x]));
     if (m['CMD-0101'][1] !== 35000 || m['CMD-0102'][2] !== 'Tiana Fb' || !/Marché, Isotry/.test(m['CMD-0102'][3])) throw new Error(JSON.stringify(v));
@@ -188,7 +189,7 @@ try {
     await client.waitForSelector('text=Tsena : 1');
     await client.screenshot({ path: 'tests/screens/35-coller-tsena.png' });
     await client.click('.modal [data-ok]');
-    await client.waitForSelector('text=✅ 1 colis', { timeout: 20000 });
+    await client.waitForSelector('.modal-head h2:has-text("1 colis")', { timeout: 20000 });
     await client.click('.modal-back [data-x]');
   });
   await step('livreur part du centre → le client le voit en direct (statut + carte)', async () => {
@@ -227,7 +228,7 @@ try {
     await courier.waitForSelector('[data-ph][src^="blob:"]');
     const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
     await client.waitForSelector(`.sp-livepin >> text=${pin}`, { timeout: 20000 });
-    await courier.click('text=✅ Livré et payé');
+    await courier.click('text=Livré et payé');
     // preuve : sans photo du colis remis, impossible de confirmer
     await courier.fill('.modal [data-pin]', '1234'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Prenez une photo du colis remis');
     await courier.setInputFiles('.modal [data-dphoto]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('.modal [data-dprev][src^="data:image"]');
@@ -239,8 +240,8 @@ try {
     await courier.screenshot({ path: 'tests/screens/26-livreur-missions.png' });
   });
   await step('centre : encaissement du livreur puis paiement du vendeur', async () => {
-    await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', ''); await admin.click('[data-act=pfilter]');
-    await admin.waitForSelector('tr.click >> text=📞');
+    await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', ''); await admin.waitForTimeout(700); // filtre appliqué tout seul
+    await admin.waitForSelector('tr.click a[href^="tel:"]');
     await admin.screenshot({ path: 'tests/screens/27-admin-colis.png' });
     await admin.click('[data-v=cash]'); await admin.click('[data-act=settle]'); await admin.click('[data-yes]');
     await admin.waitForSelector('text=encaissés');

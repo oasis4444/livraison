@@ -17,7 +17,7 @@ async function call(method, path, body, token, headers = {}) {
 const db = env.DB.raw;
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // tarif normal dans ces tests
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
-db.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé dans ces tests (testé à part)
+db.prepare("UPDATE settings SET value = CASE key WHEN 'xl_enabled' THEN '1' ELSE '0' END WHERE key IN ('scan_required', 'xl_enabled')").run(); // devis XL activé (ancien fonctionnement testé ici) ; code colis non exigé dans ces tests (testé à part)
 const ST = { am_start: '08:00', am_end: '12:00', pm_start: '13:00', pm_end: '17:00', bike_max_kg: '10', moto_max_kg: '25', weight_free_kg: '5', weight_step_kg: '5', weight_step_fee: '1000',
   share_t1_max: '4000', share_t1: '1000', share_t2_max: '8000', share_t2: '2000', share_t3: '3000' };
 const tana = (d, h, m = 0) => Date.UTC(2026, 10, d, h - 3, m); // heure de Madagascar → ms

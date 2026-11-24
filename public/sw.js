@@ -1,6 +1,6 @@
 // Service worker : installation de l'application (PWA) et ouverture rapide hors ligne.
-const CACHE = 'alefa-v36';
-const SHELL = ['/', '/css/app.css', '/js/app.js', '/js/core.js', '/js/client.js', '/js/courier.js', '/js/admin.js', '/js/colis.js', '/js/terms.js', '/js/home.js', '/css/home.css', '/js/space.js', '/js/wizard.js', '/css/space.css', '/css/admin.css', '/icon.svg', '/manifest.webmanifest', '/manifest-livreur.webmanifest'];
+const CACHE = 'alefa-v37';
+const SHELL = ['/', '/css/app.css', '/js/app.js', '/js/core.js', '/js/client.js', '/js/courier.js', '/js/admin.js', '/js/colis.js', '/js/terms.js', '/js/home.js', '/css/home.css', '/js/space.js', '/js/wizard.js', '/js/talk.js', '/css/space.css', '/css/admin.css', '/icon.svg', '/manifest.webmanifest', '/manifest-livreur.webmanifest'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {
@@ -14,4 +14,13 @@ self.addEventListener('fetch', (e) => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
     return res;
   }).catch(() => caches.match(e.request).then((r) => r || caches.match('/'))));
+});
+
+// Clic sur une notification du système : on ouvre (ou on remet au premier plan) l'application.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const w = list.find((c) => 'focus' in c);
+    return w ? w.focus() : self.clients.openWindow('/');
+  }));
 });

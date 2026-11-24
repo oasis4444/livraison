@@ -7,7 +7,7 @@ import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTrip
 
 let root, main, view = location.hash.replace('#', '') || 'dash', liveTimer = null, liveMap = null, counts = {};
 const liveMk = {};
-let trackLayer = null, axeLayers = [];
+let trackLayer = null, axeLayers = [], refocus = null, shown = null;
 
 // Menu : icônes sobres (traits), regroupées par usage.
 const SV = {
@@ -28,8 +28,11 @@ const NAV = [
   ['Colis et argent'], ['parcels', 'box', 'Colis'], ['cash', 'cash', 'Caisse & vendeurs'], ['payments', 'wallet', 'Paiements & soldes'], ['deliveries', 'bolt', 'Courses express'],
   ['Équipe et clients'], ['couriers', 'bike', 'Livreurs'], ['axes', 'cal', 'Axes & planning'], ['clients', 'users', 'Clients'],
   ['Relation client'], ['support', 'chat', 'Service client'], ['complaints', 'alert', 'Réclamations & SOS'],
-  ['Système'], ['reports', 'chart', 'Rapports'], ['api', 'plug', 'Logiciels de vente'], ['settings', 'gear', 'Paramètres'], ['audit', 'list', 'Journal'],
+  ['Système'], ['reports', 'chart', 'Rapports'], ['staff', 'users', 'Équipe et rôles'], ['api', 'plug', 'Logiciels de vente'], ['settings', 'gear', 'Paramètres'], ['audit', 'list', 'Journal'],
 ];
+// Rubriques permises selon le rôle de la personne connectée (null = administrateur complet).
+const SYSTEM = ['staff', 'api', 'settings', 'audit'];
+const allowed = (k) => { const p = state.user.perms; return !p || k === 'dash' || (!SYSTEM.includes(k) && p.includes(k)); };
 
 export async function mount(el) {
   root = el;
@@ -45,10 +48,21 @@ export async function mount(el) {
   main = $('#main');
   bind(root, actions);
   window.addEventListener('hashchange', () => { view = location.hash.replace('#', '') || 'dash'; show(); });
+  // Filtres appliqués tout seuls : choix dans une liste → tout de suite ; recherche → pendant la frappe (ou touche Entrée).
+  let ftmr;
+  const runFilter = (el, delay) => {
+    const box = el.closest('.filters'), b = box?.querySelector('[data-act$="filter"]'); if (!b) return;
+    clearTimeout(ftmr);
+    ftmr = setTimeout(() => { const k = [...el.attributes].find((a) => a.name.startsWith('data-') && a.name !== 'data-act'); refocus = el.matches('input') && k ? { sel: `[${k.name}="${k.value}"]`, pos: el.selectionStart } : null; b.click(); }, delay);
+  };
+  root.addEventListener('change', (e) => { if (e.target.matches('.filters select')) runFilter(e.target, 0); });
+  root.addEventListener('input', (e) => { if (e.target.matches('.filters input')) runFilter(e.target, 500); });
+  root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('.filters input')) { e.preventDefault(); runFilter(e.target, 0); } });
   startNotifications(() => { refreshCounts(); if (['dash', 'complaints', 'support'].includes(view)) show(); });
   // clic sur une notification : fiche du colis, course, réclamations, colis à répartir, paiements
   setNotifOpener((tg) => {
     if (tg.type === 'shipment') return parcelDetail(tg.id);
+    if (tg.type === 'chat') return import('./talk.js').then((t) => t.openShipChat(tg.id));
     if (tg.type === 'delivery') return deliveryDetail(tg.id);
     if (tg.type === 'support') { supportOpen = tg.id || null; if (view === 'support') return show(); location.hash = 'support'; return; }
     const v = { alerts: 'complaints', parcels: 'parcels', payouts: 'cash', plan: 'couriers' }[tg.type];
@@ -65,7 +79,9 @@ async function refreshCounts() {
   return s;
 }
 function renderNav() {
-  $('#nav').innerHTML = NAV.map(([k, ic, l]) => (ic === undefined ? `<div class="ad-grp">${k}</div>`
+  // Les titres de rubrique sans aucune entrée permise sont masqués.
+  const items = NAV.filter(([k, ic]) => ic === undefined || allowed(k));
+  $('#nav').innerHTML = items.filter((x, i) => x[1] !== undefined || (items[i + 1] && items[i + 1][1] !== undefined)).map(([k, ic, l]) => (ic === undefined ? `<div class="ad-grp">${k}</div>`
     : `<button data-act="nav" data-v="${k}" class="${view === k ? 'on' : ''}">${aic(ic)}<span>${l}</span>${counts[k] ? `<span class="cnt">${counts[k]}</span>` : ''}</button>`)).join('');
 }
 function head(title, extra = '') {
@@ -80,8 +96,13 @@ async function show() {
   if (liveMap) { liveMap.remove(); liveMap = null; for (const k of Object.keys(liveMk)) delete liveMk[k]; trackLayer = null; axeLayers = []; }
   renderNav();
   $('#side').classList.remove('open');
-  main.innerHTML = '<p class="muted">Chargement…</p>';
+  // Même page (filtre, actualisation) : on garde l'affichage pendant le chargement, sans clignotement.
+  if (shown !== view) main.innerHTML = '<p class="muted">Chargement…</p>'; else main.classList.add('loading');
+  shown = view;
+  if (!allowed(view)) view = 'dash';
   try { await (VIEWS[view] || VIEWS.dash)(); } catch (e) { toastErr(e); }
+  main.classList.remove('loading');
+  if (refocus) { const el = main.querySelector(refocus.sel); if (el) { el.focus(); try { el.setSelectionRange(refocus.pos, refocus.pos); } catch {} } refocus = null; }
 }
 
 // ---------------------------------------------------------------- vues
@@ -122,7 +143,8 @@ const VIEWS = {
       el.insertAdjacentHTML('beforebegin', '');
       const hd = document.createElement('div');
       hd.className = 'row between'; hd.style.marginBottom = '6px';
-      hd.innerHTML = t ? `<b>${t.role === 'courier' ? '🚲 Livreur' : '👤 Client'} ${esc(t.name)}</b><a class="btn sm" href="tel:${esc(t.phone)}">📞 ${esc(phoneFmt(t.phone))}</a>` : '';
+      hd.innerHTML = t ? `<b>${t.role === 'courier' ? '🚲 Livreur' : '👤 Client'} ${esc(t.name)}</b><span class="row" style="gap:6px"><button class="btn sm primary" data-callu>📞 Appeler (Alefa)</button><a class="btn sm" href="tel:${esc(t.phone)}">${esc(phoneFmt(t.phone))}</a></span>` : '';
+      hd.querySelector('[data-callu]')?.addEventListener('click', () => import('./talk.js').then((m) => m.callUser({ user_id: t.user_id, name: t.name })));
       const body = document.createElement('div');
       el.append(hd, body);
       supportPanel = chatPanel(body, { centre: true, load: async () => (await api('GET', `/api/admin/support/${supportOpen}`)).messages, send: (b) => api('POST', `/api/admin/support/${supportOpen}`, { body: b }) });
@@ -232,7 +254,7 @@ const VIEWS = {
   },
 
   async dash() {
-    const [s, rep, comp, ops] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`), api('GET', '/api/admin/complaints'), api('GET', '/api/admin/ops?days=1').catch(() => null)]);
+    const [s, rep, comp, ops] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`).catch(() => ({ series: [], topCouriers: [] })), api('GET', '/api/admin/complaints').catch(() => ({ complaints: [] })), api('GET', '/api/admin/ops?days=1').catch(() => null)]);
     const og = (k) => (ops?.parcels || []).filter((p) => opsGroup(p) === k).length;
     const hr = Number(new Date().toLocaleString('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Indian/Antananarivo' }));
     main.innerHTML = head('Tableau de bord') + `
@@ -391,6 +413,25 @@ const VIEWS = {
   },
   async clients() { return usersView('client'); },
 
+  // Équipe : chaque personne a son compte (connexion, journal des actions) et un rôle qui limite les rubriques.
+  async staff() {
+    const r = await api('GET', '/api/admin/staff');
+    const lbl = (k) => r.roles[k]?.label || k;
+    const NAMES = { ops: 'Suivi', live: 'Carte', parcels: 'Colis', deliveries: 'Courses express', couriers: 'Livreurs', axes: 'Axes', clients: 'Clients', support: 'Service client', complaints: 'Réclamations', reports: 'Rapports', cash: 'Caisse', payments: 'Paiements' };
+    main.innerHTML = head('Équipe et rôles', '<button class="btn sm primary" data-act="newstaff">＋ Ajouter une personne</button>') + `
+      <p class="small muted" style="max-width:760px">Chaque personne de l'équipe se connecte avec son propre numéro et son mot de passe. Toutes ses actions sont enregistrées à son nom dans le Journal. Son rôle décide des rubriques qu'elle voit.</p>
+      <div class="grid2"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Personne</th><th>Rôle</th><th>Dernière action</th><th></th></tr></thead><tbody>
+      ${r.staff.map((u) => `<tr><td><b>${esc(u.name)}</b><div class="tiny muted">${esc(phoneFmt(u.phone))}${u.status !== 'active' ? ' · <span style="color:var(--red)">suspendu</span>' : ''}</div></td>
+        <td>${u.id === state.user.id ? `<b>${esc(lbl(u.staff))}</b> <span class="tiny muted">(vous)</span>` : `<select class="input" data-staffrole="${u.id}">${Object.entries(r.roles).map(([k, x]) => `<option value="${k}" ${u.staff === k ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select>`}</td>
+        <td class="small">${u.last_action ? dt(u.last_action) : '—'}<div class="tiny muted">${u.actions || 0} action(s)</div></td>
+        <td class="num">${u.id === state.user.id ? '' : `<button class="btn sm" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}">Mot de passe</button> <button class="btn sm ${u.status === 'active' ? 'danger' : ''}" data-act="ustatus" data-id="${u.id}" data-s="${u.status === 'active' ? 'suspended' : 'active'}">${u.status === 'active' ? 'Suspendre' : 'Réactiver'}</button>`}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="panel"><h3>Les rôles</h3>${Object.entries(r.roles).map(([k, x]) => `<div style="padding:10px 0;border-bottom:1px solid var(--line)"><b>${esc(x.label)}</b><div class="small muted">${x.perms ? x.perms.map((p) => NAMES[p] || p).join(' · ') : 'Toutes les rubriques, y compris Paramètres, Équipe, Logiciels de vente et Journal.'}</div></div>`).join('')}</div></div>`;
+    main.querySelectorAll('[data-staffrole]').forEach((sel) => sel.addEventListener('change', async () => {
+      try { await api('PATCH', `/api/admin/staff/${sel.dataset.staffrole}`, { staff: sel.value }); toast('Rôle modifié', 'ok'); } catch (e) { toastErr(e); show(); }
+    }));
+  },
+
   async payments() {
     const [tx, users, pend] = await Promise.all([api('GET', '/api/admin/transactions'), api('GET', '/api/admin/users?role=courier'), api('GET', '/api/admin/deliveries?status=delivered&payment=pending')]);
     main.innerHTML = head('Paiements & soldes', `<a class="btn sm" href="#" data-act="export" data-type="transactions">⬇ Opérations (CSV)</a>`) + `
@@ -478,7 +519,8 @@ const VIEWS = {
         <div class="panel stack"><h3>Conditions de transport</h3>
           <p class="tiny muted">Catégorie retenue : la plus élevée entre celle choisie par le client, le poids et la plus grande dimension. Le livreur peut la corriger à la récupération (l'expéditeur est prévenu du nouveau prix).</p>
           ${['s', 'm', 'l'].map((k) => `<div class="row">${f(`cat_${k}_kg`, `${k.toUpperCase()} : jusqu'à (kg)`)}${f(`cat_${k}_cm`, 'jusqu\'à (cm)')}${f(`cat_${k}_fee`, 'supplément (Ar)')}</div>${f(`cat_${k}_ex`, `Exemples ${k.toUpperCase()}`, '', 'text')}`).join('')}
-          ${f('cat_xl_ex', 'XL (au-delà de L) : texte', 'Toujours sur devis (validation de l\'admin)', 'text')}
+          <label class="field"><span>Au-delà de L (plus de ${esc(s.cat_l_kg)} kg ou ${esc(s.cat_l_cm)} cm)</span><select class="input" data-s="xl_enabled"><option value="0" ${s.xl_enabled !== '1' ? 'selected' : ''}>Refusé : vélo et moto seulement</option><option value="1" ${s.xl_enabled === '1' ? 'selected' : ''}>Accepté sur devis (XL)</option></select></label>
+          ${s.xl_enabled === '1' ? f('cat_xl_ex', 'XL : exemples', 'Sur devis (validation de l\'admin)', 'text') : ''}
           <div class="row">${f('bike_max_kg', 'Poids max vélo (kg)')}${f('moto_max_kg', 'Poids max moto (kg)', 'Au-delà : devis')}</div>
           ${f('max_value', 'Valeur maximale sans validation (Ar)', 'Au-delà, le colis attend la validation de l\'admin')}</div>
         <div class="panel stack"><h3>Options et suppléments</h3>
@@ -494,6 +536,9 @@ const VIEWS = {
           ${f('sms_gateway_url', 'Adresse de la passerelle (URL)', '', 'text')}${f('sms_gateway_token', 'Jeton (clé)', '', 'text')}
           <div class="row">${f('sms_sender', 'Nom d\'expéditeur', '', 'text')}${f('public_url', 'Adresse de l\'application (liens)', '', 'text')}</div>
           <div class="row"><button class="btn sm" data-act="smstest">Envoyer un SMS de test</button><button class="btn sm" data-act="smslog">Journal des SMS</button></div></div>
+        <div class="panel stack"><h3>Appels dans la plateforme</h3>
+          <p class="tiny muted">Les appels passent directement entre les téléphones. Sur certains réseaux mobiles, un serveur relais (TURN) est nécessaire pour que la voix passe : laissez vide pour commencer, à remplir si des appels n'aboutissent pas (ex. Cloudflare Realtime TURN, Metered).</p>
+          ${f('turn_url', 'Adresse du relais (turn:…)', '', 'text')}<div class="row">${f('turn_user', 'Identifiant', '', 'text')}${f('turn_pass', 'Mot de passe', '', 'text')}</div></div>
         <div class="panel stack"><h3>💵 Part du centre sur les frais</h3>
           <p class="tiny muted">Le reste revient au livreur qui livre ; la récupération est gratuite.</p>
           <div class="row">${f('share_t1_max', 'Frais jusqu\'à (Ar)')}${f('share_t1', '→ part du centre (Ar)')}</div>
@@ -530,44 +575,47 @@ const VIEWS = {
     const [r, cs] = await Promise.all([
       api('GET', `/api/admin/shipments?status=${st}&q=${encodeURIComponent(qv)}&courier_id=${cv}&paid=${pv}`),
       api('GET', '/api/admin/users?role=courier&status=active')]);
-    const ok = (b, yes, no) => (b ? `<span style="color:var(--green)">✅ ${yes}</span>` : `<span style="color:var(--orange)">❌ ${no}</span>`);
+    // Sobre : texte foncé, un seul repère de couleur par information (point ou trait), pas de fonds colorés.
+    const ok = (b, yes, no) => `<span class="pt ${b ? 'ok' : 'no'}">${b ? yes : no}</span>`;
     const first = (n) => esc((n || '').split(' ')[0]);
     // Argent de chaque colis : valeur (remise au centre, payée à l'expéditeur) et livraison (part du livreur réglée).
     const money = (x) => {
       const done = ['delivered', 'refused'].includes(x.status), out = [];
       if (x.status === 'delivered') {
-        if (x.payment?.value_paid) out.push('📱 Valeur payée par Mobile Money');
-        else if (x.province) out.push('🚌 Province : rien encaissé');
-        else out.push(`💵 Valeur : ${ok(x.cash_settled_at, 'remise au centre', 'chez le livreur')}`);
-        if (!x.payment?.value_paid) out.push(`🏪 Expéditeur : ${ok(x.vendor_paid_at, 'payé', 'à payer')}`);
+        if (x.payment?.value_paid) out.push('Valeur payée par Mobile Money');
+        else if (x.province) out.push('Province : rien encaissé');
+        else out.push(`Valeur : ${ok(x.cash_settled_at, 'au centre', 'chez le livreur')}`);
+        if (!x.payment?.value_paid) out.push(`Expéditeur : ${ok(x.vendor_paid_at, 'payé', 'à payer')}`);
       }
-      if (x.payment?.pickup_fee != null) out.push(`🟢 Frais récup. ${ar(x.payment.pickup_fee)} : ${ok(x.pickup_fee_settled_at, 'remis au centre', 'chez ' + first(x.pickup_courier?.name))}`);
-      if (done && x.shares) out.push(`🚲 Livraison : centre ${ar(x.shares.centre)} · livreur ${ar(x.shares.courier)} — ${ok(x.shares.paid, 'payé', 'non payé')}`);
-      return out.length ? `<div class="tiny" style="line-height:1.5">${out.join('<br>')}</div>` : '<span class="tiny muted">—</span>';
+      if (x.payment?.pickup_fee != null) out.push(`Frais récup. : ${ok(x.pickup_fee_settled_at, 'au centre', 'chez ' + first(x.pickup_courier?.name))}`);
+      if (done && x.shares) out.push(`Livreur ${ar(x.shares.courier)} : ${ok(x.shares.paid, 'payé', 'non payé')}`);
+      return out.length ? `<div class="tiny pc-money">${out.join('<br>')}</div>` : '<span class="tiny muted">—</span>';
     };
-    const person = (p, ic, w) => `<b>${esc(p.name)}</b>${p.phone ? `<div class="tiny"><a href="tel:${esc(p.phone)}" data-stop>📞 ${esc(phoneFmt(p.phone))}</a></div>` : ''}<div class="tiny muted">${ic} ${esc(p.address)}</div>${w ? `<div class="tiny">${w}</div>` : ''}`;
+    const person = (p, w) => `<div class="pc-name">${esc(p.name)}</div>${p.phone ? `<a class="pc-tel" href="tel:${esc(p.phone)}" data-stop>${esc(phoneFmt(p.phone))}</a>` : ''}<div class="pc-addr">${esc(p.address)}</div>${w ? `<div class="pc-win">${w}</div>` : ''}`;
     const win = (w) => `${new Date(w[0]).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${time(w[0])}–${time(w[1])}`;
     const rows = [...r.shipments].sort((a, b) => (b.late ? 1 : 0) - (a.late ? 1 : 0)); // colis en retard en haut
     // totaux (utile avec le filtre livreur)
     const del = rows.filter((x) => x.status === 'delivered');
     const tot = { n: rows.length, value: del.reduce((a, x) => a + (x.value || 0), 0), fees: rows.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + x.fee, 0),
       share: rows.reduce((a, x) => a + (x.shares && (!cv || x.delivery_courier?.id === +cv || x.courier?.id === +cv) ? x.shares.courier : 0), 0),
-      unpaid: rows.filter((x) => ['delivered', 'refused'].includes(x.status) && x.shares && !x.shares.paid).length };
-    main.innerHTML = head('Colis (centre)', `<button class="btn sm primary" data-act="newparcel">＋ Colis</button><button class="btn sm" data-act="importparcels">⬆ Import Excel</button><a class="btn sm" href="#" data-act="pexport">⬇ Excel</a>`) + `
-      <div class="filters"><select class="input" data-pf="status">${[['open', 'En cours'], ['pending', '⏳ À programmer'], ['assigned', 'Programmés'], ['picked_up', 'Récupérés'], ['return', '↩️ À rendre'], ['delivered', 'Livrés'], ['refused', 'Refusés'], ['cancelled', 'Annulés'], ['', 'Tous']].map(([v, l]) => `<option value="${v}" ${st === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <select class="input" data-pf="courier"><option value="">Tous les livreurs</option><option value="none" ${cv === 'none' ? 'selected' : ''}>— Sans livreur</option>${cs.users.map((u) => `<option value="${u.id}" ${cv === String(u.id) ? 'selected' : ''}>${vehIcon(u.vehicle)} ${esc(u.name)}</option>`).join('')}</select>
-        <select class="input" data-pf="paid">${[['', 'Payé ou non'], ['unpaid', '❌ Non réglés'], ['paid', '✅ Tout réglé']].map(([v, l]) => `<option value="${v}" ${pv === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <input class="input" data-pf="q" placeholder="Réf, nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
-      <div class="row wrap small" style="gap:16px;margin:6px 0 10px">${tot.n} colis · valeur livrée <b>${ar(tot.value)}</b> · frais <b>${ar(tot.fees)}</b>${cv && cv !== 'none' ? ` · part du livreur <b>${ar(tot.share)}</b>` : ''} · ${tot.unpaid ? `<span style="color:var(--orange)">❌ ${tot.unpaid} livraison(s) non payée(s)</span>` : '✅ livraisons payées'}</div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur</th><th class="num">Frais</th><th>Payé ?</th><th>Statut</th></tr></thead><tbody>
-      ${rows.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}" data-ref="${esc(x.ref)}" style="${x.late ? 'background:#fdf1f1;box-shadow:inset 4px 0 0 var(--red)' : ''}">
-        <td class="small">${person(x.sender, '🟢', x.windows && ['pending', 'assigned'].includes(x.status) ? `🕘 ${win(x.windows.pickup)}` : '')}</td>
-        <td class="small">${person(x.recipient, '🟠', x.windows && !['delivered', 'refused', 'cancelled'].includes(x.status) ? `🏁 ${win(x.windows.delivery)}` : '')}${x.province ? `<div class="tiny">🚌 ${esc(x.province.city)} · ${esc(x.province.coop)}</div>` : ''}</td>
-        <td class="small">${x.pickup_courier || x.delivery_courier || x.courier
-          ? `<div>🟢 Récup. : <b>${esc(x.pickup_courier?.name || x.courier?.name || '—')}</b></div><div>🟠 Livr. : <b>${esc(x.delivery_courier?.name || x.courier?.name || '—')}</b></div>${x.courier?.phone ? `<div class="tiny"><a href="tel:${esc(x.courier.phone)}" data-stop>📞 ${esc(phoneFmt(x.courier.phone))}</a></div>` : ''}`
-          : '<span style="color:var(--orange)">Sans livreur</span>'}</td>
-        <td class="num">${ar(x.value ?? x.declared_value)}${x.payment?.value_paid ? '<div class="tiny">📱 MM</div>' : ''}</td><td class="num">${ar(x.fee)}${x.collected ? `<div class="tiny muted">encaissé ${ar(x.collected)}</div>` : ''}</td>
-        <td>${money(x)}</td><td>${shipPill(x)}<div class="tiny muted">${['pending', 'assigned', 'picked_up'].includes(x.status) && x.since ? `depuis ${agoTxt(x.since)}` : dt(x.created_at)}</div>${x.late ? `<div class="tiny" style="color:var(--red);font-weight:700">⏰ ${esc(x.late)}</div>` : ''}${x.category ? `<div class="tiny">${esc(x.category)}${x.fragile ? ' · fragile' : ''}${x.express ? ' · express' : ''}</div>` : ''}${x.review ? '<div class="tiny" style="color:var(--orange)">⚠️ à valider</div>' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
+      unpaid: rows.filter((x) => ['delivered', 'refused'].includes(x.status) && x.shares && !x.shares.paid).length, late: rows.filter((x) => x.late).length };
+    main.innerHTML = head('Colis (centre)', `<button class="btn sm primary" data-act="newparcel">＋ Colis</button><button class="btn sm" data-act="importparcels">Importer (Excel)</button><a class="btn sm" href="#" data-act="pexport">Exporter (Excel)</a>`) + `
+      <div class="filters"><select class="input" data-pf="status">${[['open', 'En cours'], ['pending', 'À programmer'], ['assigned', 'Programmés'], ['picked_up', 'Récupérés'], ['return', 'À rendre'], ['delivered', 'Livrés'], ['refused', 'Refusés'], ['cancelled', 'Annulés'], ['', 'Tous']].map(([v, l]) => `<option value="${v}" ${st === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select class="input" data-pf="courier"><option value="">Tous les livreurs</option><option value="none" ${cv === 'none' ? 'selected' : ''}>Sans livreur</option>${cs.users.map((u) => `<option value="${u.id}" ${cv === String(u.id) ? 'selected' : ''}>${vehIcon(u.vehicle)} ${esc(u.name)}</option>`).join('')}</select>
+        <select class="input" data-pf="paid">${[['', 'Payé ou non'], ['unpaid', 'Non réglés'], ['paid', 'Tout réglé']].map(([v, l]) => `<option value="${v}" ${pv === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <input class="input" data-pf="q" placeholder="Rechercher : réf., nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
+      <div class="pc-sum"><span><b>${tot.n}</b> colis</span>${tot.late ? `<span class="pc-late-n"><b>${tot.late}</b> en retard</span>` : ''}<span>Valeur livrée <b>${ar(tot.value)}</b></span><span>Frais <b>${ar(tot.fees)}</b></span>${cv && cv !== 'none' ? `<span>Part du livreur <b>${ar(tot.share)}</b></span>` : ''}<span>${tot.unpaid ? `<span class="pt no">${tot.unpaid} livraison(s) non payée(s)</span>` : '<span class="pt ok">Livraisons payées</span>'}</span></div>
+      <div class="tbl-wrap"><table class="tbl pc-tbl"><thead><tr><th>Colis</th><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur · frais</th><th>Argent</th><th>Statut</th></tr></thead><tbody>
+      ${rows.map((x) => `<tr class="click ${x.late ? 'late' : ''}" data-act="parcel" data-id="${x.id}" data-ref="${esc(x.ref)}">
+        <td><div class="pc-ref">${esc(x.ref)}</div><div class="pc-meta">${dt(x.created_at)}</div><div class="pc-tags">${x.category ? `<span>${esc(x.category)}</span>` : ''}${x.fragile ? '<span>fragile</span>' : ''}${x.express ? '<span>express</span>' : ''}${x.province ? '<span>province</span>' : ''}${x.external_ref ? `<span title="N° de commande">${esc(x.external_ref)}</span>` : ''}</div></td>
+        <td>${person(x.sender, x.windows && ['pending', 'assigned'].includes(x.status) ? `Récup. ${win(x.windows.pickup)}` : '')}</td>
+        <td>${person(x.recipient, x.windows && !['delivered', 'refused', 'cancelled'].includes(x.status) ? `Livr. ${win(x.windows.delivery)}` : '')}${x.province ? `<div class="pc-win">${esc(x.province.city)} · ${esc(x.province.coop)}</div>` : ''}</td>
+        <td>${x.pickup_courier || x.delivery_courier || x.courier
+          ? `<div class="pc-c"><span>Récup.</span> ${esc(x.pickup_courier?.name || x.courier?.name || '—')}</div><div class="pc-c"><span>Livr.</span> ${esc(x.delivery_courier?.name || x.courier?.name || '—')}</div>${x.courier?.phone ? `<a class="pc-tel" href="tel:${esc(x.courier.phone)}" data-stop>${esc(phoneFmt(x.courier.phone))}</a>` : ''}`
+          : '<span class="pc-none">Sans livreur</span>'}</td>
+        <td class="num"><div class="pc-amt">${ar(x.value ?? x.declared_value)}</div><div class="pc-meta">frais ${ar(x.fee)}${x.payment?.value_paid ? ' · MM' : ''}</div>${x.collected ? `<div class="pc-meta">encaissé ${ar(x.collected)}</div>` : ''}</td>
+        <td>${money(x)}</td><td>${shipPill(x)}<div class="pc-meta">${['pending', 'assigned', 'picked_up'].includes(x.status) && x.since ? `depuis ${agoTxt(x.since)}` : ''}</div>${x.late ? `<div class="pc-late">${esc(x.late)}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:30px;text-align:center">Aucun colis.</td></tr>'}
+      </tbody></table></div>`;
   },
 
   async cash() {
@@ -848,6 +896,22 @@ const actions = {
   },
   axe: (el) => axeForm(el.dataset.a ? JSON.parse(el.dataset.a) : null),
   axedel: async (el) => { if (!(await confirmBox('Supprimer cet axe ? Il sera retiré du planning des livreurs.', 'Supprimer', true))) return; await api('DELETE', `/api/admin/axes/${el.dataset.id}`); show(); },
+  newstaff: async () => {
+    const r = await api('GET', '/api/admin/staff');
+    const m = modal('Ajouter une personne à l\'équipe', `<div class="stack">
+      <label class="field"><span>Nom</span><input class="input" data-n placeholder="Ex : Fara (accueil)"></label>
+      <label class="field"><span>Téléphone (sert à se connecter)</span><input class="input" data-p type="tel" placeholder="034 12 345 67"></label>
+      <label class="field"><span>Rôle</span><select class="input" data-r>${Object.entries(r.roles).map(([k, x]) => `<option value="${k}" ${k === 'operateur' ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
+      <label class="field"><span>Mot de passe provisoire</span><input class="input" data-pw value="${Math.random().toString(36).slice(2, 10)}"></label>
+      <button class="btn primary block" data-ok>Créer le compte</button></div>`);
+    m.el.querySelector('[data-ok]').onclick = async () => {
+      const v = (q) => m.el.querySelector(q).value;
+      try {
+        await api('POST', '/api/admin/users', { role: 'admin', staff: v('[data-r]'), name: v('[data-n]'), phone: v('[data-p]'), password: v('[data-pw]') });
+        m.close(); modal('Compte créé', `<p>Communiquez à <b>${esc(v('[data-n]'))}</b> son numéro et ce mot de passe :</p><p style="font-size:1.5rem;font-weight:800;text-align:center">${esc(v('[data-pw]'))}</p><p class="small muted">Il pourra le changer dans son profil.</p>`); show();
+      } catch (e) { toastErr(e); }
+    };
+  },
   newuser: () => {
     const m = modal('Créer un compte', `<div class="stack"><select class="input" data-r><option value="admin">Administrateur</option><option value="courier">Livreur (pré-validé)</option><option value="client">Client entreprise</option></select>
       <input class="input" data-n placeholder="Nom"><input class="input" data-p type="tel" placeholder="Téléphone"><input class="input" data-c placeholder="Entreprise / CIN (facultatif)"><input class="input" data-pw type="text" placeholder="Mot de passe provisoire (6 car. min.)">

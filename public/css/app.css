@@ -277,3 +277,54 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .feed > div { padding: 6px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 44px 1fr; gap: 6px; }
 .feed time { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .live-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .85rem; }
+.suggest button b { display: block; font-weight: 600; } .suggest button small { display: block; font-size: .75rem; color: var(--ink-3); }
+
+/* Listes déroulantes (remplacent l'affichage gris du navigateur) */
+.dd { position: relative; display: block; width: 100%; min-width: 0; }
+.filters .dd, .row > .dd { width: auto; }
+.row > .dd.grow { flex: 1; }
+.dd-native { position: absolute !important; inset: 0; width: 100% !important; height: 100% !important; opacity: 0; pointer-events: none; }
+.dd-btn { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 44px; text-align: left; cursor: pointer; border: 1.5px solid var(--line); border-radius: 12px; padding: .7rem .85rem; background: #fff; color: var(--ink); font: inherit; transition: border-color .15s, box-shadow .15s; }
+.dd-btn:hover { border-color: #c9d4cf; }
+.dd-btn:focus-visible, .dd.open .dd-btn { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px rgba(14, 138, 99, .14); }
+.dd-btn:disabled { opacity: .55; cursor: not-allowed; }
+.dd-v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-ch { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .55; transition: transform .15s; }
+.dd.open .dd-ch { transform: rotate(180deg); }
+.dd-menu { position: fixed; z-index: 4000; background: #fff; border-radius: 14px; padding: 6px; box-shadow: 0 18px 44px -12px rgba(6, 42, 31, .35), 0 0 0 1px rgba(6, 42, 31, .07); overflow-y: auto; animation: ddIn .12s ease-out; max-width: calc(100vw - 16px); }
+@keyframes ddIn { from { opacity: 0; transform: translateY(-4px); } }
+.dd-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; border: 0; background: none; padding: 10px 12px; border-radius: 9px; font: inherit; font-size: .93rem; color: #10231c; text-align: left; cursor: pointer; }
+.dd-menu button:hover, .dd-menu button.hi { background: #f3efe5; }
+.dd-menu button.on { font-weight: 700; color: #0b6e4f; background: #eef7f2; }
+.dd-menu button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; visibility: hidden; flex: none; }
+.dd-menu button.on svg { visibility: visible; }
+.dd-menu button:disabled { opacity: .4; cursor: default; }
+.dd-grp { padding: 10px 12px 4px; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a958f; }
+.wz-f .dd-btn { border-color: var(--hl, #e7e1d3); background: var(--hp, #fbf8f1); border-radius: 14px; padding: 13px 14px; }
+.ad .dd-btn { border-color: var(--line); }
+
+/* Symboles (à la place des émoticônes) */
+.sym { width: 1.05em; height: 1.05em; vertical-align: -.16em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; display: inline-block; }
+.sym-dot { display: inline-block; width: .62em; height: .62em; border-radius: 50%; vertical-align: .05em; margin: 0 .1em; }
+.wz-em .sym { width: 26px; height: 26px; color: var(--hg, #0b6e4f); stroke-width: 1.7; }
+.map-mode { display: flex; background: #fff; border-radius: 10px; padding: 3px; box-shadow: 0 2px 10px rgba(0, 0, 0, .18); }
+.map-mode button { border: 0; background: none; padding: 6px 10px; border-radius: 8px; font: inherit; font-size: .78rem; font-weight: 700; color: #4a5a53; cursor: pointer; }
+.map-mode button.on { background: #062a1f; color: #fff; }
+
+/* Écran d'appel (dans la plateforme) */
+.call-screen { position: fixed; inset: 0; z-index: 5000; display: grid; place-items: center; background: rgba(4, 22, 16, .72); backdrop-filter: blur(6px); padding: 20px; }
+.call-card { width: 100%; max-width: 340px; background: linear-gradient(170deg, #0b3b2c, #062a1f 60%); color: #fff; border-radius: 30px; padding: 26px 22px 30px; text-align: center; box-shadow: 0 40px 80px -20px rgba(0, 0, 0, .6); }
+.call-brand { display: inline-flex; align-items: center; gap: 7px; font-size: .8rem; font-weight: 700; color: rgba(255, 255, 255, .6); }
+.call-brand img { border-radius: 6px; }
+.call-av { width: 112px; height: 112px; border-radius: 50%; background: #ffc83d; color: #2b2000; display: grid; place-items: center; font-size: 2.3rem; font-weight: 800; margin: 30px auto 18px; font-family: "Manrope", system-ui, sans-serif; }
+.call-av.pulse { animation: callPulse 1.6s infinite; }
+@keyframes callPulse { 0% { box-shadow: 0 0 0 0 rgba(255, 200, 61, .55); } 100% { box-shadow: 0 0 0 26px rgba(255, 200, 61, 0); } }
+.call-name { font-size: 1.4rem; font-weight: 800; font-family: "Manrope", system-ui, sans-serif; }
+.call-st { margin-top: 6px; color: rgba(255, 255, 255, .7); font-variant-numeric: tabular-nums; min-height: 1.3em; }
+.call-btns { display: flex; justify-content: center; gap: 34px; margin-top: 38px; }
+.call-b { display: flex; flex-direction: column; align-items: center; gap: 8px; border: 0; background: none; color: rgba(255, 255, 255, .85); font: inherit; font-size: .8rem; cursor: pointer; }
+.call-b .sym { width: 64px; height: 64px; padding: 19px; border-radius: 50%; background: rgba(255, 255, 255, .12); color: #fff; stroke-width: 2; }
+.call-b.yes .sym { background: #22c55e; animation: callPulse 1.6s infinite; }
+.call-b.no .sym { background: #e5484d; transform: rotate(135deg); }
+.call-b.mute.on .sym { background: #fff; color: #062a1f; }
+.chat-calls { display: flex; flex-wrap: wrap; gap: 8px; }

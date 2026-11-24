@@ -9,6 +9,7 @@ import { registerTripRoutes, rateLimit, purgeLogs, nearest, simplify } from './t
 import { validHHMM } from './rules.js';
 import { registerSupportRoutes } from './support.js';
 import { registerSmsRoutes } from './sms.js';
+import { registerTalkRoutes } from './talk.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -61,7 +62,39 @@ async function authenticate(req, env) {
   return row;
 }
 
-const publicUser = (u) => ({ id: u.id, phone: u.phone, name: u.name, role: u.role, status: u.status, lang: u.lang, is_business: !!u.is_business, company: u.company });
+const publicUser = (u) => ({ id: u.id, phone: u.phone, name: u.name, role: u.role, status: u.status, lang: u.lang, is_business: !!u.is_business, company: u.company,
+  ...(u.role === 'admin' ? { staff: u.perms || 'admin', perms: staffPerms(u) } : {}) });
+
+// ---------------------------------------------------------------- équipe de l'administration : rôles
+// perms vide = administrateur complet. Sinon, un rôle donne accès à certaines rubriques ; le serveur le vérifie à chaque demande.
+export const STAFF_ROLES = {
+  operateur: { label: 'Opérateur', perms: ['ops', 'live', 'parcels', 'deliveries', 'couriers', 'axes', 'clients', 'support', 'complaints', 'reports'] },
+  caisse: { label: 'Caisse', perms: ['ops', 'parcels', 'cash', 'payments', 'reports'] },
+  service: { label: 'Service client', perms: ['ops', 'live', 'parcels', 'clients', 'support', 'complaints'] },
+};
+export const staffPerms = (u) => (u.role !== 'admin' ? [] : STAFF_ROLES[u.perms]?.perms || null); // null = tout
+// Rubrique exigée par chaque adresse de l'administration (« system » : administrateur complet seulement).
+const STAFF_RULES = [
+  [/^\/api\/admin\/(settings|zones|promos|sms-|merchants|tsena|sync-log|audit|export|staff)/, 'system'],
+  [/^POST \/api\/admin\/users$|^\S+ \/api\/admin\/users\/\d+\/password$/, 'system'],
+  [/^\S+ \/api\/admin\/(cash|vendors|transactions)|\/settle$|\/payment$/, 'cash'],
+  [/^GET \/api\/admin\/support\/unread$/, null],
+  [/^\S+ \/api\/admin\/support/, 'support'],
+  [/^\S+ \/api\/admin\/complaints/, 'complaints'],
+  [/^\S+ \/api\/admin\/(axes|trips)|\/axes$|\/trips$/, 'axes'],
+  [/^\S+ \/api\/admin\/users\/\d+\/(status|vehicle)$/, ['couriers', 'clients']],
+  [/^\S+ \/api\/admin\/(reports|courier-stats)/, 'reports'],
+  [/^\S+ \/api\/admin\/deliveries/, 'deliveries'],
+  [/^(POST|PUT|PATCH|DELETE) \/api\/admin\/shipments/, ['parcels', 'ops']],
+];
+function checkStaff(u, method, path) {
+  const perms = staffPerms(u); if (!perms) return;
+  const key = `${method} ${path}`;
+  const rule = STAFF_RULES.find(([re]) => re.test(key) || re.test(path));
+  if (!rule || rule[1] == null) return;
+  const need = Array.isArray(rule[1]) ? rule[1] : [rule[1]];
+  if (!need.some((n) => perms.includes(n))) fail(403, 'forbidden', 'Votre rôle ne donne pas accès à cette rubrique');
+}
 
 async function createSession(env, user) {
   const token = randomHex(32);
@@ -661,6 +694,7 @@ async function notifications(ctx, env) {
   if (refs.length) for (const r of await all(env, `SELECT id, ref FROM shipments WHERE ref IN (${refs.map(() => '?').join(',')})`, ...refs)) ids.set(r.ref, r.id);
   const target = (n) => {
     if (n.kind.startsWith('support:')) return { type: 'support', id: Number(n.kind.slice(8)) };
+    if (n.kind.startsWith('chat:')) return { type: 'chat', id: Number(n.kind.slice(5)) };
     if (n.kind === 'support') return { type: 'support' };
     const ref = (`${n.title} ${n.body || ''}`.match(REF) || [])[0];
     if (ref && ids.has(ref)) return { type: 'shipment', id: ids.get(ref) };
@@ -753,14 +787,31 @@ async function adminCreateUser(ctx, env) {
   const phone = normalizePhone(b.phone);
   if (await one(env, 'SELECT id FROM users WHERE phone = ?', phone)) fail(409, 'phone_taken', 'Ce numéro est déjà inscrit');
   const salt = randomHex(16);
-  const res = await run(env, 'INSERT INTO users (phone, name, role, pass_hash, pass_salt, status, is_business, company, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+  const staff = role === 'admin' && b.staff && b.staff !== 'admin' ? (STAFF_ROLES[b.staff] ? b.staff : fail(400, 'invalid', 'Rôle d\'équipe invalide')) : null;
+  const res = await run(env, 'INSERT INTO users (phone, name, role, pass_hash, pass_salt, status, is_business, company, created_at, perms) VALUES (?,?,?,?,?,?,?,?,?,?)',
     phone, str(b.name, { min: 2, max: 80, name: 'Nom' }), role,
     await hashPassword(str(b.password, { min: 6, max: 128, name: 'Mot de passe (6 caractères min.)' }), salt, iterations(env)), salt, 'active',
-    b.is_business ? 1 : 0, str(b.company, { max: 120 }) || null, now());
+    b.is_business ? 1 : 0, str(b.company, { max: 120 }) || null, now(), staff);
   if (role === 'courier') await run(env, 'INSERT INTO couriers (user_id, vehicle, cin, address, emergency_contact, doc_note, validated_at) VALUES (?,?,?,?,?,?,?)',
     res.meta.last_row_id, vehicleOf(b.vehicle), str(b.cin, { min: 5, max: 30, name: 'Numéro CIN' }), str(b.address, { max: 200 }), str(b.emergency_contact, { max: 60 }), str(b.doc_note, { max: 500 }), now());
-  await audit(env, ctx, 'admin_user_create', { id: res.meta.last_row_id, role });
+  await audit(env, ctx, 'admin_user_create', { id: res.meta.last_row_id, role, staff });
   return json({ id: res.meta.last_row_id }, 201);
+}
+
+// Équipe : comptes de l'administration, avec leur rôle et leur dernière activité (journal).
+async function adminStaff(ctx, env) {
+  const rows = await all(env, `SELECT u.id, u.name, u.phone, u.status, u.perms, u.created_at,
+      (SELECT MAX(at) FROM audit a WHERE a.user_id = u.id) AS last_action, (SELECT COUNT(*) FROM audit a WHERE a.user_id = u.id) AS actions
+    FROM users u WHERE u.role = 'admin' ORDER BY u.perms IS NOT NULL, u.name`);
+  return json({ staff: rows.map((r) => ({ ...r, staff: r.perms || 'admin' })), roles: Object.fromEntries([['admin', { label: 'Administrateur (tout)', perms: null }], ...Object.entries(STAFF_ROLES)]) });
+}
+async function adminStaffRole(ctx, env) {
+  const t = await one(env, "SELECT * FROM users WHERE id = ? AND role = 'admin'", ctx.params.id) || fail(404, 'not_found', 'Compte introuvable');
+  if (t.id === ctx.user.id) fail(400, 'self', 'Vous ne pouvez pas changer votre propre rôle');
+  const v = ctx.body.staff === 'admin' ? null : STAFF_ROLES[ctx.body.staff] ? ctx.body.staff : fail(400, 'invalid', 'Rôle invalide');
+  await run(env, 'UPDATE users SET perms = ? WHERE id = ?', v, t.id);
+  await audit(env, ctx, 'staff_role', { id: t.id, staff: v || 'admin' });
+  return json({ ok: true });
 }
 
 async function adminSetStatus(ctx, env) {
@@ -826,8 +877,9 @@ async function adminSettingsPut(ctx, env) {
     if (k === 'commission_mode' && !['percent', 'subscription'].includes(val)) fail(400, 'invalid', 'Mode de commission invalide');
     if (k === 'courier_can_edit_fee') val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
-    if (['delivery_photo_required', 'relay_enabled', 'scan_required', 'sms_enabled', 'zones_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
+    if (['delivery_photo_required', 'relay_enabled', 'scan_required', 'sms_enabled', 'zones_enabled', 'xl_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
     if (['sms_gateway_url', 'public_url'].includes(k) && val && !/^https:\/\//.test(val)) fail(400, 'invalid', 'Adresse invalide (https://…)');
+    if (k === 'turn_url' && val && !val.split(/[\s,]+/).every((x) => /^turns?:/.test(x))) fail(400, 'invalid', 'Relais invalide (turn:… ou turns:…)');
     if (k === 'return_fee_percent' && Number(val) > 100) fail(400, 'invalid', 'Pourcentage maximum 100');
     if (k === 'dispatch_mode' && !['admin', 'auto'].includes(val)) fail(400, 'invalid', 'Mode de répartition invalide');
     if (['am_start', 'am_end', 'pm_start', 'pm_end'].includes(k) && !validHHMM(val)) fail(400, 'invalid', `Heure invalide pour ${k} (format 08:00)`);
@@ -1101,6 +1153,8 @@ route('GET', '/api/admin/stats', ['admin'], adminStats);
 route('GET', '/api/admin/live', ['admin'], adminLive);
 route('GET', '/api/admin/users', ['admin'], adminUsers);
 route('POST', '/api/admin/users', ['admin'], adminCreateUser);
+route('GET', '/api/admin/staff', ['admin'], adminStaff);
+route('PATCH', '/api/admin/staff/:id', ['admin'], adminStaffRole);
 route('POST', '/api/admin/users/:id/status', ['admin'], adminSetStatus);
 route('GET', '/api/admin/deliveries', ['admin'], adminDeliveries);
 route('POST', '/api/admin/deliveries/:id/payment', ['admin'], adminPayment);
@@ -1129,6 +1183,7 @@ registerTsenaRoutes(route);
 registerTripRoutes(route);
 registerSupportRoutes(route);
 registerSmsRoutes(route);
+registerTalkRoutes(route);
 
 // API publique v1 : appelée par les logiciels de vente (souvent côté serveur, CORS ouvert pour les intégrations web).
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, Idempotency-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };
@@ -1166,6 +1221,7 @@ async function handleApiInner(req, env) {
       ctx.user = await authenticate(req, env);
       if (!ctx.user) fail(401, 'unauthenticated', 'Session expirée, reconnectez-vous');
       if (!r.roles.includes(ctx.user.role)) fail(403, 'forbidden', 'Accès refusé');
+      if (ctx.user.role === 'admin') checkStaff(ctx.user, req.method, url.pathname);
     }
     return await r.handler(ctx, env);
   } catch (e) {

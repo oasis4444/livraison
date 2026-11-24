@@ -139,7 +139,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
       <div class="row" style="gap:6px;align-items:center;margin-top:6px"><input class="input" data-dl inputmode="decimal" placeholder="L cm" style="width:76px"> × <input class="input" data-dw inputmode="decimal" placeholder="l cm" style="width:76px"> × <input class="input" data-dh inputmode="decimal" placeholder="h cm" style="width:76px">
         <input class="input" data-kg inputmode="decimal" placeholder="kg" style="width:76px"></div></details>
     <label class="row small" style="gap:8px;align-items:center">${mg ? 'Isan\'ny colis (adiresy iray ihany)' : 'Nombre de colis (même adresse)'} <input class="input" data-qty type="number" min="1" max="50" value="1" style="width:76px"></label>
-    <div class="tiny muted">${mg ? 'Tsy azo alefa : vola, fitaovam-piadiana, entana mampidi-doza na tsy ara-dalàna, biby velona.' : 'Interdit : argent liquide, armes, produits dangereux ou illégaux, animaux vivants.'}</div>
+    <div class="tiny muted">${mg ? 'Tsy azo alefa : vola, fitaovam-piadiana, entana mampidi-doza na tsy ara-dalàna, biby velona. Fakana sy fanaterana amoron-dalana ihany.' : 'Interdit : argent liquide, armes, produits dangereux ou illégaux, animaux vivants. Récupération et livraison en bord de route uniquement.'}</div>
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label>
     <div class="field"><span>💳 ${mg ? 'Ny vidin\'entana' : 'Paiement de la marchandise'}</span>
       <div class="seg" data-pay><button type="button" class="on" data-pv="cash">💵 ${mg ? 'Vola an-tanana, raisin\'ny livreur' : 'Espèces, à encaisser par le livreur'}</button><button type="button" data-pv="mm">📱 ${mg ? 'Efa nalefa Mobile Money' : 'Déjà payée par Mobile Money'}</button></div>
@@ -224,7 +224,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     tmr = setTimeout(async () => {
       const res = await geocode(v + ', Antananarivo').catch(() => []);
       box._res = res;
-      box.innerHTML = res.map((x, i) => `<button data-i="${i}">${esc(x.label)}</button>`).join('') + `<button data-i="-1">✓ « ${esc(v)} » (sans GPS)</button>`;
+      box.innerHTML = res.map((x, i) => `<button data-i="${i}"><b>${esc(x.label)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`).join('') + `<button data-i="-1">✓ « ${esc(v)} » (sans GPS)</button>`;
       box.classList.remove('hidden');
     }, 450);
   });
@@ -385,6 +385,15 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
   const acts = el.querySelector('[data-actions]');
   const done = () => { m.close(); onChange?.(); };
   const btn = (label, cls, fn) => { const b = document.createElement('button'); b.className = `btn block ${cls}`; b.textContent = label; b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { toastErr(e); } b.disabled = false; }; acts.append(b); };
+  // Discussion du colis et appels dans Alefa (le livreur ne voit les contacts qu'une fois la mission confirmée).
+  if (!s.contacts_hidden && !['cancelled'].includes(s.status)) {
+    const mg = state.lang === 'mg';
+    btn(mg ? 'Resaka momba ity colis ity' : 'Discussion du colis', '', () => import('./talk.js').then((t) => t.openShipChat(s.id, { ref: s.ref })));
+    if (isCourier && ['assigned', 'picked_up'].includes(s.status)) {
+      btn(mg ? 'Antsoy ny mpandray (Alefa)' : 'Appeler le destinataire (Alefa)', '', () => import('./talk.js').then((t) => t.callUser({ to: 'recipient', shipment_id: s.id, name: s.recipient?.name })));
+      btn(mg ? 'Antsoy ny mpandefa (Alefa)' : 'Appeler l\'expéditeur (Alefa)', '', () => import('./talk.js').then((t) => t.callUser({ to: 'sender', shipment_id: s.id, name: s.sender?.name })));
+    }
+  }
   // Étiquette à coller sur le colis (code-barres + code à 4 caractères) : expéditeur, centre, livreur.
   if ((isAdmin || role === 'sender' || isCourier) && ['pending', 'assigned', 'picked_up'].includes(s.status) && !s.contacts_hidden) btn(`🖨 ${state.lang === 'mg' ? 'Étiquette' : 'Imprimer l\'étiquette'}`, '', () => printLabel(s));
   el.querySelector('[data-fee]')?.addEventListener('click', async () => {
@@ -633,7 +642,7 @@ function pickupForm(s, done) {
     <label class="btn sun lg block" style="cursor:pointer">${c('take_photo')}<input type="file" accept="image/*" capture="environment" data-file hidden></label>
     <img data-prev alt="" style="width:100%;border-radius:12px;display:none;max-height:280px;object-fit:cover">
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" value="${s.declared_value || ''}" style="font-size:1.3rem;font-weight:800"></label>
-    <label class="field"><span>${mg ? 'Karazana (hamarino amin\'ny sary)' : 'Catégorie (vérifiez sur la photo)'}</span><select class="input" data-cat>${['S', 'M', 'L', 'XL'].map((k) => `<option ${(s.category || 'S') === k ? 'selected' : ''}>${k}</option>`).join('')}</select>
+    <label class="field"><span>${mg ? 'Karazana (hamarino amin\'ny sary)' : 'Catégorie (vérifiez sur la photo)'}</span><select class="input" data-cat>${['S', 'M', 'L'].map((k) => `<option ${(s.category || 'S') === k ? 'selected' : ''}>${k}</option>`).join('')}</select>
       <span class="tiny muted">${mg ? 'Raha lehibe noho ny voalaza : ovay, ampandrenesina ny mpandefa amin\'ny vidiny vaovao.' : 'Plus gros que déclaré ? Changez : l\'expéditeur reçoit le nouveau prix.'}</span></label>
     <label class="field"><span>${c('fee')} (Ar)</span><input class="input" data-fee inputmode="numeric" value="${s.fee}"></label>
     <div class="card small" style="background:var(--bg);border:0" data-tot></div>

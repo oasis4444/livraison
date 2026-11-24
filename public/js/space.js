@@ -16,7 +16,7 @@ const SV = {
 };
 const ic = (k) => `<svg class="sp-ic" viewBox="0 0 24 24" aria-hidden="true">${SV[k]}</svg>`;
 const ACTIVE = (s) => !['delivered', 'cancelled', 'refused'].includes(s.status) || (['refused', 'cancelled'].includes(s.status) && s.picked_at && !s.returned_at);
-const KIND = { document: ['Document', 'Taratasy'], colis: ['Colis', 'Colis'], alimentaire: ['Alimentaire', 'Sakafo'] };
+const KIND = { document: ['Document', 'Taratasy'], colis: ['Colis', 'Colis'], alimentaire: ['Alimentaire', 'Sakafo'] }; // « alimentaire » : anciens envois seulement
 const TONE = { delivered: 'ok', cancelled: 'off', refused: 'bad' };
 
 let root, main, view = 'home', list = [], bal = null, viewTimer = null, expressLive = false;
@@ -49,6 +49,7 @@ export async function mount(el) {
   });
   setNotifOpener((tg) => {
     if (tg.type === 'shipment') return go('track', { id: tg.id });
+    if (tg.type === 'chat') { go('track', { id: tg.id }); return import('./talk.js').then((t) => t.openShipChat(tg.id)); }
     if (tg.type === 'support') return supportChat();
     if (tg.type === 'payouts') return go('parcels');
     if (tg.type === 'delivery') return go('express');
@@ -209,12 +210,15 @@ async function trackPage(id) {
             ${s.payment?.fee_at_pickup ? `<small>${L2('Frais payés au livreur à la récupération', 'Saran-dalana aloa rehefa haka')} : ${ar(s.payment.fee_at_pickup)}</small>` : ''}
           </div>
           ${s.delivery_pin && ['pending', 'assigned', 'picked_up'].includes(s.status) && mine === 'sender' ? `<div class="sp-pin"><small>${L2('Code PIN du destinataire', 'Kaody PIN an\'ny mpandray')}</small><b>${esc(s.delivery_pin)}</b></div>` : ''}
+          <div class="sp-acts"><button class="sp-btn line grow" data-chat>${L2('Discuter', 'Hiresaka')}</button>${s.courier && !s.courier_hidden && ['assigned', 'picked_up'].includes(s.status) ? `<button class="sp-btn sun grow" data-callc>${L2('Appeler le livreur', 'Antsoy ny livreur')}</button>` : ''}</div>
           <div class="sp-acts"><button class="sp-btn dark grow" data-more>${L2('Actions et preuves', 'Hetsika sy porofo')}</button>
             ${s.track_token ? `<a class="sp-btn line" href="sms:${esc(s.recipient.phone)}?body=${encodeURIComponent(`Alefa ${s.ref} : ${location.origin}/suivi/${s.track_token}`)}">${L2('Envoyer le suivi', 'Alefaso ny rohy')}</a>` : ''}</div>
         </div>
       </div>
     </div></div>`;
   main.querySelector('[data-more]').onclick = () => shipDetail(s.id, { role: mine, onChange: () => trackPage(id) });
+  main.querySelector('[data-chat]').onclick = () => import('./talk.js').then((t) => t.openShipChat(s.id, { ref: s.ref }));
+  const cc = main.querySelector('[data-callc]'); if (cc) cc.onclick = () => import('./talk.js').then((t) => t.callUser({ to: 'courier', shipment_id: s.id, name: s.courier?.name }));
   const map = makeMap(main.querySelector('[data-map]'), { zoom: 13, zoomControl: true });
   const mk = {}; let fitted = false, road = null, roadKey = '';
   const tick = async () => {

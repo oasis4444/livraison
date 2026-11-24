@@ -292,3 +292,7 @@ i.g { background: var(--hg2); } i.o { background: #f08a24; } i.c { background: v
 .wz-paychips span { background: var(--hp); border: 1px solid var(--hl); border-radius: 999px; padding: 6px 12px; font-size: .85rem; font-weight: 600; }
 .sp-legend i.r { width: 16px; height: 4px; border-radius: 2px; background: #0b6e4f; }
 .sp-route-info { margin-top: 6px; font-size: .85rem; color: var(--hk2); }
+.wz-price.err { background: #fdecec; color: #a32020; font-weight: 600; font-size: .88rem; }
+.wz-sug button b { display: block; font-weight: 600; }
+.wz-sug button small { display: block; font-size: .76rem; color: var(--hk2); margin-top: 1px; }
+.wz-maphint { position: absolute; top: 12px; left: 12px; right: 60px; z-index: 500; background: rgba(255, 255, 255, .94); border-radius: 10px; padding: 7px 11px; font-size: .78rem; color: var(--hk2); box-shadow: 0 4px 14px -6px rgba(0, 0, 0, .3); }
