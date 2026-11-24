@@ -1,7 +1,7 @@
 // Tableau de bord Administrateur.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode, setNotifOpener,
+  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode, setNotifOpener, chatPanel,
 } from './core.js';
 import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTripsEditor } from './colis.js';
 
@@ -10,8 +10,8 @@ const liveMk = {};
 let trackLayer = null, axeLayers = [];
 
 const NAV = [
-  ['dash', '📊', 'Tableau de bord'], ['live', '🗺️', 'Carte en direct'], ['parcels', '📦', 'Colis (centre)'], ['cash', '💵', 'Caisse & vendeurs'], ['deliveries', '🛵', 'Courses express'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
-  ['clients', '👥', 'Clients'], ['payments', '💰', 'Paiements & soldes'], ['complaints', '⚠️', 'Réclamations & SOS'], ['reports', '📈', 'Rapports'],
+  ['dash', '📊', 'Tableau de bord'], ['ops', '🚦', 'Suivi des livraisons'], ['live', '🗺️', 'Carte en direct'], ['parcels', '📦', 'Colis (centre)'], ['cash', '💵', 'Caisse & vendeurs'], ['deliveries', '🛵', 'Courses express'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
+  ['clients', '👥', 'Clients'], ['payments', '💰', 'Paiements & soldes'], ['support', '💬', 'Service client'], ['complaints', '⚠️', 'Réclamations & SOS'], ['reports', '📈', 'Rapports'],
   ['api', '🔌', 'Logiciels de vente'], ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
 ];
 
@@ -25,11 +25,12 @@ export async function mount(el) {
   main = $('#main');
   bind(root, actions);
   window.addEventListener('hashchange', () => { view = location.hash.replace('#', '') || 'dash'; show(); });
-  startNotifications(() => { refreshCounts(); if (view === 'dash' || view === 'complaints') show(); });
+  startNotifications(() => { refreshCounts(); if (['dash', 'complaints', 'support'].includes(view)) show(); });
   // clic sur une notification : fiche du colis, course, réclamations, colis à répartir, paiements
   setNotifOpener((tg) => {
     if (tg.type === 'shipment') return parcelDetail(tg.id);
     if (tg.type === 'delivery') return deliveryDetail(tg.id);
+    if (tg.type === 'support') { supportOpen = tg.id || null; if (view === 'support') return show(); location.hash = 'support'; return; }
     const v = { alerts: 'complaints', parcels: 'parcels', payouts: 'cash', plan: 'couriers' }[tg.type];
     if (v) location.hash = v;
   });
@@ -38,8 +39,8 @@ export async function mount(el) {
 }
 
 async function refreshCounts() {
-  const s = await api('GET', '/api/admin/stats');
-  counts = { couriers: s.users.pending || 0, complaints: s.complaints.open || 0, live: s.complaints.sos || 0 };
+  const [s, su] = await Promise.all([api('GET', '/api/admin/stats'), api('GET', '/api/admin/support/unread').catch(() => ({ unread_threads: 0 }))]);
+  counts = { couriers: s.users.pending || 0, complaints: s.complaints.open || 0, live: s.complaints.sos || 0, support: su.unread_threads || 0, ops: s.parcels?.pending || 0 };
   renderNav();
   return s;
 }
@@ -67,14 +68,156 @@ function bars(series, key, fmt = (v) => v) {
     <div class="bar-labels">${series.map((s) => `<span>${esc(String(s.label).slice(-5))}</span>`).join('')}</div>`;
 }
 
+// Filtres du tableau des livraisons (gardés pendant la session).
+const opsF = { step: sessionStorage.getItem('ops_step') || 'active', courier: sessionStorage.getItem('ops_c') || '', kind: '', days: sessionStorage.getItem('ops_days') || '1', q: '' };
+const OPS_STEPS = [['active', 'En cours'], ['review', '⚠️ À valider'], ['todo', '📥 À répartir'], ['pickup', '🟢 À récupérer'], ['centre', '🏢 Au centre'], ['delivery', '🟠 En livraison'], ['done', '✅ Terminés'], ['all', 'Tous']];
+const opsGroup = (p) => {
+  if (p.review && p.status === 'pending') return 'review';
+  if (p.status === 'pending') return 'todo';
+  if (p.status === 'assigned') return 'pickup';
+  if (['to_centre', 'at_centre'].includes(p.step)) return 'centre';
+  if (p.status === 'picked_up') return 'delivery';
+  return 'done';
+};
+
+let supportOpen = null, supportPanel = null;
 const VIEWS = {
+  async support() {
+    const r = await api('GET', '/api/admin/support');
+    if (!supportOpen && r.threads.length) supportOpen = r.threads[0].user_id;
+    main.innerHTML = head('Service client') + `<div class="grid2" style="grid-template-columns:minmax(220px,1fr) 2fr">
+      <div class="panel" style="max-height:70vh;overflow:auto">${r.threads.map((t) => `<div class="card" data-act="sthread" data-id="${t.user_id}" style="cursor:pointer;margin-bottom:6px;${t.user_id === supportOpen ? 'border-color:var(--green)' : ''}">
+        <div class="row between small"><b>${t.role === 'courier' ? '🚲' : '👤'} ${esc(t.name)}</b>${t.unread ? `<span class="cnt">${t.unread}</span>` : ''}</div>
+        <div class="tiny muted ellipsis">${t.last_from_centre ? '↩ ' : ''}${esc(t.last)}</div><div class="tiny muted">${dt(t.last_at)}</div></div>`).join('') || '<p class="muted small">Aucun message pour le moment.</p>'}</div>
+      <div class="panel" data-sthread>${supportOpen ? '' : '<p class="muted">Choisissez une discussion.</p>'}</div></div>`;
+    supportPanel?.stop(); supportPanel = null;
+    if (supportOpen) {
+      const el = $('[data-sthread]');
+      const t = r.threads.find((x) => x.user_id === supportOpen);
+      el.insertAdjacentHTML('beforebegin', '');
+      const hd = document.createElement('div');
+      hd.className = 'row between'; hd.style.marginBottom = '6px';
+      hd.innerHTML = t ? `<b>${t.role === 'courier' ? '🚲 Livreur' : '👤 Client'} ${esc(t.name)}</b><a class="btn sm" href="tel:${esc(t.phone)}">📞 ${esc(phoneFmt(t.phone))}</a>` : '';
+      const body = document.createElement('div');
+      el.append(hd, body);
+      supportPanel = chatPanel(body, { centre: true, load: async () => (await api('GET', `/api/admin/support/${supportOpen}`)).messages, send: (b) => api('POST', `/api/admin/support/${supportOpen}`, { body: b }) });
+      liveTimer = { stop: () => { supportPanel?.stop(); supportPanel = null; } };
+    }
+  },
+
+  async ops() {
+    main.innerHTML = head('Suivi des livraisons', `<span class="small muted" data-ops-info></span>`) + `
+      <div class="panel no-print" style="margin-bottom:10px"><div class="row wrap" style="gap:8px;align-items:flex-end">
+        <div class="seg" data-ostep>${OPS_STEPS.map(([k, l]) => `<button data-k="${k}" class="${opsF.step === k ? 'on' : ''}">${l} <span class="cnt" data-cnt="${k}"></span></button>`).join('')}</div>
+        <label class="field"><span>Livreur</span><select class="input" data-oc style="min-width:170px"><option value="">Tous les livreurs</option><option value="none">— Sans livreur</option></select></label>
+        <label class="field"><span>Type</span><select class="input" data-ok2><option value="">Tous</option><option value="tana">Antananarivo</option><option value="prov">🚌 Province</option><option value="mm">📱 Payé Mobile Money</option></select></label>
+        <label class="field"><span>Période</span><select class="input" data-od>${[['1', 'Aujourd\'hui'], ['7', '7 jours'], ['30', '30 jours']].map(([v, l]) => `<option value="${v}" ${opsF.days === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field grow"><span>Recherche</span><input class="input" data-oq placeholder="N° colis, nom, quartier…"></label></div></div>
+      <div class="live-wrap"><div class="livemap" id="opsmap"></div><div class="live-list panel" data-ops-list style="max-height:520px;overflow:auto"></div></div>
+      <div class="panel" style="margin-top:12px"><h3>Livreurs — <span data-ops-period></span></h3><div class="table-wrap"><table><thead><tr><th>Livreur</th><th>Récupérés</th><th>Livrés</th><th>Valeur récupérée</th><th>Valeur livrée</th><th>Frais</th><th>Part centre</th><th>Part livreur</th><th>Non réglés</th><th>À remettre</th><th></th></tr></thead><tbody data-ops-table></tbody></table></div>
+        <p class="tiny muted">Part du centre selon les frais (Paramètres) ; la récupération est gratuite, le reste revient au livreur qui livre. « À remettre » : argent encaissé − sa part + frais encaissés à la récupération (négatif = le centre lui doit). Réglez dans <a href="#cash">Caisse & vendeurs</a>.</p></div>`;
+    liveMap = makeMap($('#opsmap'), { zoom: 13, zoomControl: true, layers: true });
+    let data = null, fitted = false;
+    const lines = {};
+    const match = (p) => {
+      if (opsF.step === 'active' && opsGroup(p) === 'done') return false;
+      if (!['active', 'all'].includes(opsF.step) && opsGroup(p) !== opsF.step) return false;
+      if (opsF.courier === 'none' && p.courier_id) return false;
+      if (opsF.courier && opsF.courier !== 'none' && ![p.courier_id, p.pickup_courier_id, p.delivery_courier_id].includes(+opsF.courier)) return false;
+      if (opsF.kind === 'tana' && p.province) return false;
+      if (opsF.kind === 'prov' && !p.province) return false;
+      if (opsF.kind === 'mm' && !p.value_paid) return false;
+      if (opsF.q) { const q = opsF.q.toLowerCase(); if (![p.ref, p.sender, p.recipient, p.pickup_addr, p.drop_addr, p.courier].some((x) => String(x || '').toLowerCase().includes(q))) return false; }
+      return true;
+    };
+    const win = (w) => (w ? `${time(w[0])}–${time(w[1])}${new Date(w[0]).toDateString() !== new Date().toDateString() ? ` (${new Date(w[0]).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })})` : ''}` : '');
+    const draw = () => {
+      if (!data || !liveMap) return;
+      const ps = data.parcels.filter(match);
+      // compteurs par étape (avec les autres filtres)
+      const save = opsF.step;
+      for (const [k] of OPS_STEPS) { opsF.step = k; const n = data.parcels.filter(match).length; const el = $(`[data-cnt="${k}"]`); if (el) el.textContent = n || ''; }
+      opsF.step = save;
+      $('[data-ops-info]').textContent = `${ps.length} colis · mis à jour ${time(data.server_time)}`;
+      const keep = new Set(), pos = {};
+      for (const c of data.couriers) {
+        if (opsF.courier && opsF.courier !== String(c.id)) continue;
+        if (c.lat == null) continue;
+        const stale = data.server_time - (c.last_seen || 0) > 2 * 60e3;
+        if (!c.online && stale && !ps.some((p) => p.courier_id === c.id)) continue;
+        pos[c.id] = [c.lat, c.lng]; keep.add('c' + c.id);
+        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : ps.some((p) => p.courier_id === c.id && opsGroup(p) !== 'done') ? 'busy' : '', c.name.split(' ')[0], c.vehicle), { refreshIcon: true, zIndexOffset: 1000 })
+          ?.bindTooltip(`<b>${esc(c.name)}</b> · ${vehIcon(c.vehicle)} · 📞 ${esc(phoneFmt(c.phone))}<br>${c.run ? `🚀 en tournée → ${esc(c.run.to)}` : c.online ? 'Disponible' : 'Hors ligne'}${stale ? ' · ⚠ GPS ancien' : ''}`)
+          .off('click').on('click', () => { opsF.courier = String(c.id); sessionStorage.setItem('ops_c', opsF.courier); $('[data-oc]').value = opsF.courier; draw(); });
+      }
+      const keepL = new Set();
+      for (const p of ps) {
+        const g = opsGroup(p);
+        if (g === 'done') continue;
+        const toPickup = ['review', 'todo', 'pickup'].includes(g);
+        const t = toPickup ? p.pickup : g === 'centre' ? null : p.drop;
+        if (!t) continue;
+        keep.add('p' + p.id);
+        upsertMarker(liveMap, liveMk, 'p' + p.id, t, icons.dot(g === 'review' ? '#c2410c' : toPickup ? '#0b6e4f' : '#e8890c', p.ref), { refreshIcon: true })
+          ?.bindTooltip(`<b>${esc(p.ref)}</b> · ${esc(p.step_label)}<br>${toPickup ? '🟢 Récupération' : '🟠 Livraison'} : ${esc(toPickup ? p.pickup_addr : p.drop_addr)}<br>${toPickup && p.windows ? `🕘 ${win(p.windows.pickup)}` : p.windows ? `🏁 ${win(p.windows.delivery)}` : ''}${p.courier ? ` · ${esc(p.courier)}` : ' · sans livreur'}`)
+          .off('click').on('click', () => parcelDetail(p.id));
+        if (p.courier_id && pos[p.courier_id]) {
+          keepL.add(p.id);
+          const ll = [pos[p.courier_id], t];
+          if (!lines[p.id]) lines[p.id] = L.polyline(ll, { color: toPickup ? '#0b6e4f' : '#e8890c', weight: 2, dashArray: '4 6', opacity: .8, interactive: false }).addTo(liveMap);
+          else lines[p.id].setLatLngs(ll);
+        }
+      }
+      for (const id of Object.keys(lines)) if (!keepL.has(+id)) { lines[id].remove(); delete lines[id]; }
+      pruneMarkers(liveMk, keep);
+      if (!fitted) { const pts = [...Object.values(pos), ...ps.map((p) => p.pickup).filter(Boolean)]; if (pts.length) try { liveMap.fitBounds(pts, { padding: [30, 30], maxZoom: 15 }); fitted = true; } catch {} }
+      // liste
+      $('[data-ops-list]').innerHTML = ps.length ? ps.map((p) => {
+        const g = opsGroup(p);
+        return `<div class="card" data-act="parcel" data-id="${p.id}" style="cursor:pointer;margin-bottom:6px">
+          <div class="row between small"><b>${esc(p.ref)}</b><span class="pill ${g === 'done' ? '' : g === 'review' ? 'warn' : 'live'}">${esc(p.step_label)}</span></div>
+          <div class="tiny">🟢 ${esc(p.pickup_addr)}<br>🟠 ${esc(p.drop_addr)}${p.province ? ` · 🚌 ${esc(p.province)}` : ''}</div>
+          <div class="tiny muted">${p.courier ? `${esc(p.courier)}` : '<span style="color:var(--orange)">sans livreur</span>'}${['todo', 'pickup', 'review'].includes(g) && p.windows ? ` · 🕘 ${win(p.windows.pickup)}` : g !== 'done' && p.windows ? ` · 🏁 ${win(p.windows.delivery)}` : ''} · ${ar(p.value || 0)}${p.value_paid ? ' 📱' : ''} · frais ${ar(p.fee)}${p.review ? ` · ⚠️ ${esc(p.review)}` : ''}</div></div>`;
+      }).join('') : '<p class="muted small">Aucun colis pour ces filtres.</p>';
+      // tableau par livreur
+      $('[data-ops-period]').textContent = { 1: 'aujourd\'hui', 7: '7 derniers jours', 30: '30 derniers jours' }[data.days] || `${data.days} jours`;
+      $('[data-ops-table]').innerHTML = data.couriers.filter((c) => !opsF.courier || opsF.courier === String(c.id)).map((c) => {
+        const st = c.stats || {};
+        return `<tr><td>${vehIcon(c.vehicle)} <b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'}${c.run ? `<div class="tiny muted">🚀 → ${esc(c.run.to)}</div>` : ''}</td>
+          <td>${st.picked || 0}</td><td>${st.delivered || 0}</td><td>${ar(st.picked_value || 0)}</td><td>${ar(st.delivered_value || 0)}</td><td>${ar(st.fees || 0)}</td>
+          <td>${ar(st.centre_share || 0)}</td><td>${ar(st.courier_share || 0)}</td><td>${st.unpaid ? `<b style="color:var(--orange)">${st.unpaid}</b>` : '✅ 0'}</td>
+          <td><b style="color:${c.due > 0 ? 'var(--orange)' : c.due < 0 ? 'var(--green)' : 'inherit'}">${ar(c.due)}</b></td>
+          <td style="white-space:nowrap"><button class="btn sm" data-act="opsc" data-id="${c.id}">🔎</button> <a class="btn sm" href="tel:${esc(c.phone)}">📞</a></td></tr>`;
+      }).join('') || '<tr><td colspan="11" class="muted">Aucun livreur.</td></tr>';
+    };
+    const load = async () => {
+      data = await api('GET', `/api/admin/ops?days=${opsF.days}`);
+      const sel = $('[data-oc]');
+      if (sel && sel.options.length <= 2) { sel.insertAdjacentHTML('beforeend', data.couriers.map((c) => `<option value="${c.id}">${vehIcon(c.vehicle)} ${esc(c.name)}</option>`).join('')); sel.value = opsF.courier; }
+      draw();
+    };
+    $('[data-ostep]').onclick = (e) => { const b = e.target.closest('[data-k]'); if (!b) return; opsF.step = b.dataset.k; sessionStorage.setItem('ops_step', opsF.step); $$('[data-ostep] [data-k]').forEach((x) => x.classList.toggle('on', x === b)); draw(); };
+    $('[data-oc]').onchange = (e) => { opsF.courier = e.target.value; sessionStorage.setItem('ops_c', opsF.courier); fitted = false; draw(); };
+    $('[data-ok2]').onchange = (e) => { opsF.kind = e.target.value; draw(); };
+    $('[data-od]').onchange = (e) => { opsF.days = e.target.value; sessionStorage.setItem('ops_days', opsF.days); load(); };
+    $('[data-oq]').oninput = (e) => { opsF.q = e.target.value.trim(); draw(); };
+    liveTimer = every(10000, load);
+  },
+
   async dash() {
-    const [s, rep, comp] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`), api('GET', '/api/admin/complaints')]);
+    const [s, rep, comp, ops] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`), api('GET', '/api/admin/complaints'), api('GET', '/api/admin/ops?days=1').catch(() => null)]);
+    const og = (k) => (ops?.parcels || []).filter((p) => opsGroup(p) === k).length;
     main.innerHTML = head('Tableau de bord', `<span class="small muted">${new Date().toLocaleString('fr-FR')}</span>`) + `
       <h3>📦 Colis du centre</h3><div class="kpis">
         ${kpi('Colis livrés aujourd\'hui', s.parcels.delivered_today || 0)}${kpi('Frais encaissés aujourd\'hui', ar(s.parcels.fees_today))}
         ${kpi('En cours', s.parcels.open || 0)}${kpi('À programmer', s.parcels.pending || 0, s.parcels.pending ? 'alert' : '')}
         ${kpi('Argent chez les livreurs', ar(s.parcels.cash_with_couriers))}${kpi('À rendre aux expéditeurs', s.parcels.to_return || 0)}</div>
+      ${ops ? `<div class="panel" style="margin:10px 0"><div class="row between"><h3>🚦 Livraisons du jour par livreur</h3><a class="btn sm primary" href="#ops">Ouvrir le suivi (carte + filtres) →</a></div>
+        <div class="row wrap small" style="gap:14px;margin:4px 0 8px">⚠️ À valider <b>${og('review')}</b> · 📥 À répartir <b>${og('todo')}</b> · 🟢 À récupérer <b>${og('pickup')}</b> · 🏢 Au centre <b>${og('centre')}</b> · 🟠 En livraison <b>${og('delivery')}</b></div>
+        <div class="table-wrap"><table><thead><tr><th>Livreur</th><th>Récupérés</th><th>Livrés</th><th>Valeur livrée</th><th>Frais</th><th>Part centre</th><th>Part livreur</th><th>Réglé ?</th></tr></thead><tbody>
+        ${ops.couriers.filter((c) => c.stats?.picked || c.stats?.delivered || c.stats?.unpaid || c.online).map((c) => `<tr><td>${vehIcon(c.vehicle)} <b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'}</td><td>${c.stats.picked || 0}</td><td>${c.stats.delivered || 0}</td>
+          <td>${ar(c.stats.delivered_value || 0)}</td><td>${ar(c.stats.fees || 0)}</td><td>${ar(c.stats.centre_share || 0)}</td><td>${ar(c.stats.courier_share || 0)}</td>
+          <td>${c.stats.unpaid ? `<span style="color:var(--orange)">❌ ${c.stats.unpaid} non réglé(s)</span>` : '✅ Payé'}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Aucune activité aujourd\'hui.</td></tr>'}</tbody></table></div></div>` : ''}
       <h3>🛵 Courses express</h3><div class="kpis">
         ${kpi('Livraisons aujourd\'hui', `${s.today.delivered || 0} <span class="small muted">/ ${s.today.created || 0}</span>`)}
         ${kpi('Chiffre d\'affaires du jour', ar(s.today.revenue))}
@@ -282,6 +425,19 @@ const VIEWS = {
           <label class="field"><span>Répartition des nouveaux colis</span><select class="input" data-s="dispatch_mode"><option value="admin" ${s.dispatch_mode !== 'auto' ? 'selected' : ''}>Par l'admin (+ proposés aux livreurs en tournée sur le chemin, le premier qui confirme)</option><option value="auto" ${s.dispatch_mode === 'auto' ? 'selected' : ''}>Automatique (planning et trajets)</option></select></label>
           <div class="row"><label class="field grow"><span>Relais par le centre (2 livreurs)</span><select class="input" data-s="relay_enabled"><option value="1" ${s.relay_enabled !== '0' ? 'selected' : ''}>Oui</option><option value="0" ${s.relay_enabled === '0' ? 'selected' : ''}>Non</option></select></label><label class="field grow"><span>Photo obligatoire à la remise</span><select class="input" data-s="delivery_photo_required"><option value="1" ${s.delivery_photo_required !== '0' ? 'selected' : ''}>Oui</option><option value="0" ${s.delivery_photo_required === '0' ? 'selected' : ''}>Non</option></select></label></div>
           ${f('delivery_max_dist_m', 'Alerte si « remis » loin de l\'adresse (m)', 'Position GPS du livreur au moment de la remise')}</div>
+        <div class="panel stack"><h3>🕘 Heures de récupération et de livraison</h3>
+          <p class="tiny muted">Récupéré le matin → livré l'après-midi ; récupéré l'après-midi → livré le lendemain matin au plus tard. Le client peut demander un créneau plus tard.</p>
+          <div class="row">${f('am_start', 'Matin : début', '', 'text')}${f('am_end', 'Matin : fin', '', 'text')}</div>
+          <div class="row">${f('pm_start', 'Après-midi : début', '', 'text')}${f('pm_end', 'Après-midi : fin', '', 'text')}</div></div>
+        <div class="panel stack"><h3>⚖️ Valeur et poids</h3>
+          ${f('max_value', 'Valeur maximale sans validation (Ar)', 'Au-delà, le colis attend la validation de l\'admin')}
+          <div class="row">${f('bike_max_kg', 'Poids max vélo (kg)', 'Au-delà : moto seulement')}${f('moto_max_kg', 'Poids max moto (kg)', 'Au-delà : validation de l\'admin')}</div>
+          <div class="row">${f('weight_free_kg', 'Poids sans supplément (kg)')}${f('weight_step_kg', 'Par tranche de (kg)')}${f('weight_step_fee', 'Supplément par tranche (Ar)')}</div></div>
+        <div class="panel stack"><h3>💵 Part du centre sur les frais</h3>
+          <p class="tiny muted">Le reste revient au livreur qui livre ; la récupération est gratuite.</p>
+          <div class="row">${f('share_t1_max', 'Frais jusqu\'à (Ar)')}${f('share_t1', '→ part du centre (Ar)')}</div>
+          <div class="row">${f('share_t2_max', 'Frais jusqu\'à (Ar)')}${f('share_t2', '→ part du centre (Ar)')}</div>
+          ${f('share_t3', 'Au-delà → part du centre (Ar)')}</div>
         <div class="panel stack"><h3>Plateforme & paiements</h3>${f('platform_name', 'Nom', '', 'text')}${f('support_phone', 'Téléphone support', '', 'tel')}
           ${f('mvola_number', 'Numéro marchand MVola', '', 'text')}${f('orange_money_number', 'Numéro Orange Money', '', 'text')}${f('airtel_money_number', 'Numéro Airtel Money', '', 'text')}</div>
         <div class="panel"><div class="row between"><h3>Zones de service</h3><button class="btn sm" data-act="zone">＋ Zone</button></div>
@@ -551,6 +707,8 @@ const actions = {
     $('[data-glout]').textContent = url; $('[data-gltest]').href = url;
   },
   parcel: (el) => parcelDetail(+el.dataset.id),
+  sthread: (el) => { supportOpen = +el.dataset.id; show(); },
+  opsc: (el) => { opsF.courier = el.dataset.id; sessionStorage.setItem('ops_c', opsF.courier); const s2 = $('[data-oc]'); if (s2) s2.value = opsF.courier; show(); },
   settle: async (el) => {
     const v = await promptBox(`Encaisser — ${el.dataset.name}`, { label: 'Montant reçu du livreur (Ar)', type: 'number', value: el.dataset.amt });
     if (v == null || v === '') return;
@@ -775,6 +933,23 @@ async function parcelDetail(id) {
   const d = await shipDetail(id, { role: 'admin', onChange: () => show() });
   const s = d.shipment;
   const canPick = ['pending', 'assigned'].includes(s.status), canDel = canPick || ['to_centre', 'at_centre'].includes(s.step);
+  // Colis trop cher ou trop lourd : l'admin valide (en ajustant les frais) ou refuse.
+  if (s.review && s.status === 'pending') {
+    const rv = document.createElement('div');
+    rv.className = 'card stack'; rv.style.background = 'var(--sun-soft)'; rv.style.border = '0';
+    rv.innerHTML = `<b>⚠️ À valider : ${esc(s.review)}</b>
+      <div class="row wrap" style="gap:8px"><label class="field grow"><span>Frais (Ar)</span><input class="input" data-rfee inputmode="numeric" value="${s.fee}"></label>
+        <label class="field grow"><span>Motif si refus</span><input class="input" data-rreason value="Valeur ou poids trop élevé"></label></div>
+      <div class="row" style="gap:8px"><button class="btn primary grow" data-approve>✅ Valider</button><button class="btn danger grow" data-reject>❌ Refuser</button></div>`;
+    d.actions.prepend(rv);
+    rv.querySelector('[data-approve]').onclick = async () => {
+      try { await api('POST', `/api/admin/shipments/${s.id}/approve`, { fee: Number(rv.querySelector('[data-rfee]').value.replace(/\D/g, '')) || s.fee }); d.modal.close(); toast('Colis validé', 'ok'); show(); } catch (e) { toastErr(e); }
+    };
+    rv.querySelector('[data-reject]').onclick = async () => {
+      const reason = rv.querySelector('[data-rreason]').value.trim() || 'Refusé par le centre';
+      try { await api('POST', `/api/admin/shipments/${s.id}/reject`, { reason }); d.modal.close(); toast('Colis refusé', 'ok'); show(); } catch (e) { toastErr(e); }
+    };
+  }
   if (canDel) await suggestBox(d, s, canPick);
   if (!canPick) return;
   const sch = await api('GET', '/api/schedule');

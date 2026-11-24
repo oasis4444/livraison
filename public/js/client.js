@@ -1,7 +1,7 @@
 // Application Client : demande, négociation, suivi GPS en direct, paiement, évaluation.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications, setNotifOpener,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, geocode, reverse, getPosition, every, startNotifications, showNotifications, setNotifOpener, supportChat,
   profileForm, sendSOS, complaintForm, chatHtml, TANA, haversine,
 } from './core.js';
 import { c, shipCard, scheduleHtml, sendForm, shipDetail, stepLabel, stepBar, importForm } from './colis.js';
@@ -19,6 +19,7 @@ export async function mount(el) {
     <div class="topbar">
       <div class="brand-pill"><img src="/icon.svg" alt=""><span>Alefa</span></div>
       <div class="grow"></div>
+      <button class="icon-btn" data-act="support" title="Service client">💬</button>
       <button class="icon-btn" data-act="notifs" aria-label="${t('notifications')}">🔔<span class="badge-dot hidden" data-unread></span></button>
       <button class="icon-btn" data-act="profile" aria-label="${t('profile')}">👤</button>
     </div>
@@ -44,6 +45,7 @@ export async function mount(el) {
     }
     if (tg.type === 'delivery') { tab = 'home'; return renderHome(); }
     if (tg.type === 'payouts') { tab = 'colis'; return renderHome(); }
+    if (tg.type === 'support') return supportChat();
   });
   startNotifications((fresh) => {
     if (current && fresh.some((n) => n.delivery_id === current.id)) refreshCurrent();
@@ -292,6 +294,7 @@ async function endPicking(confirm) {
 const actions = {
   grip: () => sheet.classList.toggle('collapsed'),
   notifs: () => showNotifications(),
+  support: () => supportChat(($('[data-colis]')?._list || []).filter((x) => !['delivered', 'cancelled'].includes(x.status)).map((x) => x.ref)),
   profile: () => profileForm(),
   locate: () => locate(false).then(() => me && map?.setView(me, 16)),
   sos: () => sendSOS(current?.id),

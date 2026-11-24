@@ -387,3 +387,46 @@ export function profileForm() {
 export function chatHtml(msgs, myId) {
   return msgs.map((m) => `<div class="bubble ${m.sender_id === myId ? 'me' : ''}">${esc(m.body)}<time>${time(m.at)}</time></div>`).join('');
 }
+
+// ---------------------------------------------------------------- service client (client / livreur ↔ centre)
+const bubbles = (msgs, mineIsCentre) => msgs.map((x) => {
+  const mine = mineIsCentre ? x.from_centre : !x.from_centre;
+  return `<div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin:4px 0"><div style="max-width:80%;padding:8px 10px;border-radius:12px;background:${mine ? 'var(--green-soft)' : 'var(--bg)'}">
+    ${x.shipment ? `<div class="tiny muted">📦 ${esc(x.shipment)}</div>` : ''}<div class="small" style="white-space:pre-wrap">${esc(x.body)}</div>
+    <div class="tiny muted" style="text-align:right">${x.from_centre ? (x.author ? esc(x.author.split(' ')[0]) + ' · ' : '') + 'Alefa' : ''} ${dt(x.at)}</div></div></div>`;
+}).join('');
+export function chatPanel(el, { load, send, centre = false, refs = [] }) {
+  const mg = state.lang === 'mg';
+  el.innerHTML = `<div data-msgs style="max-height:50vh;min-height:160px;overflow:auto;padding:4px"></div>
+    <div class="stack" style="gap:6px;margin-top:8px">${refs.length ? `<select class="input" data-cref><option value="">${mg ? 'Momba ny colis (tsy voatery)' : 'À propos d\'un colis (facultatif)'}</option>${refs.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>` : ''}
+      <div class="row" style="gap:6px"><textarea class="input grow" data-cbody rows="2" placeholder="${mg ? 'Soraty eto ny hafatrao…' : 'Votre message…'}"></textarea><button class="btn primary" data-csend>➤</button></div></div>`;
+  const box = el.querySelector('[data-msgs]');
+  let last = '';
+  const refresh = async () => {
+    const msgs = await load();
+    const sig = msgs.map((m) => m.id).join(',');
+    if (sig === last) return;
+    last = sig;
+    box.innerHTML = bubbles(msgs, centre) || `<p class="muted small" style="text-align:center">${mg ? 'Manorata aminay, valianay haingana.' : 'Écrivez-nous, nous répondons rapidement.'}</p>`;
+    box.scrollTop = box.scrollHeight;
+  };
+  el.querySelector('[data-csend]').onclick = async () => {
+    const t = el.querySelector('[data-cbody]'), body = t.value.trim();
+    if (!body) return;
+    try { await send(body, el.querySelector('[data-cref]')?.value || undefined); t.value = ''; await refresh(); } catch (e) { toastErr(e); }
+  };
+  const timer = every(5000, refresh);
+  return { refresh, stop: () => timer.stop() };
+}
+// Fenêtre « 💬 Service client » pour un client ou un livreur.
+export async function supportChat(refs = []) {
+  const mg = state.lang === 'mg';
+  const m = modal(`💬 ${mg ? 'Service client Alefa' : 'Service client Alefa'}`, '<div data-chat></div>');
+  const p = chatPanel(m.el.querySelector('[data-chat]'), {
+    load: async () => (await api('GET', '/api/support')).messages,
+    send: (body, ref) => api('POST', '/api/support', { body, ref }), refs,
+  });
+  const close = m.close; m.close = () => { p.stop(); close(); };
+  m.el.closest('.modal-back')?.addEventListener('click', (e) => { if (e.target.matches('[data-x], .modal-back')) p.stop(); });
+  return m;
+}

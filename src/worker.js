@@ -6,6 +6,8 @@ import { speedKmh, vehicleOf, VEHICLES,
 } from './lib.js';
 import { registerTsenaRoutes, syncTsena } from './tsena.js';
 import { registerTripRoutes, rateLimit, purgeLogs, nearest, simplify } from './trips.js';
+import { validHHMM } from './rules.js';
+import { registerSupportRoutes } from './support.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -645,6 +647,8 @@ async function notifications(ctx, env) {
   const ids = new Map();
   if (refs.length) for (const r of await all(env, `SELECT id, ref FROM shipments WHERE ref IN (${refs.map(() => '?').join(',')})`, ...refs)) ids.set(r.ref, r.id);
   const target = (n) => {
+    if (n.kind.startsWith('support:')) return { type: 'support', id: Number(n.kind.slice(8)) };
+    if (n.kind === 'support') return { type: 'support' };
     const ref = (`${n.title} ${n.body || ''}`.match(REF) || [])[0];
     if (ref && ids.has(ref)) return { type: 'shipment', id: ids.get(ref) };
     if (n.delivery_id) return { type: 'delivery', id: n.delivery_id };
@@ -652,6 +656,7 @@ async function notifications(ctx, env) {
     if (n.kind === 'axe') return { type: 'plan' };
     if (['sos', 'alert', 'complaint', 'incident'].includes(n.kind) || /^(⚠️ Alerte|🚨 SOS|Nouvelle réclamation)/.test(n.title)) return { type: 'alerts' };
     if (n.kind === 'shipment_pending') return { type: 'parcels' };
+    if (n.kind === 'shipment_review') return { type: 'parcels' };
     return null;
   };
   return json({ notifications: rows.map((n) => ({ ...n, target: target(n) })), unread: unread.n });
@@ -793,7 +798,8 @@ async function adminSettingsGet(ctx, env) {
 }
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
-  'bike_speed_kmh', 'moto_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m'];
+  'bike_speed_kmh', 'moto_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m',
+  'max_value', 'bike_max_kg', 'moto_max_kg', 'weight_free_kg', 'weight_step_kg', 'weight_step_fee', 'share_t1_max', 'share_t1', 'share_t2_max', 'share_t2', 'share_t3'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -806,6 +812,7 @@ async function adminSettingsPut(ctx, env) {
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
     if (['delivery_photo_required', 'relay_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'dispatch_mode' && !['admin', 'auto'].includes(val)) fail(400, 'invalid', 'Mode de répartition invalide');
+    if (['am_start', 'am_end', 'pm_start', 'pm_end'].includes(k) && !validHHMM(val)) fail(400, 'invalid', `Heure invalide pour ${k} (format 08:00)`);
     stmts.push(q(env, 'UPDATE settings SET value = ? WHERE key = ?', val, k));
     // Nouvelle adresse du centre : sa position GPS sera recherchée de nouveau (relais).
     if (k === 'centre_addr' && val !== cur.centre_addr && !('centre_lat' in (ctx.body.settings || {}))) stmts.push(q(env, "UPDATE settings SET value = '' WHERE key IN ('centre_lat','centre_lng')"));
@@ -1101,6 +1108,7 @@ route('POST', '/api/admin/users/:id/vehicle', ['admin'], adminSetVehicle);
 registerShipmentRoutes(route);
 registerTsenaRoutes(route);
 registerTripRoutes(route);
+registerSupportRoutes(route);
 
 // API publique v1 : appelée par les logiciels de vente (souvent côté serveur, CORS ouvert pour les intégrations web).
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, Idempotency-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };

@@ -68,7 +68,8 @@ test('nouveau colis sur le chemin de deux livreurs : le premier qui confirme le 
   id2 = r.data.shipment.id;
   assert.equal(r.data.shipment.status, 'pending');
   assert.equal(r.data.shipment.payment.value_paid, true);
-  assert.equal(r.data.shipment.amount_to_collect, 3000, 'marchandise déjà payée : le livreur n\'encaisse que les frais');
+  assert.equal(r.data.shipment.amount_to_collect, 0, 'marchandise déjà payée : rien à encaisser à la livraison');
+  assert.equal(r.data.shipment.payment.fee_at_pickup, 3000, 'les frais sont payés à la récupération');
   const adminNote = notes(uid('+261340000000')).filter((n) => n.title === '📦 Nouveau colis à répartir').pop();
   assert.match(adminNote.body, /proposé à (Hery, Naina|Naina, Hery)/);
   assert.ok(!notes(uid('+261341000003')).some((n) => n.body.includes(r.data.shipment.ref)), 'pas proposé au livreur du sud');
@@ -104,14 +105,18 @@ test('l\'admin répartit lui-même : l\'offre se ferme pour les autres', async (
   assert.equal((await call('POST', `/api/courier/offers/${id1}/take`, {}, c1)).status, 409);
 });
 
-test('marchandise déjà payée : le livreur encaisse seulement les frais, la boutique n\'attend rien du centre', async () => {
-  assert.equal((await call('POST', `/api/shipments/${id2}/pickup`, { value: 15000, photo: PHOTO }, c2)).status, 200);
+test('marchandise déjà payée : frais encaissés à la récupération, rien à la livraison', async () => {
+  const p = await call('POST', `/api/shipments/${id2}/pickup`, { value: 15000, photo: PHOTO }, c2);
+  assert.equal(p.status, 200); assert.equal(p.data.pickup_fee, 3000); assert.equal(p.data.amount_to_collect, 0);
   const tok = db.prepare('SELECT track_token FROM shipments WHERE id = ?').get(id2).track_token;
   const tr = (await call('GET', `/api/track/${tok}`)).data;
-  assert.equal(tr.amount_to_pay, 3000); assert.equal(tr.value_paid, true);
+  assert.equal(tr.amount_to_pay, 0); assert.equal(tr.value_paid, true);
   await call('POST', `/api/track/${tok}/confirm`, {});
   const d = await call('POST', `/api/shipments/${id2}/deliver`, { photo: PHOTO }, c2);
-  assert.equal(d.status, 200); assert.equal(d.data.collected, 3000); assert.equal(d.data.delivered, true);
+  assert.equal(d.status, 200); assert.equal(d.data.collected, 0); assert.equal(d.data.delivered, true);
+  const s = (await call('GET', `/api/shipments/${id2}`, null, admin)).data.shipment;
+  assert.deepEqual(s.shares, { centre: 1000, courier: 2000, paid: false });
+  assert.equal(s.payment.pickup_fee, 3000);
 });
 
 test('province : ville et coopérative obligatoires ; remise avec véhicule, frais de transport PA / payé', async () => {
@@ -140,10 +145,17 @@ test('province : ville et coopérative obligatoires ; remise avec véhicule, fra
 });
 
 test('caisse : marchandise payée par Mobile Money et frais Alefa de la province retenus sur le paiement de la boutique', async () => {
+  const dues = (await call('GET', '/api/admin/cash', null, admin)).data.couriers;
+  // Naina : 3 000 de frais encaissés à la récupération − sa part 2 000 = 1 000 à remettre ;
+  // Hery : province, rien encaissé, sa part 2 000 → le centre lui doit 2 000.
+  assert.equal(dues.find((x) => x.name === 'Naina Rabe').cash, 1000);
+  assert.equal(dues.find((x) => x.name === 'Hery Rakoto').cash, -2000);
   for (const c of [c1, c2]) {
     const me = (await call('GET', '/api/me', null, c)).data.user.id;
-    await call('POST', `/api/admin/couriers/${me}/settle`, {}, admin);
+    assert.equal((await call('POST', `/api/admin/couriers/${me}/settle`, {}, admin)).status, 200);
   }
+  assert.equal((await call('GET', '/api/admin/cash', null, admin)).data.couriers.length, 0);
+  assert.equal((await call('GET', `/api/shipments/${id2}`, null, admin)).data.shipment.shares.paid, true);
   const v = (await call('GET', '/api/admin/cash', null, admin)).data.vendors.find((x) => x.id === sender);
   assert.equal(v.sales, 0, 'T-2 déjà payée à la boutique par Mobile Money');
   assert.equal(v.province_fees, 3000); assert.equal(v.due, -3000);

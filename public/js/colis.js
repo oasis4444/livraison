@@ -58,11 +58,21 @@ const dayLabel = (ms) => {
   return d === iso(Date.now()) ? c('today') : d === iso(Date.now() + 864e5) ? c('tomorrow') : `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 };
 
+// Créneaux prévus : récupération et livraison (matin / après-midi).
+export function winTxt(s) {
+  if (!s.windows || ['delivered', 'refused', 'cancelled'].includes(s.status)) return '';
+  const mg = state.lang === 'mg';
+  const w = ([a, b]) => `${dayLabel(a)} ${time(a)}–${time(b)}`;
+  return [['pending', 'assigned'].includes(s.status) ? `🕘 ${mg ? 'Haka' : 'Récup.'} ${w(s.windows.pickup)}` : null, `🏁 ${mg ? 'Hatitra' : 'Livraison'} ${w(s.windows.delivery)}`].filter(Boolean).join(' · ');
+}
+
 export function shipCard(s, extra = '') {
   return `<div class="card" data-act="ship" data-id="${s.id}" style="cursor:pointer">
     <div class="row between"><span class="small"><b>${esc(s.ref)}</b>${s.external_ref ? ` <span class="muted">· ${esc(s.external_ref)}</span>` : ''}</span>${shipPill(s)}</div>
     <div class="route-line" style="margin:6px 0"><span class="dot"></span><span class="small ellipsis">${esc(s.sender.name)} — ${esc(s.sender.address)}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small ellipsis">${esc(s.recipient.name)} — ${esc(s.recipient.address)}</span></div>
     ${sizeTxt(s) ? `<div class="tiny muted ellipsis">📦 ${esc(sizeTxt(s))}</div>` : ''}
+    ${winTxt(s) ? `<div class="tiny ellipsis">${winTxt(s)}</div>` : ''}
+    ${s.review ? `<div class="tiny" style="color:var(--orange)">⚠️ ${state.lang === 'mg' ? 'Andrasana ny fanamarinan\'ny centre' : 'En attente de validation du centre'}</div>` : ''}
     ${s.relay ? `<div class="tiny" style="color:var(--blue,#2563eb)">🏢 ${state.lang === 'mg' ? 'Relais' : 'Relais'} : ${esc(s.pickup_courier?.name?.split(' ')[0] || '?')} → centre → ${esc(s.delivery_courier?.name?.split(' ')[0] || '?')}</div>` : ''}
     <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${s.province ? `🚌 ${esc(s.province.city)}` : ''}${s.payment?.value_paid ? '📱 ' : ''}${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
 }
@@ -115,6 +125,8 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
       <label class="field"><span>${mg ? 'Koperativa' : 'Coopérative'} *</span><input class="input" data-coop placeholder="Kofmad, Sonatra…"></label>
       <div class="tiny muted">${mg ? 'Ny « adiresy fanaterana » dia ny toeram-pijanonan\'ny koperativa eto Antananarivo. Ny livreur no manatitra any, maka sary, ary manoratra ny fiara sy ny saran-dalana (PA na efa voaloa).' : 'L\'« adresse de livraison » est la gare de la coopérative à Antananarivo. Le livreur y remet le colis, photographie, et note le véhicule et les frais de transport (PA ou déjà payés).'}</div></div>
     <label class="field"><span>${state.lang === 'mg' ? 'Laharan\'ny baiko (tsy voatery)' : 'N° de commande (facultatif)'}</span><input class="input" data-ref value="${esc(P.ref || '')}" placeholder="CMD-1042"></label>
+    <div class="row wrap" data-win style="gap:8px"><label class="field grow"><span>🕘 ${mg ? 'Ora hakana ny entana' : 'Récupération'}</span><select class="input" data-pw></select></label>
+      <label class="field grow"><span>🏁 ${mg ? 'Ora hanaterana' : 'Livraison'}</span><select class="input" data-dw2></select></label></div>
     <div class="card" style="background:var(--bg);border:0" data-q><span class="small muted">${c('fee')} : —</span></div>
     <p class="tiny muted">${c('pay_info')}</p>
     <button class="btn primary lg block" data-ok>${c('create')}</button></div>`);
@@ -123,20 +135,41 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
   const quote = async () => {
     const box = el.querySelector('[data-q]');
     if (!f.drop) return;
-    const r = await api('POST', '/api/shipments/quote', { drop_lat: f.drop.lat, drop_lng: f.drop.lng }).catch(() => null);
-    if (!r) return;
     const v = Number(el.querySelector('[data-v]').value.replace(/\D/g, '')) || 0;
+    const r = await api('POST', '/api/shipments/quote', { drop_lat: f.drop.lat, drop_lng: f.drop.lng, value: v, weight: el.querySelector('[data-kg]').value }).catch(() => null);
+    if (!r) return;
     const prov = el.querySelector('[data-prov]').checked;
     const due = prov ? 0 : (f.pay === 'mm' ? 0 : v) + r.fee;
-    box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div><div class="row between"><span>${c('to_collect')}</span><b>${ar(due)}</b></div>
+    box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div>${r.weight_extra ? `<div class="tiny muted">${mg ? 'Anatin\'izany ny lanja' : 'Dont supplément poids'} : ${ar(r.weight_extra)}${r.moto_only ? ' · 🏍️ moto' : ''}</div>` : ''}
+      <div class="row between"><span>${c('to_collect')}</span><b>${ar(due)}</b></div>
+      ${f.pay === 'mm' && !prov ? `<div class="small">💵 ${mg ? 'Ny frais' : 'Frais'} <b>${ar(r.fee)}</b> ${mg ? 'aloanao amin\'ny livreur rehefa haka ny entana' : 'à payer au livreur à la récupération'}</div>` : ''}
+      ${r.review ? `<div class="small" style="color:var(--orange)">⚠️ ${r.review === 'value' ? (mg ? `Mihoatra ny ${ar(r.max_value)} ny vidin'entana : ny centre aloha no manamarina.` : `Valeur au-delà de ${ar(r.max_value)} : le centre doit d'abord valider.`) : (mg ? 'Mavesatra loatra : ny centre aloha no manamarina sy milaza ny vidiny.' : 'Trop lourd : le centre doit d\'abord valider et fixer le prix.')}</div>` : ''}
       ${prov ? `<div class="tiny muted">${mg ? 'Province : tsy misy vola raisina any amin\'ny koperativa ; esorina amin\'ny vola aloa anao ny frais Alefa.' : 'Province : rien à encaisser à la coopérative ; les frais Alefa sont retenus sur votre paiement.'}</div>` : f.pay === 'mm' ? `<div class="tiny muted">${mg ? 'Efa voaloa ny entana : ny frais ihany no raisin\'ny livreur.' : 'Marchandise déjà payée : le livreur n\'encaisse que les frais.'}</div>` : ''}
       ${adminMode ? `<label class="field" style="margin-top:8px"><span>${c('departure')}</span><select class="input" data-dep><option value="">${c('auto_dep')}</option>
       ${r.departures.map((d) => `<option value="${d.slot_id}|${d.departure_at}">${dayLabel(d.departure_at)} ${time(d.departure_at)} · ${esc(d.axe)}${d.from_addr ? ` (${esc(d.from_addr.split(',')[0])} → ${esc(d.to_addr.split(',')[0])})` : ''} · ${vehIcon(d.vehicle)} ${esc(d.courier)}</option>`).join('')}</select></label>
       ${r.departures.length ? '' : `<div class="tiny" style="color:var(--orange)">${c('no_dep')}</div>`}` : `<div class="tiny muted" data-qok>${mg ? 'Ny centre no mandahatra ny livreur haka ny entana.' : 'Le centre programme le livreur qui viendra récupérer le colis.'}</div>`}`;
   };
+  // Créneaux matin / après-midi : récupération (le plus tôt par défaut) et livraison (au plus tard le créneau suivant).
+  let wins = [];
+  const winLabel = (w) => {
+    const d0 = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10), d = new Date(w.from + 3 * 3600e3).toISOString().slice(0, 10);
+    const day = d === d0 ? (mg ? 'Anio' : 'Aujourd\'hui') : d === new Date(Date.now() + 27 * 3600e3).toISOString().slice(0, 10) ? (mg ? 'Rahampitso' : 'Demain') : dayLabel(w.from);
+    return `${day} ${w.part === 'am' ? (mg ? 'maraina' : 'matin') : (mg ? 'tolakandro' : 'après-midi')} (${time(w.from)}–${time(w.to)})`;
+  };
+  const fillDeliv = () => {
+    const pi = Math.max(0, wins.findIndex((w) => String(w.from) === el.querySelector('[data-pw]').value));
+    const later = wins.slice(pi + 1);
+    el.querySelector('[data-dw2]').innerHTML = later.map((w, i) => `<option value="${i ? w.from : ''}">${i ? '' : (mg ? 'Haingana indrindra · ' : 'Au plus tôt · ')}${winLabel(w)}</option>`).join('');
+  };
+  api('GET', '/api/shipments/windows').then((r) => {
+    wins = r.windows;
+    el.querySelector('[data-pw]').innerHTML = wins.slice(0, 6).map((w, i) => `<option value="${w.from}">${i ? '' : (mg ? 'Haingana indrindra · ' : 'Au plus tôt · ')}${winLabel(w)}</option>`).join('');
+    fillDeliv();
+  }).catch(() => el.querySelector('[data-win]').classList.add('hidden'));
+  el.addEventListener('change', (e) => { if (e.target.matches('[data-pw]')) fillDeliv(); });
   el.addEventListener('input', (e) => {
     const k = e.target.dataset.a;
-    if (e.target.matches('[data-v]')) return quote();
+    if (e.target.matches('[data-v], [data-kg]')) return quote();
     if (!k) return;
     f[k] = null;
     clearTimeout(tmr);
@@ -185,6 +218,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         weight: txt('[data-kg]') ? txt('[data-kg]').replace(',', '.') : undefined,
         slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
         value_paid: f.pay === 'mm',
+        pickup_at: Number(el.querySelector('[data-pw]').value) || undefined, deliver_at: Number(el.querySelector('[data-dw2]').value) || undefined,
         province: el.querySelector('[data-prov]').checked || undefined, dest_city: txt('[data-city]') || undefined, coop_name: txt('[data-coop]') || undefined,
       });
       m.close();
@@ -241,6 +275,10 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     ${s.delivery_proof && (isAdmin || role === 'sender') ? `<div class="card small" style="background:var(--bg);border:0">🧾 <b>${state.lang === 'mg' ? 'Porofo fanaterana' : 'Preuve de livraison'}</b>
       ${s.delivery_proof.dist_m != null ? ` · 📍 ${s.delivery_proof.dist_m} m ${state.lang === 'mg' ? 'miala ny adiresy' : 'de l\'adresse'}${s.delivery_proof.dist_m > 300 ? ' ⚠️' : ' ✅'}` : ' · 📍 —'}
       ${s.delivery_proof.photo ? `<img data-dph alt="" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;margin-top:6px;background:var(--bg)">` : ''}</div>` : ''}
+    ${winTxt(s) ? `<div class="small">${winTxt(s)}</div>` : ''}
+    ${s.review ? `<div class="card small" style="background:var(--sun-soft);border:0">⚠️ <b>${state.lang === 'mg' ? 'Andrasana ny fanamarinan\'ny centre' : 'En attente de validation du centre'}</b> · ${esc(s.review)}</div>` : ''}
+    ${s.payment?.fee_at_pickup ? `<div class="small">💵 ${state.lang === 'mg' ? 'Frais raisina rehefa haka' : 'Frais encaissés à la récupération'} : <b>${ar(s.payment.fee_at_pickup)}</b>${s.payment.pickup_fee != null ? ' ✓' : ''}</div>` : ''}
+    ${s.shares && (isCourier || isAdmin) ? `<div class="small muted">${state.lang === 'mg' ? 'Anjara' : 'Parts'} : centre ${ar(s.shares.centre)} · ${state.lang === 'mg' ? 'livreur' : 'livreur'} ${ar(s.shares.courier)} · ${s.shares.paid ? '✅ ' + (state.lang === 'mg' ? 'voaloa' : 'réglé') : '⏳ ' + (state.lang === 'mg' ? 'tsy mbola voaloa' : 'non réglé')}</div>` : ''}
     ${provinceCard(s)}
     ${s.payment?.value_paid ? `<div class="card small" style="background:var(--green-soft);border:0">📱 <b>${state.lang === 'mg' ? 'Efa voaloa Mobile Money ny entana' : 'Marchandise déjà payée par Mobile Money'}</b>${s.payment.ref ? ` · ${esc(s.payment.ref)}` : ''}<br>${state.lang === 'mg' ? 'Ny frais ihany no raisina.' : 'Seuls les frais sont à encaisser.'}</div>` : ''}
     <div class="card" style="background:var(--bg);border:0">
@@ -439,7 +477,8 @@ function pickupForm(s, done) {
   let photo = null;
   const el = m.el;
   const tot = () => { el.querySelector('[data-tot]').innerHTML = s.province ? `🚌 ${esc(s.province.city)} · ${esc(s.province.coop)} — ${state.lang === 'mg' ? 'tsy misy vola raisina' : 'rien à encaisser'}`
-    : `${c('to_collect')} : <b>${ar((s.payment?.value_paid ? 0 : Number(el.querySelector('[data-v]').value) || 0) + (Number(el.querySelector('[data-fee]').value) || 0))}</b>${s.payment?.value_paid ? ` <span class="muted">(📱 ${state.lang === 'mg' ? 'efa voaloa ny entana' : 'marchandise déjà payée'})</span>` : ''}`; };
+    : s.payment?.value_paid ? `📱 ${state.lang === 'mg' ? 'Efa voaloa ny entana.' : 'Marchandise déjà payée.'}<br>💵 <b>${state.lang === 'mg' ? 'Raiso amin\'ny mpandefa izao ny frais' : 'Encaissez maintenant les frais auprès de l\'expéditeur'} : ${ar(Number(el.querySelector('[data-fee]').value) || 0)}</b><br><span class="tiny muted">${state.lang === 'mg' ? 'Tsy anao io vola io : atolory ny centre (an\'ny livreur manatitra).' : 'Cet argent n\'est pas à vous : remettez-le au centre (il revient au livreur qui livre).'}</span>`
+    : `${c('to_collect')} : <b>${ar((Number(el.querySelector('[data-v]').value) || 0) + (Number(el.querySelector('[data-fee]').value) || 0))}</b>`; };
   tot(); el.addEventListener('input', tot);
   el.querySelector('[data-file]').addEventListener('change', async (e) => {
     const f = e.target.files?.[0]; if (!f) return;

@@ -1,7 +1,7 @@
 // Application Livreur (vélo) : disponibilité, partage GPS, demandes proches, négociation, livraison avec PIN, revenus.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, profileForm,
+  makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, supportChat, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel } from './colis.js';
@@ -18,6 +18,7 @@ export async function mount(el) {
     <div class="topbar">
       <div class="brand-pill"><img src="/icon.svg" alt=""><span>Alefa <span class="muted small">${t('courier')}</span></span></div>
       <div class="grow"></div>
+      <button class="icon-btn" data-act="support" title="Service client">💬</button>
       <button class="icon-btn" data-act="notifs">🔔<span class="badge-dot hidden" data-unread></span></button>
       <button class="icon-btn" data-act="profile">👤</button>
     </div>
@@ -32,6 +33,7 @@ export async function mount(el) {
   setNotifOpener((tg) => {
     if (tg.type === 'shipment') { if (tab !== 'colis') { tab = 'colis'; lastSig = ''; render(); } return openShip(tg.id); }
     if (tg.type === 'plan') { tab = 'plan'; lastSig = ''; return render(); }
+    if (tg.type === 'support') return supportChat();
     if (tg.type === 'delivery') { tab = 'req'; lastSig = ''; render(); return openRequest?.(tg.id); }
   });
   startNotifications((fresh) => {
@@ -407,6 +409,7 @@ async function loadHistory() {
 const actions = {
   grip: () => sheet.classList.toggle('collapsed'),
   notifs: () => showNotifications(),
+  support: () => supportChat(),
   profile: () => profileForm(),
   reload: () => location.reload(),
   center: () => pos && map?.setView(pos, 16),

@@ -4,6 +4,7 @@
 import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
 import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL, slotRoute, courierAxeState } from './worker.js';
 import { matchTrip, logSync, nearest, simplify } from './trips.js';
+import { planWindows, nextWindows, weightRule, centreShare } from './rules.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
 const atCentre = (s) => s.status === 'picked_up' && !!s.relay && !!s.centre_in_at && !s.centre_out_at;
@@ -61,7 +62,8 @@ export const STEP_LABELS = STEP_FR;
 
 // Montant à encaisser auprès du destinataire : marchandise (sauf si déjà payée par Mobile Money) + frais.
 // Colis pour la province : rien à encaisser à la coopérative (frais Alefa retenus sur le paiement de l'expéditeur).
-const toPay = (s) => (s.province ? 0 : (s.value_paid ? 0 : s.value ?? s.declared_value) + s.fee);
+// Marchandise payée par Mobile Money : les frais sont encaissés à la récupération, rien à la livraison.
+const toPay = (s) => (s.province || s.value_paid ? 0 : (s.value ?? s.declared_value) + s.fee);
 
 export function publicShipment(s) {
   return {
@@ -78,7 +80,9 @@ export function publicShipment(s) {
     centre_in_at: s.centre_in_at ?? null, centre_out_at: s.centre_out_at ?? null,
     delivery_proof: s.delivery_photo || s.delivered_lat != null ? { photo: !!s.delivery_photo, lat: s.delivered_lat, lng: s.delivered_lng, dist_m: s.delivered_dist_m } : null,
     axe: s.axe_name ?? s.trip_label ?? null, departure_at: s.departure_at, trip_id: s.trip_id ?? null, accepted_at: s.accepted_at ?? null, track_token: s.track_token ?? null,
-    payment: { value_paid: !!s.value_paid, ref: s.value_paid_ref ?? null },
+    payment: { value_paid: !!s.value_paid, ref: s.value_paid_ref ?? null, fee_at_pickup: s.value_paid && !s.province ? s.fee : 0, pickup_fee: s.pickup_fee ?? null },
+    windows: s.pickup_from ? { pickup: [s.pickup_from, s.pickup_to], delivery: [s.deliver_from, s.deliver_to] } : null,
+    review: s.review ?? null, moto_only: !!s.moto_only, shares: s.centre_share != null ? { centre: s.centre_share, courier: s.courier_share, paid: !!s.cash_settled_at } : null,
     province: s.province ? { city: s.dest_city, coop: s.coop_name, plate: s.coop_plate ?? null, driver_phone: s.coop_driver_phone ?? null, fee: s.coop_fee ?? null, fee_status: s.coop_fee_status ?? null } : null,
     returned: !!s.returned_at, created_at: s.created_at, assigned_at: s.assigned_at, picked_at: s.picked_at, done_at: s.done_at, returned_at: s.returned_at,
   };
@@ -184,10 +188,10 @@ async function legDeparture(env, from, to, exclude, deps) {
 // 3) Sinon, premier départ dont l'axe couvre la livraison (le livreur fait le détour).
 // Les livreurs qui ont déjà refusé ce colis sont écartés.
 export async function pickDeparture(env, s) {
-  if (s.drop_lat == null) return null;
+  if (s.drop_lat == null || s.review) return null;
   const exclude = refusedBy(s);
   const P = s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, D = [s.drop_lat, s.drop_lng];
-  const deps = (await departures(env)).filter((d) => !d.started);
+  const deps = (await departures(env)).filter((d) => !d.started && (!s.moto_only || d.vehicle === 'moto'));
   const direct = await legDeparture(env, P, D, exclude, deps);
   if (direct && (!P || direct.trip_id || inAxe(direct, P[0], P[1]))) return direct;
   const st = await settings(env);
@@ -255,7 +259,7 @@ export function parseSize(b) {
   const num = (v0, max, name) => { const v = typeof v0 === 'string' ? v0.trim().replace(',', '.') : v0; return v === undefined || v === null || v === '' ? null : (Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) <= max ? Math.round(Number(v) * 10) / 10 : fail(400, 'invalid', `${name} invalide`)); };
   const dims = [num(l, 300, 'Longueur'), num(w, 300, 'Largeur'), num(h, 300, 'Hauteur')];
   if (dims.some((x) => x == null) && dims.some((x) => x != null)) fail(400, 'invalid', 'Indiquez les 3 mesures du colis (longueur × largeur × hauteur)');
-  return { dims: dims[0] == null ? null : dims, weight: num(b.weight ?? b.weight_kg ?? b.poids, 200, 'Poids') };
+  return { dims: dims[0] == null ? null : dims, weight: num(b.weight ?? b.weight_kg ?? b.poids ?? b.size?.weight ?? b.size?.kg, 200, 'Poids') };
 }
 
 // ---------------------------------------------------------------- création (application, admin, API)
@@ -284,8 +288,16 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
   // Marchandise déjà payée par le destinataire (Mobile Money) : le livreur n'encaisse que les frais.
   const value_paid = [true, 1, '1', 'true', 'mobile_money', 'paid'].includes(b.value_paid ?? b.payment) ? 1 : 0;
   const value_paid_ref = value_paid ? str(b.value_paid_ref ?? b.payment_ref ?? '', { max: 60 }) || null : null;
-  let fee = await feeFor(env, dlat, dlng);
+  const st = await settings(env);
+  // Poids : supplément sur les frais ; trop lourd pour un vélo → moto ; trop lourd ou trop cher → validation par l'admin.
+  const wr = weightRule(st, size.weight);
+  let fee = (await feeFor(env, dlat, dlng)) + wr.extra;
   if (actor?.role === 'admin' && b.fee != null) fee = int(b.fee, { min: 0, max: 1_000_000, name: 'Frais' });
+  const maxValue = Number(st.max_value || 300000);
+  const ar = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const review = [declared > maxValue ? `valeur ${ar(declared)} Ar > ${ar(maxValue)} Ar` : null,
+    wr.too_heavy ? `poids ${size.weight} kg > ${st.moto_max_kg} kg` : null].filter(Boolean).join(' · ') || null;
+  const win = planWindows(st, now(), { pickup_at: b.pickup_at, deliver_at: b.deliver_at });
   let ref = genRef();
   while (await one(env, 'SELECT id FROM shipments WHERE ref = ?', ref)) ref = genRef();
   const res = await run(env, `INSERT INTO shipments (ref, source, merchant_id, external_ref, sender_id, sender_name, sender_phone, pickup_addr, pickup_lat, pickup_lng,
@@ -298,16 +310,24 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
     str(b.recipient?.name ?? b.recipient_name, { min: 2, max: 80, name: 'Nom du destinataire' }), recipient_phone,
     str(b.recipient?.address ?? b.drop_addr, { min: 3, max: 200, name: 'Adresse de livraison' }), dlat, dlng,
     str(b.description ?? b.contents, { max: 300 }), declared, fee, now(), String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0'));
-  await run(env, `UPDATE shipments SET track_token = ?, dim_l = ?, dim_w = ?, dim_h = ?, weight_kg = ?, value_paid = ?, value_paid_ref = ?, province = ?, dest_city = ?, coop_name = ? WHERE id = ?`, randomHex(12),
-    size.dims?.[0] ?? null, size.dims?.[1] ?? null, size.dims?.[2] ?? null, size.weight, value_paid, value_paid_ref, province ? 1 : 0, dest_city, coop_name, res.meta.last_row_id);
+  await run(env, `UPDATE shipments SET track_token = ?, dim_l = ?, dim_w = ?, dim_h = ?, weight_kg = ?, value_paid = ?, value_paid_ref = ?, province = ?, dest_city = ?, coop_name = ?,
+      pickup_from = ?, pickup_to = ?, deliver_from = ?, deliver_to = ?, review = ?, moto_only = ? WHERE id = ?`, randomHex(12),
+    size.dims?.[0] ?? null, size.dims?.[1] ?? null, size.dims?.[2] ?? null, size.weight, value_paid, value_paid_ref, province ? 1 : 0, dest_city, coop_name,
+    win.pickup_from, win.pickup_to, win.deliver_from, win.deliver_to, review, wr.moto_only ? 1 : 0, res.meta.last_row_id);
   let s = await loadShipment(env, res.meta.last_row_id);
   await logEvent(env, s, 'pending', source === 'api' ? `API ${merchant?.name}` : null, actor);
   // Départ choisi explicitement, sinon attribution automatique au prochain départ couvrant la destination.
   let dep = null;
+  if (review) {
+    const admins = await all(env, "SELECT id FROM users WHERE role = 'admin' AND status = 'active'");
+    await notify(env, admins.map((a) => a.id), 'shipment_review', '⚠️ Colis à valider', `${s.ref} · ${review} · ${s.pickup_addr} → ${s.drop_addr}`);
+    await logEvent(env, s, 'review', `À valider par le centre : ${review}`, null);
+    return { shipment: s };
+  }
   if (b.slot_id && b.departure_at) dep = (await departures(env)).find((d) => d.slot_id === Number(b.slot_id) && d.departure_at === Number(b.departure_at) && !d.started);
   // Mode « admin » (par défaut) : tout arrive chez l'admin, qui répartit ; les livreurs déjà partis du centre
   // et qui passent par le lieu de récupération reçoivent l'offre (le premier qui confirme prend le colis).
-  const adminMode = (await settings(env)).dispatch_mode === 'admin';
+  const adminMode = st.dispatch_mode === 'admin';
   if (!dep && b.auto_assign !== false && !adminMode) dep = await pickDeparture(env, s);
   if (dep) s = await assignTo(env, s, dep, actor);
   else {
@@ -337,10 +357,16 @@ async function schedule(ctx, env) {
 
 async function quoteShipment(ctx, env) {
   const [lat, lng] = optCoord(ctx.body.drop_lat, ctx.body.drop_lng);
-  const fee = await feeFor(env, lat, lng);
+  const st = await settings(env);
+  const w = Number(String(ctx.body.weight ?? ctx.body.weight_kg ?? '').replace(',', '.')) || 0;
+  const wr = weightRule(st, w);
+  const base = await feeFor(env, lat, lng);
+  const value = Number(ctx.body.value ?? ctx.body.declared_value ?? 0) || 0;
+  const maxValue = Number(st.max_value || 300000);
   // Les heures & axes des livreurs ne sont pas montrés aux clients : c'est le centre qui programme.
   const deps = lat == null || ctx.user?.role !== 'admin' ? [] : (await departures(env)).filter((d) => !d.started && inAxe(d, lat, lng));
-  return json({ fee, departures: deps.map(({ route, ...d }) => d) });
+  return json({ fee: base + wr.extra, base_fee: base, weight_extra: wr.extra, moto_only: wr.moto_only,
+    review: value > maxValue ? 'value' : wr.too_heavy ? 'weight' : null, max_value: maxValue, departures: deps.map(({ route, ...d }) => d) });
 }
 
 async function appCreate(ctx, env) {
@@ -456,8 +482,9 @@ async function setFee(ctx, env) {
 }
 
 async function assign(ctx, env) {
-  const s = await loadShipment(env, ctx.params.id);
+  let s = await loadShipment(env, ctx.params.id);
   if (!['pending', 'assigned'].includes(s.status)) fail(409, 'bad_status', 'Le colis est déjà récupéré ou clôturé');
+  if (s.review) { await run(env, 'UPDATE shipments SET review = NULL WHERE id = ?', s.id); await logEvent(env, s, 'approved', 'Validé par le centre (attribution)', ctx.user); s = await loadShipment(env, s.id); }
   let dep;
   if (ctx.body.auto) { dep = await pickDeparture(env, s); if (!dep) fail(404, 'no_departure', 'Aucun départ à venir ne couvre cette destination'); }
   else if (ctx.body.slot_id) {
@@ -573,14 +600,56 @@ export async function courierStats(env, days, courierId = null) {
   const from = mgMidnight(-(Math.max(1, days) - 1));
   const cs = await all(env, `SELECT id, name FROM users WHERE role = 'courier' AND status = 'active' ${courierId ? 'AND id = ?' : ''} ORDER BY name`, ...(courierId ? [courierId] : []));
   const ev = await all(env, `SELECT user_id, status, COUNT(*) AS n FROM shipment_events WHERE at >= ? AND status IN ('picked_up','at_centre','centre_out') AND user_id IS NOT NULL GROUP BY user_id, status`, from);
-  const done = await all(env, `SELECT courier_id, status, COUNT(*) AS n, COALESCE(SUM(collected), 0) AS cash FROM shipments WHERE done_at >= ? AND status IN ('delivered','refused') GROUP BY courier_id, status`, from);
+  const done = await all(env, `SELECT courier_id, status, COUNT(*) AS n, COALESCE(SUM(collected), 0) AS cash, COALESCE(SUM(value), 0) AS value, COALESCE(SUM(fee), 0) AS fees,
+      COALESCE(SUM(centre_share), 0) AS centre_share, COALESCE(SUM(courier_share), 0) AS courier_share,
+      SUM(CASE WHEN cash_settled_at IS NULL THEN 1 ELSE 0 END) AS unpaid_n, COALESCE(SUM(CASE WHEN cash_settled_at IS NULL THEN courier_share END), 0) AS unpaid_share
+    FROM shipments WHERE done_at >= ? AND status IN ('delivered','refused') GROUP BY courier_id, status`, from);
+  const pickedValue = await all(env, `SELECT pickup_courier_id AS courier_id, COUNT(*) AS n, COALESCE(SUM(value), 0) AS value FROM shipments WHERE picked_at >= ? AND pickup_courier_id IS NOT NULL GROUP BY pickup_courier_id`, from);
   const open = await all(env, "SELECT courier_id, COUNT(*) AS n FROM shipments WHERE status IN ('assigned','picked_up') AND courier_id IS NOT NULL GROUP BY courier_id");
   const get = (rows, id, st, key = 'n') => rows.find((r) => r.courier_id === id && r.status === st)?.[key] || 0;
   const evn = (id, st) => ev.find((r) => r.user_id === id && r.status === st)?.n || 0;
   return cs.map((c) => ({ id: c.id, name: c.name, picked: evn(c.id, 'picked_up'), to_centre: evn(c.id, 'at_centre'), from_centre: evn(c.id, 'centre_out'),
     delivered: get(done, c.id, 'delivered'), refused: get(done, c.id, 'refused'), collected: get(done, c.id, 'delivered', 'cash') + get(done, c.id, 'refused', 'cash'),
+    picked_value: pickedValue.find((r) => r.courier_id === c.id)?.value || 0, delivered_value: get(done, c.id, 'delivered', 'value'),
+    fees: get(done, c.id, 'delivered', 'fees') + get(done, c.id, 'refused', 'fees'),
+    centre_share: get(done, c.id, 'delivered', 'centre_share') + get(done, c.id, 'refused', 'centre_share'),
+    courier_share: get(done, c.id, 'delivered', 'courier_share') + get(done, c.id, 'refused', 'courier_share'),
+    unpaid: get(done, c.id, 'delivered', 'unpaid_n') + get(done, c.id, 'refused', 'unpaid_n'),
     open: open.find((r) => r.courier_id === c.id)?.n || 0 }));
 }
+// Validation par l'admin (colis trop cher ou trop lourd) : « Valider » le remet dans le circuit, « Refuser » l'annule.
+async function approveShipment(ctx, env) {
+  const s = await loadShipment(env, ctx.params.id);
+  if (!s.review) fail(409, 'not_in_review', 'Ce colis n\'attend pas de validation');
+  if (ctx.body.fee != null) await run(env, 'UPDATE shipments SET fee = ? WHERE id = ?', int(ctx.body.fee, { min: 0, max: 1_000_000, name: 'Frais' }), s.id);
+  await run(env, 'UPDATE shipments SET review = NULL WHERE id = ?', s.id);
+  let f = await loadShipment(env, s.id);
+  await logEvent(env, f, 'approved', `Validé par le centre${ctx.body.fee != null ? ` · frais ${f.fee} Ar` : ''}`, ctx.user);
+  await broadcast(env, f, '✅ Colis accepté par le centre', f.fee !== s.fee ? `Frais : ${f.fee.toLocaleString('fr-FR')} Ar` : '');
+  const st = await settings(env);
+  const dep = st.dispatch_mode === 'admin' ? null : await pickDeparture(env, f);
+  if (dep) f = await assignTo(env, f, dep, ctx.user); else await offerToRunners(env, f);
+  await audit(env, ctx, 'shipment_approve', { ref: f.ref });
+  return json({ ok: true, shipment: publicShipment(await loadShipment(env, s.id)) });
+}
+async function rejectShipment(ctx, env) {
+  const s = await loadShipment(env, ctx.params.id);
+  if (s.status !== 'pending') fail(409, 'bad_status', 'Le colis est déjà pris en charge');
+  const note = str(ctx.body.reason || 'Refusé par le centre', { max: 200 });
+  await run(env, "UPDATE shipments SET status = 'cancelled', done_at = ?, outcome_note = ?, review = NULL WHERE id = ?", now(), note, s.id);
+  await run(env, "UPDATE shipment_offers SET status = 'closed' WHERE shipment_id = ? AND status = 'open'", s.id);
+  await logEvent(env, s, 'cancelled', `Refusé par le centre : ${note}`, ctx.user);
+  await broadcast(env, s, '❌ Colis refusé par le centre', note);
+  await audit(env, ctx, 'shipment_reject', { ref: s.ref });
+  return json({ ok: true });
+}
+// Prochains créneaux (matin / après-midi) pour choisir la récupération et la livraison.
+async function windowsList(ctx, env) {
+  const st = await settings(env);
+  return json({ windows: nextWindows(st, now(), 8), am: [st.am_start, st.am_end], pm: [st.pm_start, st.pm_end], max_value: Number(st.max_value || 300000),
+    weight: { bike_max_kg: Number(st.bike_max_kg), moto_max_kg: Number(st.moto_max_kg), free_kg: Number(st.weight_free_kg), step_kg: Number(st.weight_step_kg), step_fee: Number(st.weight_step_fee) } });
+}
+
 async function adminCourierStats(ctx, env) {
   const days = int(ctx.url.searchParams.get('days') || 1, { min: 1, max: 366 });
   return json({ days, couriers: await courierStats(env, days) });
@@ -612,12 +681,16 @@ async function pickup(ctx, env) {
   await env.DB.batch([
     q(env, 'INSERT OR REPLACE INTO shipment_photos (shipment_id, mime, data, at) VALUES (?,?,?,?)', s.id, m[1], m[2], now()),
     q(env, "UPDATE shipments SET status = 'picked_up', picked_at = ?, value = ?, fee = ?, photo = 1, stage = NULL, stage_at = ?, accepted_at = COALESCE(accepted_at, ?) WHERE id = ?", now(), value, fee, now(), now(), s.id),
+    // Marchandise déjà payée par Mobile Money : l'expéditeur paie les frais au livreur qui récupère ; cet argent revient au centre (puis au livreur qui livre).
+    ...(s.value_paid && !s.province ? [q(env, 'UPDATE shipments SET pickup_fee = ?, pickup_fee_by = ? WHERE id = ?', fee, ctx.user.id, s.id)] : []),
   ]);
+  if (s.value_paid && !s.province) await logEvent(env, s, 'pickup_fee', `Frais ${fee} Ar encaissés à la récupération par ${ctx.user.name.split(' ')[0]} — à remettre au centre`, ctx.user);
   await logEvent(env, s, 'picked_up', `Valeur ${value} Ar · frais ${fee} Ar`, ctx.user, b.lat ?? null, b.lng ?? null);
   if (s.declared_value && Math.abs(value - s.declared_value) > Math.max(1000, s.declared_value * 0.2))
     await alertAdmins(env, 'alert', `Colis ${s.ref} : valeur saisie ${value} Ar ≠ valeur annoncée ${s.declared_value} Ar`, null, ctx.user.id);
-  await broadcast(env, s, '📦 Colis récupéré', `Valeur ${value.toLocaleString('fr-FR')} Ar · à payer ${(value + fee).toLocaleString('fr-FR')} Ar`);
-  return json({ ok: true, amount_to_collect: value + fee });
+  const due = toPay({ ...s, value, fee });
+  await broadcast(env, s, '📦 Colis récupéré', `Valeur ${value.toLocaleString('fr-FR')} Ar · à payer ${due.toLocaleString('fr-FR')} Ar`);
+  return json({ ok: true, amount_to_collect: due, pickup_fee: s.value_paid && !s.province ? fee : 0 });
 }
 
 // Livraison confirmée des deux côtés (preuve) : le livreur déclare la remise + le destinataire confirme,
@@ -672,9 +745,11 @@ async function deliver(ctx, env) {
   const t = now();
   if (coop) await run(env, 'UPDATE shipments SET coop_plate = ?, coop_driver_phone = ?, coop_fee = ?, coop_fee_status = ?, recipient_confirmed_at = COALESCE(recipient_confirmed_at, ?) WHERE id = ?',
     coop.plate, coop.phone, coop.fee, coop.status, t, s.id);
+  // Parts sur les frais : le centre garde 1 000 / 2 000 / 3 000 Ar selon le montant, le reste au livreur qui livre (la récupération est gratuite).
+  const cShare = centreShare(await settings(env), s.fee);
   await run(env, `UPDATE shipments SET collected = ?, courier_confirmed_at = ?, outcome_note = ?, stage = 'awaiting',
-      recipient_confirmed_at = CASE WHEN ? THEN ? ELSE recipient_confirmed_at END, stage_at = ? WHERE id = ?`,
-    collected, t, str(ctx.body.note, { max: 200 }) || null, pin ? 1 : 0, t, t, s.id);
+      recipient_confirmed_at = CASE WHEN ? THEN ? ELSE recipient_confirmed_at END, stage_at = ?, centre_share = ?, courier_share = ? WHERE id = ?`,
+    collected, t, str(ctx.body.note, { max: 200 }) || null, pin ? 1 : 0, t, t, cShare, s.fee - cShare, s.id);
   if (coop) await logEvent(env, s, 'coop', `Remis à ${s.coop_name} pour ${s.dest_city} · véhicule ${coop.plate}${coop.phone ? ` · chauffeur ${coop.phone}` : ''} · transport ${coop.fee} Ar ${coop.status === 'pa' ? '(PA, payé à l\'arrivée)' : '(déjà payé)'}`, ctx.user, glat, glng);
   await logEvent(env, s, 'courier_confirmed', `Remis · encaissé ${collected} Ar${pin ? ' · PIN correct' : ''}${ph ? ' · photo' : ''}${dist != null ? ` · à ${dist} m de l'adresse` : ''}`, ctx.user, glat, glng);
   if (collected !== due) await alertAdmins(env, 'alert', `Colis ${s.ref} : encaissé ${collected} Ar au lieu de ${due} Ar`, null, ctx.user.id);
@@ -721,11 +796,13 @@ async function recipientConfirm(ctx, env) {
 async function refuse(ctx, env) {
   const s = await courierGuardShip(ctx, env, ['picked_up']);
   if (!onDeliveryRun(s)) fail(409, 'relay_first', 'Ce colis n\'est pas encore en route vers le client');
-  const collected = ctx.body.collected == null ? s.fee : int(ctx.body.collected, { min: 0, max: 1_000_000, name: 'Frais encaissés' });
+  const feeDue = s.pickup_fee != null ? 0 : s.fee; // frais déjà payés à la récupération (Mobile Money)
+  const collected = ctx.body.collected == null ? feeDue : int(ctx.body.collected, { min: 0, max: 1_000_000, name: 'Frais encaissés' });
   const note = str(ctx.body.note, { min: 2, max: 200, name: 'Motif du refus' });
-  await run(env, "UPDATE shipments SET status = 'refused', collected = ?, done_at = ?, outcome_note = ? WHERE id = ?", collected, now(), note, s.id);
+  const cShare = centreShare(await settings(env), s.fee);
+  await run(env, "UPDATE shipments SET status = 'refused', collected = ?, done_at = ?, outcome_note = ?, centre_share = ?, courier_share = ? WHERE id = ?", collected, now(), note, cShare, s.fee - cShare, s.id);
   await logEvent(env, s, 'refused', `${note} · frais encaissés ${collected} Ar`, ctx.user);
-  if (collected < s.fee) await alertAdmins(env, 'alert', `Colis ${s.ref} refusé : frais encaissés ${collected} Ar au lieu de ${s.fee} Ar`, null, ctx.user.id);
+  if (collected < feeDue) await alertAdmins(env, 'alert', `Colis ${s.ref} refusé : frais encaissés ${collected} Ar au lieu de ${feeDue} Ar`, null, ctx.user.id);
   await broadcast(env, s, '↩️ Colis refusé par le destinataire', `${note} — retour à l'expéditeur`);
   return json({ ok: true, collected });
 }
@@ -830,9 +907,7 @@ async function adminList(ctx, env) {
 }
 
 async function cashOverview(ctx, env) {
-  const couriers = await all(env, `SELECT u.id, u.name, u.phone, COUNT(s.id) AS n, COALESCE(SUM(s.collected),0) AS cash
-    FROM users u JOIN shipments s ON s.courier_id = u.id
-    WHERE (s.status IN ('delivered','refused') OR (s.status = 'picked_up' AND s.courier_confirmed_at IS NOT NULL)) AND s.cash_settled_at IS NULL GROUP BY u.id ORDER BY cash DESC`);
+  const couriers = (await courierDues(env)).sort((a, b) => b.cash - a.cash);
   const vendors = await all(env, `SELECT u.id, u.name, u.phone, u.company,
       COALESCE(SUM(CASE WHEN s.status = 'delivered' AND s.cash_settled_at IS NOT NULL AND s.value_paid = 0 AND s.province = 0 THEN s.value END),0) AS sales,
       COALESCE(SUM(CASE WHEN s.status = 'delivered' AND s.province = 1 THEN s.fee END),0) AS province_fees,
@@ -847,22 +922,41 @@ async function cashOverview(ctx, env) {
   return json({ couriers, vendors: vendors.map((v) => ({ ...v, due: v.sales - v.return_fees - v.province_fees })), payouts, settlements });
 }
 
-// Le livreur rentre au centre et remet l'argent encaissé.
+// Argent à remettre par chaque livreur : encaissé à la livraison − sa part sur les frais + frais encaissés à la récupération (pas à lui).
+// Négatif = le centre lui doit (ex. sa part sur un colis dont les frais ont été payés à la récupération par un autre livreur).
+const DONE_UNSETTLED = "(s.status IN ('delivered','refused') OR (s.status = 'picked_up' AND s.courier_confirmed_at IS NOT NULL)) AND s.cash_settled_at IS NULL";
+async function courierDues(env, courierId = null) {
+  const del = await all(env, `SELECT s.courier_id AS cid, s.id, s.ref, s.collected, COALESCE(s.courier_share, 0) AS share FROM shipments s WHERE ${DONE_UNSETTLED}${courierId ? ' AND s.courier_id = ?' : ''}`, ...(courierId ? [courierId] : []));
+  const pf = await all(env, `SELECT s.pickup_fee_by AS cid, s.id, s.ref, s.pickup_fee FROM shipments s WHERE s.pickup_fee IS NOT NULL AND s.pickup_fee_settled_at IS NULL${courierId ? ' AND s.pickup_fee_by = ?' : ''}`, ...(courierId ? [courierId] : []));
+  const ids = [...new Set([...del.map((r) => r.cid), ...pf.map((r) => r.cid)])].filter(Boolean);
+  if (!ids.length) return [];
+  const users = await all(env, `SELECT id, name, phone FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids);
+  return users.map((u) => {
+    const d = del.filter((r) => r.cid === u.id), p = pf.filter((r) => r.cid === u.id);
+    const collected = d.reduce((a, r) => a + r.collected, 0), share = d.reduce((a, r) => a + r.share, 0), pickupFees = p.reduce((a, r) => a + r.pickup_fee, 0);
+    return { id: u.id, name: u.name, phone: u.phone, n: d.length + p.length, collected, share, pickup_fees: pickupFees, cash: collected - share + pickupFees, del: d, pf: p };
+  }).map(({ del: dd, pf: pp, ...x }) => Object.defineProperty(x, '_rows', { value: { del: dd, pf: pp } }));
+}
+
+// Le livreur rentre au centre : il remet l'argent (ou le centre lui paie sa part si le solde est négatif).
 async function settleCourier(ctx, env) {
-  const cid = ctx.params.id;
-  const rows = await all(env, "SELECT id, collected FROM shipments WHERE courier_id = ? AND (status IN ('delivered','refused') OR (status = 'picked_up' AND courier_confirmed_at IS NOT NULL)) AND cash_settled_at IS NULL", cid);
-  if (!rows.length) fail(409, 'nothing', 'Aucun encaissement en attente pour ce livreur');
-  const total = rows.reduce((a, r) => a + r.collected, 0);
-  const received = ctx.body.amount == null ? total : int(ctx.body.amount, { min: 0, name: 'Montant reçu' });
+  const cid = int(ctx.params.id);
+  const due = (await courierDues(env, cid))[0];
+  if (!due) fail(409, 'nothing', 'Aucun encaissement en attente pour ce livreur');
+  const total = due.cash;
+  const received = ctx.body.amount == null ? total : int(ctx.body.amount, { min: -10_000_000, name: 'Montant reçu' });
   const t = now();
+  const dIds = due._rows.del.map((r) => r.id), pIds = due._rows.pf.map((r) => r.id);
   await env.DB.batch([
-    q(env, `UPDATE shipments SET cash_settled_at = ? WHERE id IN (${rows.map(() => '?').join(',')})`, t, ...rows.map((r) => r.id)),
-    q(env, 'INSERT INTO cash_settlements (courier_id, amount, shipments, note, created_by, at) VALUES (?,?,?,?,?,?)', cid, received, rows.length,
-      received !== total ? `Attendu ${total} Ar, reçu ${received} Ar` : str(ctx.body.note, { max: 200 }) || null, ctx.user.id, t),
+    ...(dIds.length ? [q(env, `UPDATE shipments SET cash_settled_at = ? WHERE id IN (${dIds.map(() => '?').join(',')})`, t, ...dIds)] : []),
+    ...(pIds.length ? [q(env, `UPDATE shipments SET pickup_fee_settled_at = ? WHERE id IN (${pIds.map(() => '?').join(',')})`, t, ...pIds)] : []),
+    q(env, 'INSERT INTO cash_settlements (courier_id, amount, shipments, note, created_by, at) VALUES (?,?,?,?,?,?)', cid, received, dIds.length + pIds.length,
+      received !== total ? `Attendu ${total} Ar, reçu ${received} Ar` : str(ctx.body.note, { max: 200 }) || (total < 0 ? `Part du livreur payée par le centre : ${-total} Ar` : null), ctx.user.id, t),
   ]);
   if (received !== total) await alertAdmins(env, 'alert', `Remise livreur #${cid} : attendu ${total} Ar, reçu ${received} Ar`, null, cid);
+  if (total < 0) await notify(env, [cid], 'payout', '💰 Ta part payée par le centre', `${(-total).toLocaleString('fr-FR')} Ar`);
   await audit(env, ctx, 'cash_settle', { courier: cid, total, received });
-  return json({ ok: true, total, received, shipments: rows.length });
+  return json({ ok: true, total, received, shipments: dIds.length + pIds.length, share: due.share, pickup_fees: due.pickup_fees });
 }
 
 // Le centre paie l'expéditeur : valeur des colis livrés (argent déjà remis par le livreur) − frais de retour.
@@ -1063,11 +1157,11 @@ export const runPasses = (r, lat, lng) => { const p = runPath(r); return lat != 
 
 // Propose le colis à tous les livreurs en tournée qui passent par le lieu de récupération. Renvoie leurs prénoms.
 async function offerToRunners(env, s, runs = null) {
-  if (s.pickup_lat == null || s.status !== 'pending') return [];
+  if (s.pickup_lat == null || s.status !== 'pending' || s.review) return [];
   const ex = refusedBy(s);
   const got = [];
   for (const r of runs || await activeRuns(env)) {
-    if (ex.includes(r.courier_id) || !runPasses(r, s.pickup_lat, s.pickup_lng)) continue;
+    if (ex.includes(r.courier_id) || (s.moto_only && r.vehicle !== 'moto') || !runPasses(r, s.pickup_lat, s.pickup_lng)) continue;
     const ins = await run(env, "INSERT OR IGNORE INTO shipment_offers (shipment_id, courier_id, status, at) VALUES (?,?,'open',?)", s.id, r.courier_id, now());
     if (!ins.meta.changes) continue;
     got.push(r.name.split(' ')[0]);
@@ -1109,7 +1203,7 @@ async function depart(ctx, env) {
       u.id, from?.[0] ?? null, from?.[1] ?? null, to.addr, to.lat, to.lng, JSON.stringify(route), now());
     runRow = (await activeRuns(env, u.id))[0];
     // Colis déjà en attente sur ce chemin (3 derniers jours, pas encore pris).
-    const waiting = await all(env, `${SHIP_SQL} WHERE s.status = 'pending' AND s.courier_id IS NULL AND s.pickup_lat IS NOT NULL AND s.created_at > ? ORDER BY s.created_at`, now() - 3 * 864e5);
+    const waiting = await all(env, `${SHIP_SQL} WHERE s.status = 'pending' AND s.courier_id IS NULL AND s.review IS NULL AND s.pickup_lat IS NOT NULL AND s.created_at > ? ORDER BY s.created_at`, now() - 3 * 864e5);
     for (const s of waiting) if ((await offerToRunners(env, s, [runRow])).length) offered += 1;
     void r;
   }
@@ -1179,6 +1273,29 @@ export async function liveShipments(env) {
     pickup_addr: s.pickup_addr, drop_addr: s.drop_addr, amount: toPay(s), departure_at: s.departure_at }));
 }
 
+// Tableau des livraisons (admin) : où sont les livreurs, où récupérer / livrer, filtres, chiffres par livreur.
+async function opsBoard(ctx, env) {
+  const days = int(ctx.url.searchParams.get('days') || 1, { min: 1, max: 366 });
+  const from = mgMidnight(-(days - 1));
+  const couriers = await all(env, `SELECT u.id, u.name, u.phone, c.vehicle, c.available, c.lat, c.lng, c.last_seen FROM users u JOIN couriers c ON c.user_id = u.id
+    WHERE u.role = 'courier' AND u.status = 'active' ORDER BY u.name`);
+  const runs = await activeRuns(env);
+  const rows = await all(env, `${SHIP_SQL} WHERE s.status IN ('pending','assigned','picked_up') OR (s.done_at >= ? AND s.status IN ('delivered','refused','cancelled')) ORDER BY s.created_at DESC LIMIT 500`, from);
+  const parcels = rows.map((s) => ({ id: s.id, ref: s.ref, status: s.status, step: stepOf(s) || s.status, step_label: STEP_FR[stepOf(s)] || s.status,
+    courier_id: s.courier_id, courier: s.courier_name, pickup_courier_id: s.pickup_courier_id, delivery_courier_id: s.delivery_courier_id,
+    sender: s.sender_name, recipient: s.recipient_name, pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
+    pickup_addr: s.pickup_addr, drop_addr: s.drop_addr, value: s.value ?? s.declared_value, fee: s.fee, amount: toPay(s), value_paid: !!s.value_paid,
+    province: s.province ? s.dest_city : null, review: s.review, moto_only: !!s.moto_only,
+    windows: s.pickup_from ? { pickup: [s.pickup_from, s.pickup_to], delivery: [s.deliver_from, s.deliver_to] } : null, done_at: s.done_at, created_at: s.created_at }));
+  const stats = await courierStats(env, days);
+  const dues = await courierDues(env);
+  const t = now();
+  return json({ days, server_time: t, parcels, couriers: couriers.map((c) => {
+    const r = runs.find((x) => x.courier_id === c.id), st = stats.find((x) => x.id === c.id) || {}, du = dues.find((x) => x.id === c.id);
+    return { ...c, online: !!c.available && t - (c.last_seen || 0) < 2 * 60e3, run: r ? { to: r.to_addr, since: r.started_at } : null, stats: st, due: du ? du.cash : 0 };
+  }) });
+}
+
 // Fil des mouvements : étapes des colis + actions importantes des clients, livreurs et du centre.
 export async function liveFeed(env) {
   const ev = await all(env, `SELECT e.at, e.status, e.note, s.ref, u.name AS who, u.role FROM shipment_events e JOIN shipments s ON s.id = e.shipment_id
@@ -1200,6 +1317,8 @@ export function registerShipmentRoutes(route) {
   const ANY = ['client', 'courier', 'admin'];
   route('GET', '/api/schedule', ['admin', 'courier'], schedule); // heures & axes : centre et livreurs seulement (pas les clients)
   route('POST', '/api/shipments/quote', ANY, quoteShipment);
+  route('GET', '/api/shipments/windows', ANY, windowsList);
+  route('GET', '/api/admin/ops', ['admin'], opsBoard);
   route('GET', '/api/shipments', ANY, listMine);
   route('POST', '/api/shipments', ['client', 'admin'], appCreate);
   route('POST', '/api/shipments/bulk', ['client', 'admin'], bulkCreate);
@@ -1227,6 +1346,8 @@ export function registerShipmentRoutes(route) {
   route('POST', '/api/courier/depart', ['courier'], depart);
   route('GET', '/api/courier/run', ['courier'], myRun);
   route('POST', '/api/courier/run/end', ['courier'], endRun);
+  route('POST', '/api/admin/shipments/:id/approve', ['admin'], approveShipment);
+  route('POST', '/api/admin/shipments/:id/reject', ['admin'], rejectShipment);
   route('POST', '/api/courier/offers/:id/take', ['courier'], takeOffer);
   route('POST', '/api/courier/offers/:id/decline', ['courier'], declineOffer);
   // Axes et heures des livreurs : saisis par le centre (Admin → Livreurs → 🧭 Axes), le livreur les consulte seulement.

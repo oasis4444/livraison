@@ -146,10 +146,12 @@ test('livraison, refus (destinataire paie les frais), annulation (expéditeur pa
 
 test('caisse : remise du livreur puis paiement du vendeur', async () => {
   let cash = (await call('GET', '/api/admin/cash', null, admin)).data;
-  assert.equal(cash.couriers[0].cash, 25500, '23 000 livré + 2 500 frais du refus');
+  // 23 000 livré + 2 500 frais du refus, moins la part du livreur (frais − part du centre 1 000) : 2 000 + 1 500
+  assert.equal(cash.couriers[0].collected, 25500); assert.equal(cash.couriers[0].share, 3500);
+  assert.equal(cash.couriers[0].cash, 22000, 'le livreur garde sa part sur les frais');
   const v = cash.vendors.find((x) => x.phone === '+261329999999');
   assert.equal(v.sales, 0, 'rien à payer tant que le livreur n\'a pas remis l\'argent');
-  assert.equal((await call('POST', `/api/admin/couriers/${courierId}/settle`, {}, admin)).data.total, 25500);
+  assert.equal((await call('POST', `/api/admin/couriers/${courierId}/settle`, {}, admin)).data.total, 22000);
   cash = (await call('GET', '/api/admin/cash', null, admin)).data;
   assert.equal(cash.couriers.length, 0);
   const vendor = cash.vendors.find((x) => x.phone === '+261329999999');

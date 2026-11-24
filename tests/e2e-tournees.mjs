@@ -85,6 +85,9 @@ try {
     await client.fill('[data-rn]', 'Rivo'); await client.fill('[data-rp]', '034 55 555 55');
     await client.fill('[data-a=drop]', 'Analakely gare Kofmad'); await client.click('[data-s=drop] button >> nth=0');
     await client.fill('[data-v]', '40000'); await client.waitForSelector('[data-qok]');
+    // créneaux : récupération au plus tôt, livraison au plus tard le créneau suivant
+    await client.waitForFunction(() => document.querySelectorAll('[data-pw] option').length >= 3 && document.querySelector('[data-dw2] option'));
+    if (!/plus tôt/.test(await client.textContent('[data-pw] option'))) throw new Error('créneau de récupération');
     await client.fill('[data-d]', 'Sac de riz'); await client.click('[data-sz^="45|"]');
     await client.click('[data-pv=mm]');
     if (await client.locator('[data-pref]').count()) throw new Error('pas de référence Mobile Money à saisir');
@@ -96,6 +99,7 @@ try {
     ref = (await client.textContent('.modal h2, .modal .modal-title, .modal header')).match(/AL[A-Z0-9]+/)[0];
     await client.click('.modal-back [data-x]');
     await client.waitForSelector(`text=${ref}`); await client.waitForSelector('text=🚌 Fianarantsoa');
+    await client.waitForSelector('.card >> text=🏁 Livraison');
   });
   await step('livreur : le colis sur son chemin lui est proposé, il le prend en premier', async () => {
     await courier.click('[data-t=colis]'); await courier.waitForSelector('text=Colis sur ton chemin', { timeout: 15000 });
@@ -121,6 +125,42 @@ try {
     await admin.waitForSelector('text=Fianarantsoa');
     await admin.waitForSelector('text=Marchandise déjà payée par Mobile Money');
     await admin.screenshot({ path: 'tests/screens/43-admin-colis-province.png' });
+  });
+  await step('admin : suivi des livraisons (carte, filtres, chiffres par livreur)', async () => {
+    while (await admin.locator('.modal-back [data-x]').count()) await admin.click('.modal-back [data-x] >> nth=-1');
+    await admin.click('[data-v=ops]'); await admin.waitForSelector(`[data-ops-list] >> text=${ref}`);
+    await admin.waitForSelector('[data-ops-table] >> text=Hery Vélo');
+    await admin.click('[data-ostep] [data-k=delivery]'); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
+    await admin.click('[data-ostep] [data-k=pickup]'); await admin.waitForSelector(`[data-ops-list] >> text=${ref}`);
+    await admin.selectOption('[data-oc]', { label: '🏍️ Naina Moto' }); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
+    await admin.selectOption('[data-oc]', ''); await admin.click('[data-ostep] [data-k=active]');
+    await admin.screenshot({ path: 'tests/screens/46-admin-suivi-livraisons.png' });
+    await admin.click('[data-v=dash]'); await admin.waitForSelector('text=Livraisons du jour par livreur');
+  });
+  await step('service client : le client écrit, l\'admin répond depuis la notification', async () => {
+    await client.click('[data-act=support]'); await client.waitForSelector('.modal [data-cbody]');
+    await client.fill('.modal [data-cbody]', 'Bonjour, à quelle heure passe le livreur ?'); await client.click('.modal [data-csend]');
+    await client.waitForSelector('.modal >> text=à quelle heure passe le livreur');
+    await admin.waitForSelector('[data-v=support] .cnt', { timeout: 15000 });
+    await admin.click('[data-act=notifs]'); await admin.click('.modal [data-ni] >> text=💬 Client Soa Boutique');
+    await admin.waitForSelector('[data-sthread] >> text=à quelle heure passe le livreur');
+    await admin.fill('[data-sthread] [data-cbody]', 'Il passe entre 13 h et 17 h.'); await admin.click('[data-sthread] [data-csend]');
+    await admin.screenshot({ path: 'tests/screens/47-admin-service-client.png' });
+    await client.waitForSelector('.modal >> text=Il passe entre 13 h et 17 h.', { timeout: 15000 });
+    await client.screenshot({ path: 'tests/screens/48-client-service-client.png' });
+    await client.click('.modal-back [data-x]');
+  });
+  await step('client : colis à 450 000 Ar → validé par l\'admin', async () => {
+    const r = await api('POST', '/api/shipments', { declared_value: 450000, description: 'Téléphone', size: '20x10x5', sender: { name: 'Soa', address: 'Behoririka', lat: -18.8950, lng: 47.5280 },
+      recipient: { name: 'Lova', phone: '0347777777', address: 'Ivandry', lat: -18.8752, lng: 47.5328 } }, auth(await login('0331234567', 'secret12')));
+    const big = r.data.shipment;
+    if (!big.review) throw new Error('devrait attendre la validation');
+    await admin.click('[data-v=ops]'); await admin.click('[data-ostep] [data-k=review]');
+    await admin.click(`[data-ops-list] >> text=${big.ref}`); await admin.waitForSelector('.modal [data-approve]');
+    await admin.screenshot({ path: 'tests/screens/49-admin-valider-colis.png' });
+    await admin.fill('.modal [data-rfee]', '6000'); await admin.click('.modal [data-approve]'); await admin.waitForSelector('text=Colis validé');
+    const after = (await api('GET', `/api/shipments/${big.id}`, null, auth(tok.admin))).data.shipment;
+    if (after.review || after.fee !== 6000) throw new Error('validation : ' + JSON.stringify({ review: after.review, fee: after.fee }));
   });
   await step('livreur : récupère puis remet à la coopérative (véhicule, frais PA)', async () => {
     await courier.click(`[data-act=ship] >> text=${ref}`);
