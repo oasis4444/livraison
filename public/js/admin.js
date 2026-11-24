@@ -1,7 +1,7 @@
 // Tableau de bord Administrateur.
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
-  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode, setNotifOpener, chatPanel,
+  makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode, setNotifOpener, chatPanel, logout,
 } from './core.js';
 import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTripsEditor } from './colis.js';
 
@@ -9,17 +9,37 @@ let root, main, view = location.hash.replace('#', '') || 'dash', liveTimer = nul
 const liveMk = {};
 let trackLayer = null, axeLayers = [];
 
+// Menu : icônes sobres (traits), regroupées par usage.
+const SV = {
+  home: '<path d="M3 10.5L12 3l9 7.5V21h-6v-6H9v6H3z"/>', route: '<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/>',
+  map: '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>', box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>', bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  bike: '<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-8h5l3 8M10 8l2 8h-6M14 5h2"/>', cal: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5.5 6.5-5.5s5.5 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5c2 .8 3.2 2.6 3.5 5.5"/>',
+  wallet: '<path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7l12-3v3M16.5 13.5h.01"/>', chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  alert: '<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17h.01"/>', chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', plug: '<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>', out: '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/>', bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  plus: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>', arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+const aic = (k) => `<svg class="ad-ic" viewBox="0 0 24 24" aria-hidden="true">${SV[k] || ''}</svg>`;
 const NAV = [
-  ['dash', '', 'Tableau de bord'], ['ops', '', 'Suivi des livraisons'], ['live', '', 'Carte en direct'], ['parcels', '', 'Colis'], ['cash', '', 'Caisse & vendeurs'],
-  ['deliveries', '', 'Courses express'], ['couriers', '', 'Livreurs'], ['axes', '', 'Axes & planning'], ['clients', '', 'Clients'], ['payments', '', 'Paiements & soldes'],
-  ['support', '', 'Service client'], ['complaints', '', 'Réclamations & SOS'], ['reports', '', 'Rapports'], ['api', '', 'Logiciels de vente'], ['settings', '', 'Paramètres'], ['audit', '', 'Journal'],
+  ['Pilotage'], ['dash', 'home', 'Tableau de bord'], ['ops', 'route', 'Suivi des livraisons'], ['live', 'map', 'Carte en direct'],
+  ['Colis et argent'], ['parcels', 'box', 'Colis'], ['cash', 'cash', 'Caisse & vendeurs'], ['payments', 'wallet', 'Paiements & soldes'], ['deliveries', 'bolt', 'Courses express'],
+  ['Équipe et clients'], ['couriers', 'bike', 'Livreurs'], ['axes', 'cal', 'Axes & planning'], ['clients', 'users', 'Clients'],
+  ['Relation client'], ['support', 'chat', 'Service client'], ['complaints', 'alert', 'Réclamations & SOS'],
+  ['Système'], ['reports', 'chart', 'Rapports'], ['api', 'plug', 'Logiciels de vente'], ['settings', 'gear', 'Paramètres'], ['audit', 'list', 'Journal'],
 ];
 
 export async function mount(el) {
   root = el;
-  root.innerHTML = `<div class="admin">
-    <aside class="side" id="side"><div class="logo"><img src="/icon.svg" alt="">Alefa <span class="small" style="opacity:.6;font-weight:600">Admin</span></div><nav id="nav"></nav>
-      <div style="margin-top:20px;padding:0 8px" class="small"><div style="opacity:.7">${esc(state.user.name)}</div><button class="btn sm ghost" style="color:#cfe3da;padding-left:0" data-act="profile">Profil / déconnexion</button></div></aside>
+  if (!document.querySelector('link[data-admin-css]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/css/admin.css'; l.dataset.adminCss = '1'; document.head.append(l); }
+  const u = state.user;
+  root.innerHTML = `<div class="admin ad">
+    <aside class="side" id="side"><a class="logo" href="#dash"><img src="/icon.svg" alt="">Alefa</a><div class="ad-label">Administration</div><nav id="nav"></nav>
+      <div class="ad-me"><span class="ad-av">${esc(initials(u.name))}</span><div><b>${esc(u.name)}</b><small>${esc(phoneFmt(u.phone))}</small></div>
+        <button data-act="profile" title="Profil">${aic('gear')}</button><button data-act="logout" title="Déconnexion">${aic('out')}</button></div></aside>
+    <div class="side-back" data-act="menu"></div>
     <main class="main" id="main"></main>
   </div>`;
   main = $('#main');
@@ -45,10 +65,14 @@ async function refreshCounts() {
   return s;
 }
 function renderNav() {
-  $('#nav').innerHTML = NAV.map(([k, ic, l]) => `<button data-act="nav" data-v="${k}" class="${view === k ? 'on' : ''}">${ic ? ic + ' ' : ''}${l}${counts[k] ? `<span class="cnt">${counts[k]}</span>` : ''}</button>`).join('');
+  $('#nav').innerHTML = NAV.map(([k, ic, l]) => (ic === undefined ? `<div class="ad-grp">${k}</div>`
+    : `<button data-act="nav" data-v="${k}" class="${view === k ? 'on' : ''}">${aic(ic)}<span>${l}</span>${counts[k] ? `<span class="cnt">${counts[k]}</span>` : ''}</button>`)).join('');
 }
 function head(title, extra = '') {
-  return `<div class="main-head"><div class="row"><button class="icon-btn mobile-nav" data-act="menu">☰</button><h1>${title}</h1></div><div class="row wrap no-print">${extra}<button class="icon-btn" data-act="notifs">🔔<span class="badge-dot hidden" data-unread></span></button></div></div>`;
+  const u = state.user;
+  return `<div class="main-head"><div class="row"><button class="icon-btn mobile-nav" data-act="menu" aria-label="Menu">☰</button><h1>${title}</h1></div><div class="row wrap no-print ad-tools">${extra}
+    <button class="ad-bell" data-act="notifs" aria-label="Notifications">${aic('bell')}<span class="badge-dot hidden" data-unread></span></button>
+    <button class="ad-chip" data-act="profile"><span class="ad-av">${esc(initials(u.name))}</span><span>${esc(u.name.split(' ')[0])}</span></button></div></div>`;
 }
 
 async function show() {
@@ -115,7 +139,7 @@ const VIEWS = {
         <label class="field"><span>Période</span><select class="input" data-od>${[['1', 'Aujourd\'hui'], ['7', '7 jours'], ['30', '30 jours']].map(([v, l]) => `<option value="${v}" ${opsF.days === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="field grow"><span>Recherche</span><input class="input" data-oq placeholder="N° colis, nom, quartier…"></label></div></div>
       <div class="live-wrap"><div class="livemap" id="opsmap"></div><div class="live-list panel" data-ops-list style="max-height:520px;overflow:auto"></div></div>
-      <div class="panel" style="margin-top:12px"><h3>Livreurs — <span data-ops-period></span></h3><div class="table-wrap"><table><thead><tr><th>Livreur</th><th>Récupérés</th><th>Livrés</th><th>Valeur récupérée</th><th>Valeur livrée</th><th>Frais</th><th>Part centre</th><th>Part livreur</th><th>Non réglés</th><th>À remettre</th><th></th></tr></thead><tbody data-ops-table></tbody></table></div>
+      <div class="panel" style="margin-top:12px"><h3>Livreurs — <span data-ops-period></span></h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Livreur</th><th>Récupérés</th><th>Livrés</th><th>Valeur récupérée</th><th>Valeur livrée</th><th>Frais</th><th>Part centre</th><th>Part livreur</th><th>Non réglés</th><th>À remettre</th><th></th></tr></thead><tbody data-ops-table></tbody></table></div>
         <p class="tiny muted">Part du centre selon les frais (Paramètres) ; la récupération est gratuite, le reste revient au livreur qui livre. « À remettre » : argent encaissé − sa part + frais encaissés à la récupération (négatif = le centre lui doit). Réglez dans <a href="#cash">Caisse & vendeurs</a>.</p></div>`;
     liveMap = makeMap($('#opsmap'), { zoom: 13, zoomControl: true, layers: true });
     let data = null, fitted = false;
@@ -210,14 +234,18 @@ const VIEWS = {
   async dash() {
     const [s, rep, comp, ops] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`), api('GET', '/api/admin/complaints'), api('GET', '/api/admin/ops?days=1').catch(() => null)]);
     const og = (k) => (ops?.parcels || []).filter((p) => opsGroup(p) === k).length;
-    main.innerHTML = head('Tableau de bord', `<span class="small muted">${new Date().toLocaleString('fr-FR')}</span>`) + `
+    const hr = Number(new Date().toLocaleString('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Indian/Antananarivo' }));
+    main.innerHTML = head('Tableau de bord') + `
+      <div class="ad-hello"><div><h2>${hr < 18 ? 'Bonjour' : 'Bonsoir'} ${esc(state.user.name.split(' ')[0])}</h2><p>${new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })} · voici l'activité du centre.</p></div>
+        <div class="ad-quick"><button class="ad-q sun" data-act="newparcel">${aic('plus')}<span>Nouveau colis</span></button><a class="ad-q" href="#ops">${aic('route')}<span>Suivi</span></a><a class="ad-q" href="#live">${aic('map')}<span>Carte</span></a><a class="ad-q" href="#cash">${aic('cash')}<span>Caisse</span></a></div></div>
+      ${(s.parcels.pending || s.complaints.sos || s.users.pending) ? `<div class="ad-alerts">${s.parcels.pending ? `<a href="#ops" class="ad-al">📥 <b>${s.parcels.pending}</b> colis à programmer ${aic('arrow')}</a>` : ''}${s.complaints.sos ? `<a href="#complaints" class="ad-al bad">🚨 <b>${s.complaints.sos}</b> SOS ${aic('arrow')}</a>` : ''}${s.users.pending ? `<a href="#couriers" class="ad-al">🚲 <b>${s.users.pending}</b> livreur(s) à valider ${aic('arrow')}</a>` : ''}</div>` : ''}
       <h3>📦 Colis du centre</h3><div class="kpis">
         ${kpi('Colis livrés aujourd\'hui', s.parcels.delivered_today || 0)}${kpi('Frais encaissés aujourd\'hui', ar(s.parcels.fees_today))}
         ${kpi('En cours', s.parcels.open || 0)}${kpi('À programmer', s.parcels.pending || 0, s.parcels.pending ? 'alert' : '')}
         ${kpi('Argent chez les livreurs', ar(s.parcels.cash_with_couriers))}${kpi('À rendre aux expéditeurs', s.parcels.to_return || 0)}</div>
       ${ops ? `<div class="panel" style="margin:10px 0"><div class="row between"><h3>🚦 Livraisons du jour par livreur</h3><a class="btn sm primary" href="#ops">Ouvrir le suivi (carte + filtres) →</a></div>
         <div class="row wrap small" style="gap:14px;margin:4px 0 8px">⚠️ À valider <b>${og('review')}</b> · 📥 À répartir <b>${og('todo')}</b> · 🟢 À récupérer <b>${og('pickup')}</b> · 🏢 Au centre <b>${og('centre')}</b> · 🟠 En livraison <b>${og('delivery')}</b></div>
-        <div class="table-wrap"><table><thead><tr><th>Livreur</th><th>Récupérés</th><th>Livrés</th><th>Valeur livrée</th><th>Frais</th><th>Part centre</th><th>Part livreur</th><th>Réglé ?</th></tr></thead><tbody>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Livreur</th><th>Récupérés</th><th>Livrés</th><th>Valeur livrée</th><th>Frais</th><th>Part centre</th><th>Part livreur</th><th>Réglé ?</th></tr></thead><tbody>
         ${ops.couriers.filter((c) => c.stats?.picked || c.stats?.delivered || c.stats?.unpaid || c.online).map((c) => `<tr><td>${vehIcon(c.vehicle)} <b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'}</td><td>${c.stats.picked || 0}</td><td>${c.stats.delivered || 0}</td>
           <td>${ar(c.stats.delivered_value || 0)}</td><td>${ar(c.stats.fees || 0)}</td><td>${ar(c.stats.centre_share || 0)}</td><td>${ar(c.stats.courier_share || 0)}</td>
           <td>${c.stats.unpaid ? `<span style="color:var(--orange)">❌ ${c.stats.unpaid} non réglé(s)</span>` : '✅ Payé'}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Aucune activité aujourd\'hui.</td></tr>'}</tbody></table></div></div>` : ''}
@@ -711,6 +739,7 @@ const actions = {
   menu: () => $('#side').classList.toggle('open'),
   notifs: () => showNotifications(),
   profile: () => profileForm(),
+  logout: () => logout(),
   delivery: (el) => deliveryDetail(+el.dataset.id),
   ctrack: (el) => { const c = $('[data-live-list]')._couriers.find((x) => x.id === +el.dataset.id); if (c) { liveMk['c' + c.id] && liveMap.setView(liveMk['c' + c.id].getLatLng(), 16); courierTrack(c); } },
   dfilter: () => { const p = new URLSearchParams(); $$('[data-f]').forEach((i) => p.set(i.dataset.f, i.value)); sessionStorage.setItem('adm_dfilter', p.toString()); show(); },

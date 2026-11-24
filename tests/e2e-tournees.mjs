@@ -202,6 +202,11 @@ try {
     await admin.selectOption('[data-pf=courier]', { label: '🏍️ Naina Moto' }); await admin.click('[data-act=pfilter]');
     await admin.waitForSelector('text=Aucun colis');
     await admin.selectOption('[data-pf=courier]', ''); await admin.click('[data-act=pfilter]');
+    await admin.evaluate(() => { location.hash = 'dash'; }); await admin.waitForSelector('.ad-hello'); await admin.waitForTimeout(400);
+    await admin.screenshot({ path: 'tests/screens/51-admin-accueil.png', fullPage: true });
+    await admin.setViewportSize({ width: 390, height: 844 }); await admin.click('.main-head [data-act=menu]'); await admin.waitForTimeout(300);
+    await admin.screenshot({ path: 'tests/screens/52-admin-menu-mobile.png' });
+    await admin.click('.side-back'); await admin.setViewportSize({ width: 1360, height: 860 });
   });
 } catch (e) {
   console.log('ÉCHEC\n', e.message);
