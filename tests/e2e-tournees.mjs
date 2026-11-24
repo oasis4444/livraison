@@ -179,6 +179,18 @@ try {
     const s = (await api('GET', '/api/admin/shipments?status=delivered', null, auth(tok.admin))).data.shipments?.find((x) => x.ref === ref);
     if (!s || s.province.plate !== '1234 TBA' || s.province.fee_status !== 'pa' || s.province.fee !== 15000) throw new Error('remise coopérative : ' + JSON.stringify(s?.province));
   });
+  await step('admin : menu Colis — infos complètes, filtre par livreur, payé ou non', async () => {
+    while (await admin.locator('.modal-back [data-x]').count()) await admin.click('.modal-back [data-x] >> nth=-1');
+    await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', '');
+    await admin.selectOption('[data-pf=courier]', { label: '🚲 Hery Vélo' }); await admin.click('[data-act=pfilter]');
+    await admin.waitForSelector(`tr >> text=${ref}`);
+    const row = admin.locator('tr', { hasText: ref });
+    for (const t of ['Soa Boutique', 'Rivo', '034 55 555 55', 'Récup. : Hery Vélo', 'non payé']) if (!(await row.textContent()).includes(t)) throw new Error('ligne colis sans « ' + t + ' »');
+    await admin.screenshot({ path: 'tests/screens/50-admin-colis-liste.png' });
+    await admin.selectOption('[data-pf=courier]', { label: '🏍️ Naina Moto' }); await admin.click('[data-act=pfilter]');
+    await admin.waitForSelector('text=Aucun colis');
+    await admin.selectOption('[data-pf=courier]', ''); await admin.click('[data-act=pfilter]');
+  });
 } catch (e) {
   console.log('ÉCHEC\n', e.message);
   await Promise.all([admin, courier, client].map((p, i) => p.screenshot({ path: `tests/screens/err-tournees-${i}.png` }).catch(() => {})));

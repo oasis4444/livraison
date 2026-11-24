@@ -73,7 +73,7 @@ export function publicShipment(s) {
     description: s.description, declared_value: s.declared_value, value: s.value, fee: s.fee, amount_to_collect: toPay(s),
     collected: s.collected, return_fee: s.return_fee, outcome_note: s.outcome_note, has_photo: !!s.photo,
     courier_confirmed_at: s.courier_confirmed_at, recipient_confirmed_at: s.recipient_confirmed_at, confirmed_by: s.confirmed_by,
-    courier: s.courier_id ? { id: s.courier_id, name: s.courier_name ?? null } : null,
+    courier: s.courier_id ? { id: s.courier_id, name: s.courier_name ?? null, phone: s.courier_phone ?? null } : null,
     contents: s.description, size: s.dim_l ? { l: s.dim_l, w: s.dim_w, h: s.dim_h } : null, weight_kg: s.weight_kg ?? null,
     relay: !!s.relay, leg: s.leg ?? null, pickup_courier: s.pickup_courier_id ? { id: s.pickup_courier_id, name: s.pickup_courier_name ?? null } : null,
     delivery_courier: s.delivery_courier_id ? { id: s.delivery_courier_id, name: s.delivery_courier_name ?? null } : null, delivery_departure_at: s.delivery_departure_at ?? null,
@@ -88,7 +88,7 @@ export function publicShipment(s) {
   };
 }
 
-const SHIP_SQL = `SELECT s.*, cu.name AS courier_name, a.name AS axe_name,
+const SHIP_SQL = `SELECT s.*, cu.name AS courier_name, cu.phone AS courier_phone, a.name AS axe_name,
   (SELECT name FROM users WHERE id = s.pickup_courier_id) AS pickup_courier_name, (SELECT name FROM users WHERE id = s.delivery_courier_id) AS delivery_courier_name,
   CASE WHEN tr.id IS NOT NULL THEN substr(tr.from_addr, 1, instr(tr.from_addr || ',', ',') - 1) || ' → ' || substr(tr.to_addr, 1, instr(tr.to_addr || ',', ',') - 1) END AS trip_label
   FROM shipments s LEFT JOIN users cu ON cu.id = s.courier_id LEFT JOIN axes a ON a.id = s.axe_id LEFT JOIN courier_trips tr ON tr.id = s.trip_id`;
@@ -899,11 +899,16 @@ async function adminList(ctx, env) {
   if (st === 'open') sql += " AND s.status IN ('pending','assigned','picked_up')";
   else if (st === 'return') sql += " AND s.status IN ('refused','cancelled') AND s.picked_at IS NOT NULL AND s.returned_at IS NULL";
   else if (st) { sql += ' AND s.status = ?'; args.push(st); }
-  if (p.get('courier_id')) { sql += ' AND s.courier_id = ?'; args.push(Number(p.get('courier_id'))); }
-  if (p.get('q')) { const v = `%${p.get('q')}%`; sql += ' AND (s.ref LIKE ? OR s.sender_name LIKE ? OR s.recipient_name LIKE ? OR s.recipient_phone LIKE ? OR s.drop_addr LIKE ? OR s.external_ref LIKE ?)'; args.push(v, v, v, v, v, v); }
+  // Livreur : celui qui récupère, celui qui livre, ou le livreur actuel ; « none » = sans livreur.
+  if (p.get('courier_id') === 'none') sql += ' AND s.courier_id IS NULL';
+  else if (p.get('courier_id')) { const c = Number(p.get('courier_id')); sql += ' AND (s.courier_id = ? OR s.pickup_courier_id = ? OR s.delivery_courier_id = ?)'; args.push(c, c, c); }
+  // Paiement : « unpaid » = argent pas encore remis / part du livreur pas réglée / expéditeur pas payé.
+  if (p.get('paid') === 'unpaid') sql += " AND s.status IN ('delivered','refused') AND (s.cash_settled_at IS NULL OR (s.pickup_fee IS NOT NULL AND s.pickup_fee_settled_at IS NULL) OR (s.status = 'delivered' AND s.vendor_paid_at IS NULL AND s.value_paid = 0))";
+  else if (p.get('paid') === 'paid') sql += " AND s.status IN ('delivered','refused') AND s.cash_settled_at IS NOT NULL AND (s.pickup_fee IS NULL OR s.pickup_fee_settled_at IS NOT NULL) AND (s.status = 'refused' OR s.vendor_paid_at IS NOT NULL OR s.value_paid = 1)";
+  if (p.get('q')) { const v = `%${p.get('q')}%`; sql += ' AND (s.ref LIKE ? OR s.sender_name LIKE ? OR s.sender_phone LIKE ? OR s.pickup_addr LIKE ? OR s.recipient_name LIKE ? OR s.recipient_phone LIKE ? OR s.drop_addr LIKE ? OR s.external_ref LIKE ?)'; args.push(v, v, v, v, v, v, v, v); }
   sql += ' ORDER BY s.created_at DESC LIMIT 300';
   const rows = await all(env, sql, ...args);
-  return json({ shipments: rows.map((s) => ({ ...publicShipment(s), cash_settled_at: s.cash_settled_at, vendor_paid_at: s.vendor_paid_at })) });
+  return json({ shipments: rows.map((s) => ({ ...publicShipment(s), cash_settled_at: s.cash_settled_at, vendor_paid_at: s.vendor_paid_at, pickup_fee_settled_at: s.pickup_fee_settled_at })) });
 }
 
 async function cashOverview(ctx, env) {

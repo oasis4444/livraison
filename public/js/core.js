@@ -180,6 +180,8 @@ export function bind(root, handlers) {
   root.addEventListener('click', async (e) => {
     const el = e.target.closest('[data-act]');
     if (!el || !root.contains(el)) return;
+    const link = e.target.closest('a[href]'); // lien (📞 appeler…) dans une ligne cliquable : on laisse le lien agir
+    if (link && link !== el && el.contains(link)) return;
     const fn = handlers[el.dataset.act];
     if (!fn) return;
     e.preventDefault();

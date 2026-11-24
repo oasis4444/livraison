@@ -465,16 +465,49 @@ const VIEWS = {
   },
 
   async parcels() {
-    const st = sessionStorage.getItem('adm_pst') ?? 'open', qv = sessionStorage.getItem('adm_pq') || '';
-    const r = await api('GET', `/api/admin/shipments?status=${st}&q=${encodeURIComponent(qv)}`);
+    const st = sessionStorage.getItem('adm_pst') ?? 'open', qv = sessionStorage.getItem('adm_pq') || '', cv = sessionStorage.getItem('adm_pc') || '', pv = sessionStorage.getItem('adm_pp') || '';
+    const [r, cs] = await Promise.all([
+      api('GET', `/api/admin/shipments?status=${st}&q=${encodeURIComponent(qv)}&courier_id=${cv}&paid=${pv}`),
+      api('GET', '/api/admin/users?role=courier&status=active')]);
+    const ok = (b, yes, no) => (b ? `<span style="color:var(--green)">✅ ${yes}</span>` : `<span style="color:var(--orange)">❌ ${no}</span>`);
+    const first = (n) => esc((n || '').split(' ')[0]);
+    // Argent de chaque colis : valeur (remise au centre, payée à l'expéditeur) et livraison (part du livreur réglée).
+    const money = (x) => {
+      const done = ['delivered', 'refused'].includes(x.status), out = [];
+      if (x.status === 'delivered') {
+        if (x.payment?.value_paid) out.push('📱 Valeur payée par Mobile Money');
+        else if (x.province) out.push('🚌 Province : rien encaissé');
+        else out.push(`💵 Valeur : ${ok(x.cash_settled_at, 'remise au centre', 'chez le livreur')}`);
+        if (!x.payment?.value_paid) out.push(`🏪 Expéditeur : ${ok(x.vendor_paid_at, 'payé', 'à payer')}`);
+      }
+      if (x.payment?.pickup_fee != null) out.push(`🟢 Frais récup. ${ar(x.payment.pickup_fee)} : ${ok(x.pickup_fee_settled_at, 'remis au centre', 'chez ' + first(x.pickup_courier?.name))}`);
+      if (done && x.shares) out.push(`🚲 Livraison : centre ${ar(x.shares.centre)} · livreur ${ar(x.shares.courier)} — ${ok(x.shares.paid, 'payé', 'non payé')}`);
+      return out.length ? `<div class="tiny" style="line-height:1.5">${out.join('<br>')}</div>` : '<span class="tiny muted">—</span>';
+    };
+    const person = (p, ic, w) => `<b>${esc(p.name)}</b>${p.phone ? `<div class="tiny"><a href="tel:${esc(p.phone)}" data-stop>📞 ${esc(phoneFmt(p.phone))}</a></div>` : ''}<div class="tiny muted">${ic} ${esc(p.address)}</div>${w ? `<div class="tiny">${w}</div>` : ''}`;
+    const win = (w) => `${new Date(w[0]).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${time(w[0])}–${time(w[1])}`;
+    const rows = r.shipments;
+    // totaux (utile avec le filtre livreur)
+    const del = rows.filter((x) => x.status === 'delivered');
+    const tot = { n: rows.length, value: del.reduce((a, x) => a + (x.value || 0), 0), fees: rows.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + x.fee, 0),
+      share: rows.reduce((a, x) => a + (x.shares && (!cv || x.delivery_courier?.id === +cv || x.courier?.id === +cv) ? x.shares.courier : 0), 0),
+      unpaid: rows.filter((x) => ['delivered', 'refused'].includes(x.status) && x.shares && !x.shares.paid).length };
     main.innerHTML = head('Colis (centre)', `<button class="btn sm primary" data-act="newparcel">＋ Colis</button><button class="btn sm" data-act="importparcels">⬆ Import Excel</button><a class="btn sm" href="#" data-act="pexport">⬇ Excel</a>`) + `
       <div class="filters"><select class="input" data-pf="status">${[['open', 'En cours'], ['pending', '⏳ À programmer'], ['assigned', 'Programmés'], ['picked_up', 'Récupérés'], ['return', '↩️ À rendre'], ['delivered', 'Livrés'], ['refused', 'Refusés'], ['cancelled', 'Annulés'], ['', 'Tous']].map(([v, l]) => `<option value="${v}" ${st === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select class="input" data-pf="courier"><option value="">Tous les livreurs</option><option value="none" ${cv === 'none' ? 'selected' : ''}>— Sans livreur</option>${cs.users.map((u) => `<option value="${u.id}" ${cv === String(u.id) ? 'selected' : ''}>${vehIcon(u.vehicle)} ${esc(u.name)}</option>`).join('')}</select>
+        <select class="input" data-pf="paid">${[['', 'Payé ou non'], ['unpaid', '❌ Non réglés'], ['paid', '✅ Tout réglé']].map(([v, l]) => `<option value="${v}" ${pv === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <input class="input" data-pf="q" placeholder="Réf, nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Réf</th><th>Créé</th><th>Source</th><th>Expéditeur</th><th>Destinataire</th><th>Livreur / départ</th><th class="num">Valeur</th><th class="num">Frais</th><th class="num">Encaissé</th><th>Statut</th></tr></thead><tbody>
-      ${r.shipments.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}"><td><b>${esc(x.ref)}</b>${x.external_ref ? `<div class="tiny muted">${esc(x.external_ref)}</div>` : ''}</td><td class="small">${dt(x.created_at)}</td><td class="small">${esc(x.source)}</td>
-        <td class="small">${esc(x.sender.name)}<div class="tiny muted ellipsis" style="max-width:180px">${esc(x.sender.address)}</div></td><td class="small">${esc(x.recipient.name)}<div class="tiny muted ellipsis" style="max-width:180px">${esc(x.recipient.address)}</div></td>
-        <td class="small">${x.courier ? `🚲 ${esc(x.courier.name || '')}` : '—'}${x.departure_at ? `<div class="tiny muted">${dt(x.departure_at)} · ${esc(x.axe || '')}</div>` : ''}</td>
-        <td class="num">${ar(x.value ?? x.declared_value)}</td><td class="num">${ar(x.fee)}</td><td class="num">${x.collected ? ar(x.collected) : '—'}</td><td>${shipPill(x)}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
+      <div class="row wrap small" style="gap:16px;margin:6px 0 10px">${tot.n} colis · valeur livrée <b>${ar(tot.value)}</b> · frais <b>${ar(tot.fees)}</b>${cv && cv !== 'none' ? ` · part du livreur <b>${ar(tot.share)}</b>` : ''} · ${tot.unpaid ? `<span style="color:var(--orange)">❌ ${tot.unpaid} livraison(s) non payée(s)</span>` : '✅ livraisons payées'}</div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Réf</th><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur</th><th class="num">Frais</th><th>Payé ?</th><th>Statut</th></tr></thead><tbody>
+      ${rows.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}">
+        <td><b>${esc(x.ref)}</b>${x.external_ref ? `<div class="tiny muted">${esc(x.external_ref)}</div>` : ''}<div class="tiny muted">${dt(x.created_at)} · ${esc(x.source || '')}</div>${x.review ? '<div class="tiny" style="color:var(--orange)">⚠️ à valider</div>' : ''}</td>
+        <td class="small">${person(x.sender, '🟢', x.windows && ['pending', 'assigned'].includes(x.status) ? `🕘 ${win(x.windows.pickup)}` : '')}</td>
+        <td class="small">${person(x.recipient, '🟠', x.windows && !['delivered', 'refused', 'cancelled'].includes(x.status) ? `🏁 ${win(x.windows.delivery)}` : '')}${x.province ? `<div class="tiny">🚌 ${esc(x.province.city)} · ${esc(x.province.coop)}</div>` : ''}</td>
+        <td class="small">${x.pickup_courier || x.delivery_courier || x.courier
+          ? `<div>🟢 Récup. : <b>${esc(x.pickup_courier?.name || x.courier?.name || '—')}</b></div><div>🟠 Livr. : <b>${esc(x.delivery_courier?.name || x.courier?.name || '—')}</b></div>${x.courier?.phone ? `<div class="tiny"><a href="tel:${esc(x.courier.phone)}" data-stop>📞 ${esc(phoneFmt(x.courier.phone))}</a></div>` : ''}`
+          : '<span style="color:var(--orange)">Sans livreur</span>'}</td>
+        <td class="num">${ar(x.value ?? x.declared_value)}${x.payment?.value_paid ? '<div class="tiny">📱 MM</div>' : ''}</td><td class="num">${ar(x.fee)}${x.collected ? `<div class="tiny muted">encaissé ${ar(x.collected)}</div>` : ''}</td>
+        <td>${money(x)}</td><td>${shipPill(x)}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
   },
 
   async cash() {
@@ -693,7 +726,7 @@ const actions = {
     };
   },
   newcourier: () => courierForm(),
-  pfilter: () => { sessionStorage.setItem('adm_pst', $('[data-pf=status]').value); sessionStorage.setItem('adm_pq', $('[data-pf=q]').value); show(); },
+  pfilter: () => { sessionStorage.setItem('adm_pst', $('[data-pf=status]').value); sessionStorage.setItem('adm_pq', $('[data-pf=q]').value); sessionStorage.setItem('adm_pc', $('[data-pf=courier]').value); sessionStorage.setItem('adm_pp', $('[data-pf=paid]').value); show(); },
   pexport: async () => {
     const res = await fetch('/api/admin/shipments/export', { headers: { authorization: `Bearer ${state.token}` } });
     const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = `alefa-colis-${new Date().toISOString().slice(0, 10)}.csv`; a.click();

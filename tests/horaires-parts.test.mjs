@@ -137,6 +137,18 @@ test('parts : 4 500 Ar → 2 000 au centre ; la récupération est gratuite, le 
   assert.equal((await call('GET', '/api/admin/courier-stats?days=1', null, admin)).data.couriers.find((c) => c.id === veloId).unpaid, 0);
 });
 
+test('liste des colis : filtre par livreur (récupération ou livraison) et par paiement', async () => {
+  const veloId = db.prepare("SELECT id FROM users WHERE phone = '+261341000001'").get().id;
+  const all = (await call('GET', `/api/admin/shipments?status=&courier_id=${veloId}`, null, admin)).data.shipments;
+  assert.ok(all.length >= 1); assert.ok(all.every((x) => [x.courier?.id, x.pickup_courier?.id, x.delivery_courier?.id].includes(veloId)));
+  const p45 = all.find((x) => x.external_ref === 'P-45');
+  assert.equal(p45.sender.phone, '+261329000000'); assert.ok(p45.recipient.phone); assert.ok(p45.courier.phone);
+  assert.equal(p45.shares.paid, true);
+  const unpaid = (await call('GET', `/api/admin/shipments?status=&courier_id=${veloId}&paid=unpaid`, null, admin)).data.shipments;
+  assert.ok(unpaid.some((x) => x.external_ref === 'P-45'), 'valeur pas encore payée à l\'expéditeur');
+  assert.equal((await call('GET', '/api/admin/shipments?status=&courier_id=none', null, admin)).data.shipments.every((x) => !x.courier), true);
+});
+
 test('service client : le client écrit, l\'admin est notifié et répond', async () => {
   assert.equal((await call('POST', '/api/support', { body: 'Bonjour, mon colis est-il parti ?' }, client)).status, 201);
   assert.equal((await call('POST', '/api/support', { body: 'x', ref: 'ALNOPE00' }, client)).status, 404);
