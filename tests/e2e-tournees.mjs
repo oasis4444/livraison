@@ -43,6 +43,7 @@ async function ctx(geo, vw = { width: 400, height: 860 }) {
       : /analakely/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Analakely, Antananarivo, Madagascar', lat: '-18.9055', lon: '47.5255' }
       : { display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
+  await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   return c;
 }
 const api = async (method, path, body, headers = {}) => { const r = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json() }; };
@@ -78,7 +79,7 @@ try {
     if (!r.data.run) throw new Error('tournée Naina');
   });
   await step('client : colis payé par Mobile Money, envoyé en province', async () => {
-    await client.goto(BASE);
+    await client.goto(BASE + '/#connexion');
     await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.click('[type=submit]');
     await client.click('[data-t=colis]'); await client.click('[data-act=sendparcel]');
     await client.click('[data-gps]'); await client.waitForFunction(() => document.querySelector('[data-a=pickup]').value.length > 3);
@@ -118,7 +119,7 @@ try {
     if (o?.status !== 'lost' || o.taken_by !== 'Hery') throw new Error('Naina devrait voir « déjà pris par Hery » : ' + JSON.stringify(o));
   });
   await step('admin : notifié, voit les livreurs en tournée avec leur numéro', async () => {
-    await admin.goto(BASE);
+    await admin.goto(BASE + '/#connexion');
     await admin.fill('[name=phone]', '0340000000'); await admin.fill('[name=password]', 'admin12345'); await admin.click('[type=submit]');
     await admin.waitForSelector('text=Colis du centre');
     const n = await api('GET', '/api/notifications', null, auth(tok.admin));

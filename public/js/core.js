@@ -9,7 +9,7 @@ export const state = { token: localStorage.getItem(TOKEN_KEY), user: null, couri
 // ---------------------------------------------------------------- i18n
 const D = {
   fr: {
-    tagline: 'Livraison à vélo à Antananarivo', login: 'Connexion', register: 'Inscription', phone: 'Numéro de téléphone', password: 'Mot de passe',
+    tagline: 'Livraison de colis à vélo et à moto, Antananarivo', login: 'Connexion', register: 'Inscription', phone: 'Numéro de téléphone', password: 'Mot de passe',
     name: 'Nom complet', iam: 'Je suis', client: 'Client', courier: 'Livreur', cin: 'Numéro CIN', address: 'Adresse', emergency: 'Contact d\'urgence',
     business: 'Compte entreprise (boutique, société)', company: 'Nom de l\'entreprise', create_account: 'Créer mon compte', sign_in: 'Se connecter',
     no_account: 'Pas encore de compte ?', have_account: 'Déjà inscrit ?', logout: 'Déconnexion',
@@ -41,7 +41,7 @@ const D = {
     pay_to: 'Payez au numéro', subscription_until: 'Abonnement valide jusqu\'au', offline_mode: 'Connexion perdue — dernière position affichée',
   },
   mg: {
-    tagline: 'Fandefasana entana amin\'ny bisikileta eto Antananarivo', login: 'Hiditra', register: 'Hisoratra anarana', phone: 'Laharana finday', password: 'Teny miafina',
+    tagline: 'Fanaterana entana amin\'ny bisikileta sy moto, Antananarivo', login: 'Hiditra', register: 'Hisoratra anarana', phone: 'Laharana finday', password: 'Teny miafina',
     name: 'Anarana feno', iam: 'Izaho dia', client: 'Mpanjifa', courier: 'Mpitondra entana', cin: 'Laharana CIN', address: 'Adiresy', emergency: 'Olona antsoina raha misy loza',
     business: 'Kaonty orinasa (fivarotana, orinasa)', company: 'Anaran\'ny orinasa', create_account: 'Hamorona kaonty', sign_in: 'Hiditra',
     no_account: 'Mbola tsy manana kaonty?', have_account: 'Efa manana kaonty?', logout: 'Hivoaka',

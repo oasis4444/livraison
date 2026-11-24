@@ -17,7 +17,7 @@ new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key 
 
 const LEAFLET_STUB = `
 (() => {
-  const mkLayer = (extra = {}) => { const o = { addTo(m) { m?._layers?.add(o); return o; }, remove() { return o; }, on() { return o; }, off() { return o; }, bindTooltip() { return o; }, ...extra }; return o; };
+  const mkLayer = (extra = {}) => { const o = { clearLayers() { return o; }, addTo(m) { m?._layers?.add(o); return o; }, remove() { return o; }, on() { return o; }, off() { return o; }, bindTooltip() { return o; }, ...extra }; return o; };
   const b = (pts) => ({ pad() { return this; }, pts });
   window.L = {
     map(el, o) { const m = { _c: o.center, _layers: new Set(), setView(c) { m._c = Array.isArray(c) ? c : [c.lat, c.lng]; return m; }, getCenter() { return { lat: m._c[0], lng: m._c[1] }; },
@@ -43,6 +43,7 @@ async function ctx(geo, vw = { width: 400, height: 860 }) {
       : /analakely/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Analakely, Antananarivo, Madagascar', lat: '-18.9055', lon: '47.5255' }
       : { display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
+  await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   return c;
 }
 const api = async (method, path, body, headers = {}) => { const r = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, data: await r.json() }; };
@@ -51,8 +52,24 @@ const courier = await (await ctx({ latitude: -18.9050, longitude: 47.5250 })).ne
 const client = await (await ctx({ latitude: -18.9020, longitude: 47.5170 })).newPage(); watch(client, 'client');
 let apiKey;
 try {
+  await step('accueil public : présentation, tarifs, calculateur, suivi', async () => {
+    const vc = await ctx(null, { width: 1366, height: 800 }), v = await vc.newPage(); watch(v, 'visiteur');
+    await v.goto(BASE); await v.waitForSelector('.h-hero h1');
+    if ((await v.locator('.h-cat').count()) !== 4) throw new Error('catégories');
+    await v.fill('[data-addr=p]', 'Analakely'); await v.click('[data-sug=p] button');
+    await v.fill('[data-addr=d]', 'Ivandry'); await v.click('[data-sug=d] button');
+    await v.waitForSelector('.h-res-top b'); if (!/Ar/.test(await v.textContent('.h-res-top b'))) throw new Error('prix');
+    await v.evaluate(() => document.querySelectorAll('.reveal').forEach((e) => e.classList.add('in'))); await v.waitForTimeout(800);
+    await v.screenshot({ path: 'tests/screens/00-accueil.png', fullPage: true });
+    await v.setViewportSize({ width: 390, height: 844 }); await v.evaluate(() => window.scrollTo(0, 0)); await v.waitForTimeout(300);
+    await v.screenshot({ path: 'tests/screens/00-accueil-mobile.png', fullPage: true });
+    await v.click('[data-burger]'); await v.click('.h-nav-cta [data-register]'); await v.waitForSelector('[data-accept]');
+    if (!v.url().endsWith('#inscription')) throw new Error('lien inscription');
+    await v.click('[data-act=home]'); await v.waitForSelector('.h-hero');
+    await vc.close();
+  });
   await step('admin : axe + livreur + logiciel de vente connecté', async () => {
-    await admin.goto(BASE);
+    await admin.goto(BASE + '/#connexion');
     await admin.fill('[name=phone]', '0340000000'); await admin.fill('[name=password]', 'admin12345'); await admin.click('[type=submit]');
     await admin.waitForSelector('text=Colis du centre');
     await admin.click('[data-v=axes]'); await admin.click('[data-act=axe]');
@@ -97,7 +114,7 @@ try {
     if (r.status !== 201 || r.data.shipment.status !== 'assigned') throw new Error(JSON.stringify(r));
   });
   await step('client (destinataire) : voit les heures & axes et son colis', async () => {
-    await client.goto(BASE);
+    await client.goto(BASE + '/#connexion');
     await client.click('[data-m=register]');
     await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.check('[data-accept]'); await client.click('[type=submit]');
     await client.waitForSelector('[data-ext="CMD-1042"]');
@@ -315,7 +332,7 @@ try {
   });
   await step('« Suivre mon colis » : numéro + téléphone, sans compte', async () => {
     const p = await (await ctx(null)).newPage(); watch(p, 'suivi-num');
-    await p.goto(BASE + '/'); await p.click('text=Suivre mon colis');
+    await p.goto(BASE + '/#connexion'); await p.click('text=Suivre mon colis');
     await p.fill('[name=ref]', 'CMD-1042'); await p.fill('[name=phone]', '034 99 999 99'); await p.click('text=Voir où est mon colis');
     await p.waitForSelector('text=Aucun colis');
     const tel = await admin.evaluate(async () => (await (await fetch('/api/admin/shipments?q=CMD-1042', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } })).json()).shipments[0].recipient.phone);

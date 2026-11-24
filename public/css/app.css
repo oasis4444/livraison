@@ -24,7 +24,7 @@ html, body { margin: 0; height: 100%; }
 body { font-family: var(--font); color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; font-size: 15px; overscroll-behavior: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--green); }
-h1, h2, h3 { margin: 0 0 .5rem; letter-spacing: -.01em; }
+h1, h2, h3 { margin: 0 0 .5rem; letter-spacing: -.015em; font-family: "Manrope", var(--font); }
 h2 { font-size: 1.25rem; } h3 { font-size: 1.05rem; }
 .muted { color: var(--ink-3); } .small { font-size: .85rem; } .tiny { font-size: .75rem; }
 .row { display: flex; gap: .6rem; align-items: center; }
@@ -68,11 +68,16 @@ textarea.input { resize: vertical; min-height: 70px; }
 .seg button.on { background: #fff; color: var(--green); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
 
 /* Auth */
-.auth { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(circle at 20% 0%, #13936a 0, var(--green) 45%, #064a35 100%); }
-.auth-card { width: 100%; max-width: 410px; background: #fff; border-radius: 24px; padding: 28px 22px; box-shadow: var(--shadow); }
+.auth { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background-color: #062a1f;
+  background-image: radial-gradient(700px 380px at 90% 0%, rgba(14, 138, 99, .45), transparent 70%), radial-gradient(500px 340px at 0% 100%, rgba(255, 200, 61, .1), transparent 70%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' fill='none' stroke='%23ffffff' stroke-opacity='.06' stroke-width='1.2'%3E%3Cpath d='M-20 60c50-30 90 30 140 0s90-40 140-10M-20 140c40-20 80 20 130-5s100-30 150 5M-20 210c60-25 100 15 150-10s80-20 130 0'/%3E%3C/svg%3E"); }
+.auth-card { width: 100%; max-width: 420px; background: #fbf8f1; border-radius: 26px; padding: 26px 24px; box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .55); }
+.auth-card .btn.primary { background: #ffc83d; color: #2b2000; border-radius: 999px; }
+.auth-card .btn.primary:hover { background: #ffd76a; }
+.auth-card .input { background: #fff; }
 .auth-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
 .auth-brand img { width: 52px; height: 52px; }
-.auth-brand b { font-size: 26px; display: block; letter-spacing: -.02em; }
+.auth-brand b { font-size: 26px; display: block; letter-spacing: -.03em; font-family: "Manrope", var(--font); font-weight: 800; color: #062a1f; }
 .lang-switch { display: flex; gap: 4px; justify-content: flex-end; }
 .lang-switch button { border: 0; background: var(--bg); border-radius: 8px; padding: 4px 9px; font-size: .78rem; font-weight: 700; cursor: pointer; color: var(--ink-3); }
 .lang-switch button.on { background: var(--green); color: #fff; }

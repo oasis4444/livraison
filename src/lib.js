@@ -34,12 +34,12 @@ export function withSecurityHeaders(res) {
     [
       "default-src 'self'",
       "script-src 'self' https://unpkg.com",
-      "style-src 'self' 'unsafe-inline' https://unpkg.com",
+      "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com",
       "img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://tiles.openfreemap.org https://unpkg.com",
       "connect-src 'self' https://nominatim.openstreetmap.org https://routing.openstreetmap.de https://tiles.openfreemap.org https://unpkg.com",
       "worker-src 'self' blob:",
       "child-src blob:",
-      "font-src 'self' data:",
+      "font-src 'self' data: https://fonts.gstatic.com https://tiles.openfreemap.org",
       "frame-ancestors 'none'",
     ].join('; '),
   );

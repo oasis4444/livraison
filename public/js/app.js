@@ -125,7 +125,14 @@ async function boot() {
     } catch { state.token = null; localStorage.removeItem(TOKEN_KEY); }
   }
   app.className = '';
-  if (!state.user) return COURIER_SPACE ? courierLoginView() : authView();
+  if (!state.user) {
+    if (COURIER_SPACE) return courierLoginView();
+    // Visiteur : page d'accueil. Application installée ou lien #connexion / #inscription : directement le formulaire.
+    const standalone = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone;
+    const h = location.hash;
+    if (standalone || h === '#connexion' || h === '#inscription') return authView(h === '#inscription' ? 'register' : 'login');
+    return showHome();
+  }
   const role = state.user.role;
   // Un seul lien pour tous : chacun est envoyé vers son espace selon son rôle.
   // La session est rangée avec l'espace de son rôle, puis on y va.
@@ -161,9 +168,17 @@ function courierLoginView() {
   });
 }
 
+async function showHome() {
+  const { mountHome } = await import('./home.js');
+  window.scrollTo(0, 0);
+  return mountHome(app, { onAuth: (m) => { history.replaceState(null, '', m === 'register' ? '#inscription' : '#connexion'); authView(m); } });
+}
+
 function authView(mode = 'login', role = 'client') {
+  app.className = '';
+  window.scrollTo(0, 0);
   app.innerHTML = `<div class="auth"><div class="auth-card">
-    ${langSwitch()}
+    <div class="row between" style="margin-bottom:6px"><a href="/" class="small" data-act="home" style="text-decoration:none;font-weight:600">← ${state.lang === 'mg' ? 'Fandraisana' : 'Accueil'}</a>${langSwitch()}</div>
     <div class="auth-brand"><img src="/icon.svg" alt=""><div><b>Alefa</b><span class="muted small">${t('tagline')}</span></div></div>
     <div class="seg" style="margin-bottom:16px"><button data-act="mode" data-m="login" class="${mode === 'login' ? 'on' : ''}">${t('login')}</button><button data-act="mode" data-m="register" class="${mode === 'register' ? 'on' : ''}">${t('register')}</button></div>
     <form class="stack" data-form autocomplete="on">
@@ -180,8 +195,9 @@ function authView(mode = 'login', role = 'client') {
       <p class="small muted" style="text-align:center">📍 <a href="/suivi">${state.lang === 'mg' ? 'Arahina ny colis-ko' : 'Suivre mon colis'}</a> · 🚲 <a href="/livreur">${t('courier_space_link')}</a></p>
     </form>
   </div></div>`;
-  bind(app, {
-    mode: (el) => authView(el.dataset.m, role),
+  bind(app.firstElementChild, { // sur le contenu (remplacé à chaque affichage) : pas d'écouteurs en double
+    mode: (el) => { history.replaceState(null, '', el.dataset.m === 'register' ? '#inscription' : '#connexion'); authView(el.dataset.m, role); },
+    home: (el, e) => { e?.preventDefault(); history.replaceState(null, '', '/'); showHome(); },
     role: (el) => authView('register', el.dataset.r),
     lang: (el) => { setLang(el.dataset.l); authView(mode, role); },
     terms: () => import('./terms.js').then((m) => m.showConditions()),
@@ -204,6 +220,7 @@ function authView(mode = 'login', role = 'client') {
       const r = await api('POST', mode === 'register' ? '/api/auth/register' : '/api/auth/login', data);
       localStorage.setItem(tokenKeyFor(r.user.role), r.token);
       state.token = r.token;
+      if (/^#(connexion|inscription)$/.test(location.hash)) history.replaceState(null, '', '/');
       toast(`Tonga soa, ${r.user.name} !`, 'ok');
       boot();
     } catch (err) { toastErr(err); btn.disabled = false; }

@@ -38,6 +38,7 @@ async function ctx(geo) {
     ? r.fulfill({ json: { address: { road: 'Avenue de l\'Indépendance', suburb: 'Analakely' } } })
     : r.fulfill({ json: [{ display_name: 'Ankorondrano, Antananarivo, Analamanga, Madagascar', lat: '-18.8840', lon: '47.5240' }] }));
   await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
+  await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   await c.route('https://*.basemaps.cartocdn.com/**', (r) => r.abort());
   return c;
 }
@@ -55,7 +56,7 @@ const admin = await ac.newPage(); watch(admin, 'admin');
 
 try {
   await step('inscription client', async () => {
-    await client.goto(BASE);
+    await client.goto(BASE + '/#connexion');
     await client.screenshot({ path: 'tests/screens/01-connexion.png' });
     await client.click('[data-m=register]');
     await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12');
@@ -70,7 +71,7 @@ try {
     await client.waitForSelector('[data-q=b]');
   });
   await step('admin crée le livreur, un axe et son planning horaire', async () => {
-    await admin.goto(BASE);
+    await admin.goto(BASE + '/#connexion');
     await admin.fill('[name=phone]', '0340000000'); await admin.fill('[name=password]', 'admin12345'); await admin.click('[type=submit]');
     await admin.waitForSelector('text=Livraisons aujourd');
     await admin.click('[data-v=axes]'); await admin.click('[data-act=axe]');

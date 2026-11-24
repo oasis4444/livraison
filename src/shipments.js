@@ -3,7 +3,7 @@
 // le centre reverse la valeur à l'expéditeur une fois l'argent remis par le livreur.
 import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
 import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL, slotRoute, courierAxeState } from './worker.js';
-import { matchTrip, logSync, nearest, simplify } from './trips.js';
+import { matchTrip, logSync, nearest, simplify, rateLimit } from './trips.js';
 import { planWindows, nextWindows, centreShare, categoryOf, priceOf, catTable, zoneFee } from './rules.js';
 import { smsStep } from './sms.js';
 
@@ -1545,6 +1545,8 @@ export function registerShipmentRoutes(route) {
   const ANY = ['client', 'courier', 'admin'];
   route('GET', '/api/schedule', ['admin', 'courier'], schedule); // heures & axes : centre et livreurs seulement (pas les clients)
   route('POST', '/api/shipments/quote', ANY, quoteShipment);
+  // Calculateur de la page d'accueil (sans compte) : même calcul, limité par adresse IP.
+  route('POST', '/api/estimate', null, async (ctx, env) => { await rateLimit(env, 'est' + (ctx.ip || 'x')); ctx.body = { ...ctx.body, value: 0 }; return quoteShipment(ctx, env); });
   route('GET', '/api/shipments/windows', ANY, windowsList);
   route('GET', '/api/conditions', null, conditions); // public : affiché aussi avant l'inscription
   route('POST', '/api/shipments/:id/wait', ['courier'], waitFee);
