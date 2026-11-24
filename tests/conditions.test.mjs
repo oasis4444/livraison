@@ -32,7 +32,7 @@ const body = (x = {}) => ({ description: 'Robe', category: 'S', declared_value: 
 test('mise en place (SMS activés vers une passerelle)', async () => {
   db.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261340000000','Admin','admin',?,?,'active',0)").run(await hashPassword('admin123', 's', 1000), 's');
   admin = (await call('POST', '/api/auth/login', { phone: '0340000000', password: 'admin123' })).data.token;
-  client = (await call('POST', '/api/auth/register', { phone: '0331234567', name: 'Soa Boutique', password: 'secret1' })).data.token;
+  client = (await call('POST', '/api/auth/register', { accept_terms: true, phone: '0331234567', name: 'Soa Boutique', password: 'secret1' })).data.token;
   for (const [phone, name, cin, vehicle] of [['0341000001', 'Hery Velo', '101211100001', 'velo'], ['0341000002', 'Naina Moto', '101211100002', 'moto']])
     assert.equal((await call('POST', '/api/admin/users', { role: 'courier', phone, name, cin, password: 'velo1234', vehicle }, admin)).status, 201);
   velo = (await call('POST', '/api/auth/login', { phone: '0341000001', password: 'velo1234' })).data.token;
@@ -45,7 +45,8 @@ test('conditions de transport : catégories réglables, exemples sans ventilateu
   const c = (await call('GET', '/api/conditions', null, client)).data;
   assert.deepEqual(c.categories.map((x) => [x.k, x.kg, x.fee, x.vehicle]), [['S', 3, 0, 'velo'], ['M', 10, 1000, 'velo'], ['L', 25, 3000, 'moto'], ['XL', null, null, 'devis']]);
   assert.ok(!/ventilateur|micro/i.test(c.categories.map((x) => x.ex).join(' ')));
-  assert.deepEqual(c.options, { fragile: 1000, express: 2000, wait: 500, return_percent: 50, pickup_large: 2000 });
+  assert.deepEqual(c.options, { fragile: 1000, express: 2000, wait: 500, return_percent: 50, pickup_large: 2000, multi_discount: 50, big_value: 200000, big_value_pct: 1, xl_min: 15000 });
+  assert.deepEqual(c.zones, [[1, 3, 2000], [2, 7, 3000], [3, 12, 4000], [4, null, 5000]]); assert.equal(c.version, '2026-11-24');
   assert.deepEqual(c.limits, { bike_kg: 15, moto_kg: 30, max_value: 300000 });
 });
 
@@ -64,7 +65,7 @@ test('prix : catégorie + options ; le plus élevé entre catégorie, poids et t
   assert.equal(r.status, 201);
   const s = r.data.shipment;
   assert.equal(s.category, 'M'); assert.equal(s.fragile, true); assert.equal(s.express, true); assert.equal(s.fee, 3000 + 1000 + 1000 + 2000);
-  assert.deepEqual(s.fee_detail.map((l) => l[0]), ['Livraison', 'Catégorie M', 'Fragile', 'Express']);
+  assert.deepEqual(s.fee_detail.map((l) => l[0]), ['Livraison (Zone 2)', 'Catégorie M', 'Fragile', 'Express']);
   assert.ok(s.windows.delivery[1] - Date.now() <= 91 * 60e3, 'express : livré dans l\'heure');
   const xl = (await call('POST', '/api/shipments', body({ category: 'XL' }), client)).data.shipment;
   assert.match(xl.review, /XL/);
@@ -141,15 +142,37 @@ test('page de suivi : frise horodatée, montant, code PIN et téléphone du livr
   assert.ok(t.timeline[3].at); assert.equal(t.pin, null);
 });
 
-test('retour : destinataire injoignable → 50 % des frais à l\'expéditeur', async () => {
+test('retour : destinataire injoignable après 2 tentatives → l\'expéditeur paie les frais + 50 %', async () => {
   const s = (await call('POST', '/api/shipments', body(), client)).data.shipment;
   await call('POST', `/api/shipments/${s.id}/assign`, { courier_id: veloId }, admin);
   await call('POST', `/api/shipments/${s.id}/pickup`, { value: 20000, photo: PH }, velo);
-  const r = await call('POST', `/api/shipments/${s.id}/refuse`, { unreachable: true }, velo);
-  assert.equal(r.status, 200); assert.equal(r.data.collected, 0);
-  assert.equal(db.prepare('SELECT return_fee FROM shipments WHERE id = ?').get(s.id).return_fee, 1500);
+  let r = await call('POST', `/api/shipments/${s.id}/refuse`, { unreachable: true }, velo);
+  assert.equal(r.data.returned, false); assert.equal(r.data.attempt, 1, '1re tentative : nouvelle tentative');
+  assert.equal((await call('GET', `/api/shipments/${s.id}`, null, admin)).data.shipment.status, 'picked_up');
+  r = await call('POST', `/api/shipments/${s.id}/refuse`, { unreachable: true }, velo);
+  assert.equal(r.status, 200); assert.equal(r.data.returned, true); assert.equal(r.data.collected, 0);
+  assert.equal(db.prepare('SELECT return_fee FROM shipments WHERE id = ?').get(s.id).return_fee, 3000 + 1500);
   const v = (await call('GET', '/api/admin/cash', null, admin)).data.vendors.find((x) => x.phone === '+261331234567');
-  assert.equal(v.return_fees, 1500);
+  assert.equal(v.return_fees, 4500);
+});
+
+test('zones de distance, plusieurs colis −50 %, grosse valeur +1 %, devis XL minimum 15 000', async () => {
+  const q = (x) => call('POST', '/api/shipments/quote', { pickup_lat: A.lat, pickup_lng: A.lng, category: 'S', ...x }, client).then((r) => r.data);
+  // A → NEAR ≈ 0,9 km (zone 1), A → FAR ≈ 6 km (zone 2), ~10 km (zone 3), ~20 km (périphérie)
+  assert.equal((await q({ drop_lat: NEAR.lat, drop_lng: NEAR.lng })).fee, 2000);
+  assert.equal((await q({ drop_lat: FAR.lat, drop_lng: FAR.lng })).zone, 'Zone 2');
+  assert.equal((await q({ drop_lat: -18.84, drop_lng: 47.55 })).fee, 4000);
+  assert.equal((await q({ drop_lat: -18.76, drop_lng: 47.48 })).fee, 5000);
+  // 3 colis pour la même adresse : 3 000 + 2 × 1 500
+  const m = await q({ drop_lat: FAR.lat, drop_lng: FAR.lng, qty: 3 });
+  assert.equal(m.fee, 3000 + 3000); assert.match(m.lines.at(-1)[0], /2 colis en plus/);
+  // grosse valeur à encaisser : +1 % au-delà de 200 000 Ar (pas si déjà payée par Mobile Money)
+  assert.equal((await q({ drop_lat: FAR.lat, drop_lng: FAR.lng, value: 250000 })).fee, 3000 + 2500);
+  assert.equal((await q({ drop_lat: FAR.lat, drop_lng: FAR.lng, value: 250000, value_paid: true })).fee, 3000);
+  // XL : devis, 15 000 Ar minimum
+  const xl = (await call('POST', '/api/shipments', body({ category: 'XL' }), client)).data.shipment;
+  assert.equal((await call('POST', `/api/admin/shipments/${xl.id}/approve`, { fee: 9000 }, admin)).status, 400);
+  assert.equal((await call('POST', `/api/admin/shipments/${xl.id}/approve`, { fee: 18000 }, admin)).data.shipment.fee, 18000);
 });
 
 test('plafond d\'argent : au-delà, plus de nouvelles missions tant que l\'argent n\'est pas remis', async () => {
@@ -181,3 +204,14 @@ test('retards : alerte automatique une seule fois et colis signalé', async () =
 });
 
 test.after(() => { globalThis.fetch = realFetch; });
+
+test('conditions acceptées à l\'inscription ; nouvelle version → à accepter de nouveau avant d\'envoyer', async () => {
+  assert.equal((await call('POST', '/api/auth/register', { phone: '0331230000', name: 'Sans case', password: 'secret1' })).data.error, 'terms_required');
+  const me = (await call('GET', '/api/me', null, client)).data;
+  assert.deepEqual([me.terms.version, me.terms.accepted], ['2026-11-24', true]);
+  await call('PUT', '/api/admin/settings', { settings: { terms_version: '2026-12-01' } }, admin);
+  assert.equal((await call('GET', '/api/me', null, client)).data.terms.accepted, false);
+  assert.equal((await call('POST', '/api/shipments', body(), client)).status, 428);
+  assert.equal((await call('POST', '/api/terms/accept', {}, client)).data.version, '2026-12-01');
+  assert.equal((await call('POST', '/api/shipments', body(), client)).status, 201);
+});

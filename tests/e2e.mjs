@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'; UPDATE settings SET value = '0' WHERE key IN ('direct_km', 'scan_required');"); // parcours historique : attribution automatique
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'; UPDATE settings SET value = '0' WHERE key IN ('direct_km', 'scan_required', 'zones_enabled');"); // parcours historique : attribution automatique
 
 const LEAFLET_STUB = `
 (() => {
@@ -59,7 +59,13 @@ try {
     await client.screenshot({ path: 'tests/screens/01-connexion.png' });
     await client.click('[data-m=register]');
     await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12');
-    await client.click('[type=submit]');
+    await client.waitForSelector('[data-terms-sum] li');
+    await client.click('[type=submit]'); await client.waitForTimeout(400);
+    if (await client.locator('[data-t=home]').count()) throw new Error('inscription sans accepter les conditions');
+    await client.click('[data-act=terms]'); await client.waitForSelector('.terms h3'); await client.screenshot({ path: 'tests/screens/01b-conditions.png' });
+    const nm = await client.locator('.modal-back').count(); if (nm !== 1) throw new Error('modales ouvertes : ' + nm);
+    await client.locator('.modal [data-x]').click({ force: true }); await client.waitForTimeout(200);
+    await client.check('[data-accept]'); await client.click('[type=submit]');
     await client.waitForSelector('[data-t=home]'); await client.click('[data-t=home]');
     await client.waitForSelector('[data-q=b]');
   });

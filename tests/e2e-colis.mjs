@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'; UPDATE settings SET value = '0' WHERE key IN ('direct_km', 'scan_required');"); // parcours historique : attribution automatique
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'; UPDATE settings SET value = '0' WHERE key IN ('direct_km', 'scan_required', 'zones_enabled');"); // parcours historique : attribution automatique
 
 const LEAFLET_STUB = `
 (() => {
@@ -99,7 +99,7 @@ try {
   await step('client (destinataire) : voit les heures & axes et son colis', async () => {
     await client.goto(BASE);
     await client.click('[data-m=register]');
-    await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.click('[type=submit]');
+    await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.check('[data-accept]'); await client.click('[type=submit]');
     await client.waitForSelector('[data-ext="CMD-1042"]');
     await client.screenshot({ path: 'tests/screens/22-client-colis.png' });
     if (await client.locator('[data-t=sched]').count()) throw new Error('le client ne doit pas voir les heures & axes');

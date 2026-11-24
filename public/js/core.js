@@ -106,6 +106,7 @@ export async function api(method, path, body) {
   state.offline = false;
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && state.token) { logout(true); }
+  if (res.status === 428 && data.error === 'terms_required') import('./terms.js').then((m) => m.ensureTerms({ accepted: false })).catch(() => {});
   if (!res.ok) throw Object.assign(new Error(data.message || t('error')), { status: res.status, code: data.error });
   return data;
 }
@@ -373,6 +374,7 @@ export function profileForm() {
   const m = modal(t('profile'), `<div class="stack">
     <div class="row"><div class="avatar">${esc(initials(u.name))}</div><div><b>${esc(u.name)}</b><div class="muted small">${esc(phoneFmt(u.phone))}</div></div></div>
     <label class="field"><span>${t('language')}</span><div class="seg"><button data-l="fr" class="${state.lang === 'fr' ? 'on' : ''}">Français</button><button data-l="mg" class="${state.lang === 'mg' ? 'on' : ''}">Malagasy</button></div></label>
+    <button class="btn block" data-terms>${state.lang === 'mg' ? 'Fepetra sy saran\'ny fanaterana' : 'Conditions et tarifs'}</button>
     <h3 style="margin-top:18px">${t('change_password')}</h3>
     <input class="input" type="password" placeholder="${t('current_password')}" data-cur autocomplete="current-password">
     <input class="input" type="password" placeholder="${t('new_password')}" data-new autocomplete="new-password">
@@ -384,6 +386,7 @@ export function profileForm() {
     try { await api('PATCH', '/api/me', { password: m.el.querySelector('[data-cur]').value, new_password: m.el.querySelector('[data-new]').value }); toast('OK', 'ok'); m.close(); } catch (e) { toastErr(e); }
   };
   m.el.querySelector('[data-out]').onclick = () => logout();
+  m.el.querySelector('[data-terms]').onclick = () => import('./terms.js').then((x) => x.showConditions());
 }
 
 export function chatHtml(msgs, myId) {

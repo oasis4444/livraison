@@ -120,7 +120,7 @@ async function boot() {
   if (state.token) {
     try {
       const r = await api('GET', '/api/me');
-      state.user = r.user; state.courier = r.courier; state.axe = r.axe;
+      state.user = r.user; state.courier = r.courier; state.axe = r.axe; state.terms = r.terms;
       if (r.user.lang && !localStorage.getItem('alefa_lang')) setLang(r.user.lang);
     } catch { state.token = null; localStorage.removeItem(TOKEN_KEY); }
   }
@@ -134,6 +134,7 @@ async function boot() {
   if (!COURIER_SPACE && role === 'courier') return move('/livreur');
   const mod = await import(role === 'admin' ? './admin.js' : role === 'courier' ? './courier.js' : './client.js');
   mod.mount(app);
+  if (role === 'client' && state.terms && !state.terms.accepted) import('./terms.js').then((m) => m.ensureTerms(state.terms, () => { state.terms.accepted = true; })).catch(() => {});
 }
 
 function courierLoginView() {
@@ -172,7 +173,9 @@ function authView(mode = 'login', role = 'client') {
       <label class="field"><span>${t('password')}</span><input class="input" name="password" type="password" required minlength="${mode === 'register' ? 6 : 1}" autocomplete="${mode === 'register' ? 'new-password' : 'current-password'}"></label>
       ${mode === 'register' ? `
         <label class="row small"><input type="checkbox" name="is_business"> ${t('business')}</label>
-        <label class="field hidden" data-company><span>${t('company')}</span><input class="input" name="company"></label>` : ''}
+        <label class="field hidden" data-company><span>${t('company')}</span><input class="input" name="company"></label>
+        <div class="card" style="background:var(--bg);border:0" data-terms-sum><span class="small muted">…</span></div>
+        <label class="row small" style="gap:8px;align-items:flex-start"><input type="checkbox" name="accept_terms" data-accept> <span>${state.lang === 'mg' ? 'Novakiako ary ekeko ny' : 'J\'ai lu et j\'accepte les'} <a href="#" data-act="terms">${state.lang === 'mg' ? 'fepetra sy ny saran\'ny fanaterana' : 'conditions de livraison et les tarifs'}</a> ${state.lang === 'mg' ? 'Alefa.' : 'd\'Alefa.'}</span></label>` : ''}
       <button class="btn primary lg block" type="submit">${mode === 'register' ? t('create_account') : t('sign_in')}</button>
       <p class="small muted" style="text-align:center">📍 <a href="/suivi">${state.lang === 'mg' ? 'Arahina ny colis-ko' : 'Suivre mon colis'}</a> · 🚲 <a href="/livreur">${t('courier_space_link')}</a></p>
     </form>
@@ -181,7 +184,9 @@ function authView(mode = 'login', role = 'client') {
     mode: (el) => authView(el.dataset.m, role),
     role: (el) => authView('register', el.dataset.r),
     lang: (el) => { setLang(el.dataset.l); authView(mode, role); },
+    terms: () => import('./terms.js').then((m) => m.showConditions()),
   });
+  if (mode === 'register') import('./terms.js').then(async (m) => { const c = await m.loadConditions(); const el = app.querySelector('[data-terms-sum]'); if (el) el.innerHTML = m.summaryHtml(c); }).catch(() => {});
   const form = app.querySelector('[data-form]');
   form.is_business?.addEventListener('change', (e) => app.querySelector('[data-company]').classList.toggle('hidden', !e.target.checked));
   form.addEventListener('submit', async (e) => {
@@ -190,7 +195,11 @@ function authView(mode = 'login', role = 'client') {
     const data = Object.fromEntries(new FormData(form));
     data.is_business = !!data.is_business;
     data.lang = state.lang;
-    if (mode === 'register') data.role = 'client';
+    if (mode === 'register') {
+      data.role = 'client';
+      data.accept_terms = !!form.querySelector('[data-accept]')?.checked;
+      if (!data.accept_terms) { btn.disabled = false; return toast(state.lang === 'mg' ? 'Asio marika ny « ekeko ny fepetra »' : 'Cochez « J\'ai lu et j\'accepte les conditions »', 'err'); }
+    }
     try {
       const r = await api('POST', mode === 'register' ? '/api/auth/register' : '/api/auth/login', data);
       localStorage.setItem(tokenKeyFor(r.user.role), r.token);

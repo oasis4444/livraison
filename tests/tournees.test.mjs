@@ -15,6 +15,7 @@ async function call(method, path, body, token, headers = {}) {
 }
 const db = env.DB.raw;
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // tarif normal dans ces tests
+db.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé dans ces tests (testé à part)
 const PHOTO = 'data:image/jpeg;base64,' + Buffer.from('fake-jpeg-bytes').toString('base64');
 // Centre à Analakely ; tournées vers le nord (Behoririka → Ankorondrano). Récupération à Behoririka, livraison à Ankorondrano.

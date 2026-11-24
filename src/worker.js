@@ -79,6 +79,9 @@ async function register(ctx, env) {
   const name = str(b.name, { min: 2, max: 80, name: 'Nom' });
   const password = str(b.password, { min: 6, max: 128, name: 'Mot de passe (6 caractères min.)' });
   if (await one(env, 'SELECT id FROM users WHERE phone = ?', phone)) fail(409, 'phone_taken', 'Ce numéro est déjà inscrit');
+  // Acceptation des conditions de livraison et des tarifs (obligatoire, version enregistrée).
+  if (![true, 1, '1', 'true'].includes(b.accept_terms)) fail(400, 'terms_required', 'Cochez « J\'ai lu et j\'accepte les conditions de livraison et les tarifs »');
+  const termsVersion = (await settings(env)).terms_version || null;
   const salt = randomHex(16);
   const hash = await hashPassword(password, salt, iterations(env));
   const status = 'active';
@@ -86,9 +89,10 @@ async function register(ctx, env) {
     VALUES (?,?,?,?,?,?,?,?,?,?)`, phone, name, role, hash, salt, status, b.lang === 'mg' ? 'mg' : 'fr',
     b.is_business ? 1 : 0, b.is_business ? str(b.company, { max: 120 }) : null, now());
   const id = res.meta.last_row_id;
+  await run(env, 'UPDATE users SET terms_version = ?, terms_at = ? WHERE id = ?', termsVersion, now(), id);
   const user = await one(env, 'SELECT * FROM users WHERE id = ?', id);
   ctx.user = user;
-  await audit(env, ctx, 'register', { role });
+  await audit(env, ctx, 'register', { role, terms: termsVersion });
   return json({ token: await createSession(env, user), user: publicUser(user) }, 201);
 }
 
@@ -116,7 +120,15 @@ async function me(ctx, env) {
   const u = ctx.user;
   const out = { user: publicUser(u) };
   if (u.role === 'courier') { out.courier = await courierProfile(env, u.id); out.axe = await courierAxeState(env, u.id); }
+  // Nouvelle version des conditions : le client doit les accepter à nouveau.
+  if (u.role === 'client') { const v = (await settings(env)).terms_version || null; out.terms = { version: v, accepted: !v || u.terms_version === v, accepted_at: u.terms_at ?? null }; }
   return json(out);
+}
+async function acceptTerms(ctx, env) {
+  const v = (await settings(env)).terms_version || null;
+  await run(env, 'UPDATE users SET terms_version = ?, terms_at = ? WHERE id = ?', v, now(), ctx.user.id);
+  await audit(env, ctx, 'terms_accept', { version: v });
+  return json({ ok: true, version: v });
 }
 
 async function courierProfile(env, id) {
@@ -802,7 +814,8 @@ const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per
   'bike_speed_kmh', 'moto_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m',
   'max_value', 'bike_max_kg', 'moto_max_kg', 'weight_free_kg', 'weight_step_kg', 'weight_step_fee', 'share_t1_max', 'share_t1', 'share_t2_max', 'share_t2', 'share_t3',
   'cat_s_kg', 'cat_s_cm', 'cat_s_fee', 'cat_m_kg', 'cat_m_cm', 'cat_m_fee', 'cat_l_kg', 'cat_l_cm', 'cat_l_fee', 'pickup_fee_large', 'opt_fragile', 'opt_express', 'opt_wait',
-  'return_fee_percent', 'direct_km', 'direct_fee', 'late_hours', 'cash_cap', 'cash_cap_hours'];
+  'return_fee_percent', 'direct_km', 'direct_fee', 'late_hours', 'cash_cap', 'cash_cap_hours', 'zone1_km', 'zone1_fee', 'zone2_km', 'zone2_fee', 'zone3_km', 'zone3_fee', 'zone4_fee',
+  'multi_discount', 'big_value', 'big_value_pct', 'xl_min_fee', 'max_attempts', 'centre_keep_days'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -813,7 +826,7 @@ async function adminSettingsPut(ctx, env) {
     if (k === 'commission_mode' && !['percent', 'subscription'].includes(val)) fail(400, 'invalid', 'Mode de commission invalide');
     if (k === 'courier_can_edit_fee') val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
-    if (['delivery_photo_required', 'relay_enabled', 'scan_required', 'sms_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
+    if (['delivery_photo_required', 'relay_enabled', 'scan_required', 'sms_enabled', 'zones_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
     if (['sms_gateway_url', 'public_url'].includes(k) && val && !/^https:\/\//.test(val)) fail(400, 'invalid', 'Adresse invalide (https://…)');
     if (k === 'return_fee_percent' && Number(val) > 100) fail(400, 'invalid', 'Pourcentage maximum 100');
     if (k === 'dispatch_mode' && !['admin', 'auto'].includes(val)) fail(400, 'invalid', 'Mode de répartition invalide');
@@ -1058,6 +1071,7 @@ route('POST', '/api/auth/register', null, register);
 route('POST', '/api/auth/login', null, login);
 route('POST', '/api/auth/logout', ANY, logout);
 route('GET', '/api/me', ANY, me);
+route('POST', '/api/terms/accept', ['client'], acceptTerms);
 route('PATCH', '/api/me', ANY, updateMe);
 route('POST', '/api/quote', ANY, quote);
 route('GET', '/api/couriers/nearby', ['client', 'admin'], clientNearby);

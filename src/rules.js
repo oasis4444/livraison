@@ -79,12 +79,25 @@ export function categoryOf(st, { category = null, weight = null, dims = null } =
   return CATS[i];
 }
 // Prix : base (axe / défaut, ou tarif direct si récupération et livraison proches) + catégorie + options.
-export function priceOf(st, { base, category, fragile = false, express = false, centreDrop = false }) {
+// Frais de livraison selon la distance (zones réglables) : ≤ 3 km 2 000, ≤ 7 km 3 000, ≤ 12 km 4 000, au-delà 5 000.
+export function zoneFee(st, km) {
+  const n = (k, d) => Number(st[k] ?? d);
+  const zones = [[n('zone1_km', 3), n('zone1_fee', 2000), 'Zone 1'], [n('zone2_km', 7), n('zone2_fee', 3000), 'Zone 2'], [n('zone3_km', 12), n('zone3_fee', 4000), 'Zone 3']];
+  const z = zones.find(([max]) => km <= max);
+  return z ? { fee: z[1], zone: z[2] } : { fee: n('zone4_fee', 5000), zone: 'Périphérie' };
+}
+export function priceOf(st, { base, category, fragile = false, express = false, centreDrop = false, qty = 1, cashValue = 0, zone = null }) {
   const c = catTable(st).find((x) => x.k === category) || catTable(st)[0];
-  const lines = [['Livraison', base]];
+  const lines = [[zone ? `Livraison (${zone})` : 'Livraison', base]];
   if (c.fee) lines.push([`Catégorie ${c.k}`, c.fee]);
   if (['L', 'XL'].includes(c.k) && !centreDrop) lines.push(['Récupération (L/XL)', Number(st.pickup_fee_large ?? 2000)]);
   if (fragile) lines.push(['Fragile', Number(st.opt_fragile ?? 1000)]);
   if (express) lines.push(['Express', Number(st.opt_express ?? 2000)]);
+  // Plusieurs colis pour la même adresse : −50 % sur les frais à partir du 2e colis.
+  const one = lines.reduce((a, l) => a + l[1], 0);
+  const n = Math.max(1, Math.min(50, Number(qty) || 1));
+  if (n > 1) lines.push([`${n - 1} colis en plus (−${Number(st.multi_discount ?? 50)} %)`, Math.round(((n - 1) * one * (100 - Number(st.multi_discount ?? 50))) / 100)]);
+  // Encaissement d'une grosse valeur : +1 % au-delà de 200 000 Ar.
+  if (cashValue > Number(st.big_value ?? 200000)) lines.push([`Encaissement grosse valeur (${Number(st.big_value_pct ?? 1)} %)`, Math.round((cashValue * Number(st.big_value_pct ?? 1)) / 100)]);
   return { fee: lines.reduce((a, l) => a + l[1], 0), lines, moto_only: c.k === 'L', devis: c.k === 'XL' };
 }

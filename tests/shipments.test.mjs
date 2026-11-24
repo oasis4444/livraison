@@ -9,6 +9,7 @@ import { hashPassword } from '../src/lib.js';
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 const hooks = [];
 const realFetch = globalThis.fetch;
@@ -44,7 +45,7 @@ test('mise en place : axe, livreur, planning, marchand API', async () => {
   const m = await call('POST', '/api/admin/merchants', { name: 'Boutique Soa', phone: '0329999999', webhook_url: 'https://vente.test/hook' }, admin);
   assert.equal(m.status, 201); key = m.data.api_key; assert.match(key, /^ak_/); assert.ok(m.data.vendor_temp_password);
   vendorTok = (await call('POST', '/api/auth/login', { phone: '0329999999', password: m.data.vendor_temp_password })).data.token;
-  recipient = (await call('POST', '/api/auth/register', { phone: '0331234567', name: 'Rasoa Mpandray', password: 'secret1' })).data.token;
+  recipient = (await call('POST', '/api/auth/register', { accept_terms: true, phone: '0331234567', name: 'Rasoa Mpandray', password: 'secret1' })).data.token;
 });
 
 test('les clients ne voient pas les heures et axes ; le centre et les livreurs si', async () => {
@@ -157,9 +158,9 @@ test('caisse : remise du livreur puis paiement du vendeur', async () => {
   cash = (await call('GET', '/api/admin/cash', null, admin)).data;
   assert.equal(cash.couriers.length, 0);
   const vendor = cash.vendors.find((x) => x.phone === '+261329999999');
-  assert.equal(vendor.due, 20000 - 1500, 'valeur livrée (CMD-1) − frais de retour (CMD-3 annulé après récupération : 50 % des frais)');
+  assert.equal(vendor.due, 20000 - 4500 - 1250, 'valeur livrée (CMD-1) − retour CMD-3 (annulé après récupération : frais + 50 %) − retour CMD-2 (refusé : 50 % des frais)');
   const pay = await call('POST', `/api/admin/vendors/${vendor.id}/pay`, {}, admin);
-  assert.equal(pay.data.amount, 18500);
+  assert.equal(pay.data.amount, 14250);
   assert.equal((await call('GET', '/api/shipments/balance', null, vendorTok)).data.due, 0);
   assert.equal((await call('POST', `/api/admin/vendors/${vendor.id}/pay`, {}, admin)).status, 409);
 });
@@ -196,6 +197,8 @@ test('import Excel/CSV et lien : une ligne = un colis, sans doublon', async () =
     { external_ref: 'F-002', recipient_name: 'Tiana', recipient_phone: '0341000002', drop_addr: 'Isotry', declared_value: 8000 },
     { external_ref: 'F-003', recipient_name: 'X', recipient_phone: '12', drop_addr: 'Nulle part' },
   ];
+  assert.equal((await call('POST', '/api/shipments/bulk', { rows }, vendorTok)).status, 428, 'compte créé par le centre : conditions à accepter d\'abord');
+  await call('POST', '/api/terms/accept', {}, vendorTok);
   const r = await call('POST', '/api/shipments/bulk', { rows, pickup_addr: 'Boutique Soa, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng }, vendorTok);
   assert.equal(r.data.created, 2); assert.equal(r.data.errors, 1); assert.match(r.data.results[0].pin, /^\d{4}$/);
   assert.equal(r.data.results[0].status, 'assigned'); assert.equal(r.data.results[1].status, 'pending', 'sans GPS → programmé par le centre');

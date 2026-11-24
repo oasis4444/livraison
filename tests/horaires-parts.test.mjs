@@ -16,6 +16,7 @@ async function call(method, path, body, token, headers = {}) {
 }
 const db = env.DB.raw;
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // tarif normal dans ces tests
+db.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
 db.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé dans ces tests (testé à part)
 const ST = { am_start: '08:00', am_end: '12:00', pm_start: '13:00', pm_end: '17:00', bike_max_kg: '10', moto_max_kg: '25', weight_free_kg: '5', weight_step_kg: '5', weight_step_fee: '1000',
   share_t1_max: '4000', share_t1: '1000', share_t2_max: '8000', share_t2: '2000', share_t3: '3000' };
@@ -58,7 +59,7 @@ let admin, client, moto, velo, key;
 test('mise en place', async () => {
   db.prepare("INSERT INTO users (phone,name,role,pass_hash,pass_salt,status,created_at) VALUES ('+261340000000','Admin','admin',?,?,'active',0)").run(await hashPassword('admin123', 's', 1000), 's');
   admin = (await call('POST', '/api/auth/login', { phone: '0340000000', password: 'admin123' })).data.token;
-  client = (await call('POST', '/api/auth/register', { phone: '0331234567', name: 'Soa Boutique', password: 'secret1' })).data.token;
+  client = (await call('POST', '/api/auth/register', { accept_terms: true, phone: '0331234567', name: 'Soa Boutique', password: 'secret1' })).data.token;
   for (const [phone, name, cin, vehicle] of [['0341000001', 'Hery Velo', '101211100001', 'velo'], ['0341000002', 'Naina Moto', '101211100002', 'moto']])
     assert.equal((await call('POST', '/api/admin/users', { role: 'courier', phone, name, cin, password: 'velo1234', vehicle }, admin)).status, 201);
   velo = (await call('POST', '/api/auth/login', { phone: '0341000001', password: 'velo1234' })).data.token;

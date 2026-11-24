@@ -4,7 +4,7 @@
 import { fail, json, str, int, normalizePhone, randomHex, hashPassword, haversineKm, now, csv, fmtDate } from './lib.js';
 import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL, slotRoute, courierAxeState } from './worker.js';
 import { matchTrip, logSync, nearest, simplify } from './trips.js';
-import { planWindows, nextWindows, centreShare, categoryOf, priceOf, catTable } from './rules.js';
+import { planWindows, nextWindows, centreShare, categoryOf, priceOf, catTable, zoneFee } from './rules.js';
 import { smsStep } from './sms.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
@@ -70,6 +70,7 @@ const toPay = (s) => (s.province ? 0 : s.value_paid ? s.wait_fee || 0 : (s.value
 export function lateReason(s, t = now(), lateHours = 24) {
   if (s.status === 'pending' && !s.review && t - s.created_at > lateHours * 3600e3) return `sans livreur depuis ${Math.floor((t - s.created_at) / 3600e3)} h`;
   if (s.status === 'assigned' && !s.stage && ((s.departure_at && s.departure_at < t - 15 * 60e3) || (s.pickup_to && s.pickup_to < t))) return 'récupération en retard (toujours « Programmé »)';
+  if (s.status === 'picked_up' && s.centre_in_at && !s.centre_out_at && t - s.centre_in_at > 7 * 864e5) return `au centre depuis ${Math.floor((t - s.centre_in_at) / 864e5)} j (contacter l'expéditeur)`;
   if (['assigned', 'picked_up'].includes(s.status) && s.deliver_to && s.deliver_to < t - 30 * 60e3) return 'livraison en retard sur l\'heure prévue';
   return null;
 }
@@ -98,7 +99,7 @@ export function publicShipment(s) {
     axe: s.axe_name ?? s.trip_label ?? null, departure_at: s.departure_at, trip_id: s.trip_id ?? null, accepted_at: s.accepted_at ?? null, track_token: s.track_token ?? null,
     payment: { value_paid: !!s.value_paid, ref: s.value_paid_ref ?? null, fee_at_pickup: s.value_paid && !s.province ? s.fee : 0, pickup_fee: s.pickup_fee ?? null },
     windows: s.pickup_from ? { pickup: [s.pickup_from, s.pickup_to], delivery: [s.deliver_from, s.deliver_to] } : null,
-    late: lateReason(s), since: stepSince(s),
+    late: lateReason(s), since: stepSince(s), qty: s.qty || 1, distance_km: s.distance_km ?? null, attempts: s.attempts || 0, cat_changed: !!s.cat_changed_at,
     review: s.review ?? null, moto_only: !!s.moto_only, category: s.category || null, fragile: !!s.fragile, express: !!s.express, centre_drop: !!s.centre_drop,
     wait_fee: s.wait_fee || 0, fee_detail: (() => { try { return s.fee_detail ? JSON.parse(s.fee_detail) : null; } catch { return null; } })(), shares: s.centre_share != null ? { centre: s.centre_share, courier: s.courier_share, paid: !!s.cash_settled_at } : null,
     province: s.province ? { city: s.dest_city, coop: s.coop_name, plate: s.coop_plate ?? null, driver_phone: s.coop_driver_phone ?? null, fee: s.coop_fee ?? null, fee_status: s.coop_fee_status ?? null } : null,
@@ -295,6 +296,16 @@ export function parseSize(b) {
   return { dims: dims[0] == null ? null : dims, weight: num(b.weight ?? b.weight_kg ?? b.poids ?? b.size?.weight ?? b.size?.kg, 200, 'Poids') };
 }
 
+// Frais de base : selon la distance (zones) si les deux adresses sont localisées, sinon frais de l'axe / par défaut.
+async function baseFee(env, st, plat, plng, dlat, dlng) {
+  const fallback = await feeFor(env, dlat, dlng);
+  if (plat == null || dlat == null) return { base: fallback, km: null, zone: null, direct: false };
+  const km = Math.round(haversineKm(plat, plng, dlat, dlng) * Number(st.road_factor || 1.3) * 10) / 10;
+  const direct = haversineKm(plat, plng, dlat, dlng) <= Number(st.direct_km || 0);
+  if (st.zones_enabled === '1') { const z = zoneFee(st, km); return { base: z.fee, km, zone: z.zone, direct }; }
+  return { base: direct ? Number(st.direct_fee || 2000) : fallback, km, zone: null, direct };
+}
+
 // ---------------------------------------------------------------- création (application, admin, API)
 export async function createShipment(env, b, { sender, source, merchant = null, actor, requireDetails = false }) {
   const recipient_phone = normalizePhone(b.recipient?.phone ?? b.recipient_phone);
@@ -327,10 +338,9 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
   const category = categoryOf(st, { category: b.category ?? b.size?.category, weight: size.weight, dims: size.dims });
   const express = yes(b.express), fragile = yes(b.fragile), centreDrop = yes(b.centre_drop) && ['L', 'XL'].includes(category) && !express;
   // Livraison directe : récupération et livraison proches → un seul livreur, sans passer par le centre, tarif direct.
-  let base = await feeFor(env, dlat, dlng);
-  const direct = plat != null && dlat != null && haversineKm(plat, plng, dlat, dlng) <= Number(st.direct_km || 3);
-  if (direct) base = Number(st.direct_fee || 2000);
-  const price = priceOf(st, { base, category, fragile, express, centreDrop });
+  const bf = await baseFee(env, st, plat, plng, dlat, dlng);
+  const qty = Math.max(1, Math.min(50, Number(b.qty ?? b.quantity ?? 1) || 1));
+  const price = priceOf(st, { base: bf.base, zone: bf.zone, category, fragile, express, centreDrop, qty, cashValue: value_paid ? 0 : declared });
   let fee = price.fee;
   if (actor?.role === 'admin' && b.fee != null) fee = int(b.fee, { min: 0, max: 1_000_000, name: 'Frais' });
   const maxValue = Number(st.max_value || 300000);
@@ -354,10 +364,10 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
     str(b.recipient?.address ?? b.drop_addr, { min: 3, max: 200, name: 'Adresse de livraison' }), dlat, dlng,
     str(b.description ?? b.contents, { max: 300 }), declared, fee, now(), String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0'));
   await run(env, `UPDATE shipments SET track_token = ?, dim_l = ?, dim_w = ?, dim_h = ?, weight_kg = ?, value_paid = ?, value_paid_ref = ?, province = ?, dest_city = ?, coop_name = ?,
-      pickup_from = ?, pickup_to = ?, deliver_from = ?, deliver_to = ?, review = ?, moto_only = ?, category = ?, fragile = ?, express = ?, centre_drop = ?, fee_detail = ? WHERE id = ?`, randomHex(12),
+      pickup_from = ?, pickup_to = ?, deliver_from = ?, deliver_to = ?, review = ?, moto_only = ?, category = ?, fragile = ?, express = ?, centre_drop = ?, fee_detail = ?, qty = ?, distance_km = ? WHERE id = ?`, randomHex(12),
     size.dims?.[0] ?? null, size.dims?.[1] ?? null, size.dims?.[2] ?? null, size.weight, value_paid, value_paid_ref, province ? 1 : 0, dest_city, coop_name,
     win.pickup_from, win.pickup_to, win.deliver_from, win.deliver_to, review, wr.moto_only ? 1 : 0, category, fragile ? 1 : 0, express ? 1 : 0, centreDrop ? 1 : 0,
-    JSON.stringify(fee === price.fee ? price.lines : [['Frais fixés par le centre', fee]]), res.meta.last_row_id);
+    JSON.stringify(fee === price.fee ? price.lines : [['Frais fixés par le centre', fee]]), qty, bf.km, res.meta.last_row_id);
   // L / XL déposé par l'expéditeur au centre : la « récupération » se fait au centre.
   if (centreDrop) {
     const C = await centrePoint(env);
@@ -414,28 +424,34 @@ async function quoteShipment(ctx, env) {
   const w = Number(String(b.weight ?? b.weight_kg ?? '').replace(',', '.')) || 0;
   const dims = [b.l, b.w, b.h].every((x) => Number(x) > 0) ? [b.l, b.w, b.h].map(Number) : null;
   const category = categoryOf(st, { category: b.category, weight: w, dims });
-  let base = await feeFor(env, lat, lng);
-  const direct = plat != null && lat != null && haversineKm(plat, plng, lat, lng) <= Number(st.direct_km || 3);
-  if (direct) base = Number(st.direct_fee || 2000);
+  const bf = await baseFee(env, st, plat, plng, lat, lng);
   const express = yes(b.express);
-  const price = priceOf(st, { base, category, fragile: yes(b.fragile), express, centreDrop: yes(b.centre_drop) && ['L', 'XL'].includes(category) && !express });
   const value = Number(b.value ?? b.declared_value ?? 0) || 0;
+  const price = priceOf(st, { base: bf.base, zone: bf.zone, category, fragile: yes(b.fragile), express, centreDrop: yes(b.centre_drop) && ['L', 'XL'].includes(category) && !express,
+    qty: b.qty, cashValue: yes(b.value_paid) ? 0 : value });
+  const direct = bf.direct, base = bf.base;
   const maxValue = Number(st.max_value || 300000);
   // Les heures & axes des livreurs ne sont pas montrés aux clients : c'est le centre qui programme.
   const deps = lat == null || ctx.user?.role !== 'admin' ? [] : (await departures(env)).filter((d) => !d.started && inAxe(d, lat, lng));
-  return json({ fee: price.fee, lines: price.lines, base_fee: base, direct, category, moto_only: price.moto_only,
+  return json({ fee: price.fee, lines: price.lines, base_fee: base, direct, distance_km: bf.km, zone: bf.zone, category, moto_only: price.moto_only,
     review: value > maxValue ? 'value' : price.devis ? 'devis' : null, max_value: maxValue, departures: deps.map(({ route, ...d }) => d) });
 }
 
 // Conditions de transport (publiques) : catégories, options, règles.
 async function conditions(ctx, env) {
   const st = await settings(env);
-  return json({ categories: catTable(st), options: { fragile: Number(st.opt_fragile), express: Number(st.opt_express), wait: Number(st.opt_wait), return_percent: Number(st.return_fee_percent),
-    pickup_large: Number(st.pickup_fee_large) }, direct: { km: Number(st.direct_km), fee: Number(st.direct_fee) }, limits: { bike_kg: Number(st.bike_max_kg), moto_kg: Number(st.moto_max_kg), max_value: Number(st.max_value) } });
+  return json({ version: st.terms_version || null, categories: catTable(st), options: { fragile: Number(st.opt_fragile), express: Number(st.opt_express), wait: Number(st.opt_wait), return_percent: Number(st.return_fee_percent),
+    pickup_large: Number(st.pickup_fee_large), multi_discount: Number(st.multi_discount ?? 50), big_value: Number(st.big_value ?? 200000), big_value_pct: Number(st.big_value_pct ?? 1), xl_min: Number(st.xl_min_fee ?? 15000) },
+    direct: { km: Number(st.direct_km), fee: Number(st.direct_fee) }, limits: { bike_kg: Number(st.bike_max_kg), moto_kg: Number(st.moto_max_kg), max_value: Number(st.max_value) },
+    zones: st.zones_enabled === '1' ? [[1, Number(st.zone1_km), Number(st.zone1_fee)], [2, Number(st.zone2_km), Number(st.zone2_fee)], [3, Number(st.zone3_km), Number(st.zone3_fee)], [4, null, Number(st.zone4_fee)]] : null,
+    default_fee: Number(st.default_fee || 3000), max_attempts: Number(st.max_attempts ?? 2), centre_keep_days: Number(st.centre_keep_days ?? 7),
+    liability_cap: Number(st.liability_cap) || null, centre_addr: st.centre_addr || '', support_phone: st.support_phone || '' });
 }
 
 async function appCreate(ctx, env) {
   const u = ctx.user;
+  // Nouvelle version des conditions et tarifs : le client doit les accepter avant d'envoyer.
+  if (u.role === 'client') { const v = (await settings(env)).terms_version; if (v && u.terms_version !== v) fail(428, 'terms_required', 'Acceptez les nouvelles conditions de livraison et tarifs pour continuer'); }
   let sender = u;
   if (u.role === 'admin') {
     const phone = normalizePhone(ctx.body.sender_phone);
@@ -450,6 +466,7 @@ async function appCreate(ctx, env) {
 // Import en masse (fichier Excel / CSV exporté du logiciel de vente) : une ligne = un colis.
 async function bulkCreate(ctx, env) {
   const u = ctx.user;
+  if (u.role === 'client') { const v = (await settings(env)).terms_version; if (v && u.terms_version !== v) fail(428, 'terms_required', 'Acceptez les nouvelles conditions de livraison et tarifs pour continuer'); }
   const rows = Array.isArray(ctx.body.rows) ? ctx.body.rows : fail(400, 'invalid', 'Aucune ligne');
   if (rows.length > 200) fail(400, 'too_many', '200 lignes maximum par import');
   const st = await settings(env);
@@ -714,7 +731,10 @@ export async function courierStats(env, days, courierId = null) {
 async function approveShipment(ctx, env) {
   const s = await loadShipment(env, ctx.params.id);
   if (!s.review) fail(409, 'not_in_review', 'Ce colis n\'attend pas de validation');
-  if (ctx.body.fee != null) await run(env, 'UPDATE shipments SET fee = ? WHERE id = ?', int(ctx.body.fee, { min: 0, max: 1_000_000, name: 'Frais' }), s.id);
+  if (ctx.body.fee != null) {
+    const xlMin = s.category === 'XL' ? Number((await settings(env)).xl_min_fee || 15000) : 0;
+    await run(env, 'UPDATE shipments SET fee = ? WHERE id = ?', int(ctx.body.fee, { min: xlMin, max: 1_000_000, name: xlMin ? `Frais (devis XL : ${xlMin} Ar minimum)` : 'Frais' }), s.id);
+  } else if (s.category === 'XL' && s.fee < Number((await settings(env)).xl_min_fee || 15000)) fail(400, 'invalid', `Devis XL : indiquez les frais (${(await settings(env)).xl_min_fee || 15000} Ar minimum)`);
   await run(env, 'UPDATE shipments SET review = NULL WHERE id = ?', s.id);
   let f = await loadShipment(env, s.id);
   await logEvent(env, f, 'approved', `Validé par le centre${ctx.body.fee != null ? ` · frais ${f.fee} Ar` : ''}`, ctx.user);
@@ -785,8 +805,10 @@ async function pickup(ctx, env) {
   if (b.category && String(b.category).toUpperCase() !== (s.category || '') && ['S', 'M', 'L', 'XL'].includes(String(b.category).toUpperCase())) {
     const cat = String(b.category).toUpperCase();
     let lines = []; try { lines = JSON.parse(s.fee_detail || '[]'); } catch { /* ancien colis */ }
-    const base = lines.find((l) => l[0] === 'Livraison')?.[1] ?? s.fee;
-    const pr = priceOf(st, { base, category: cat, fragile: !!s.fragile, express: !!s.express, centreDrop: !!s.centre_drop });
+    const bl = lines.find((l) => String(l[0]).startsWith('Livraison'));
+    const base = bl?.[1] ?? s.fee;
+    const pr = priceOf(st, { base, zone: bl ? (String(bl[0]).match(/\((.*)\)/) || [])[1] || null : null, category: cat, fragile: !!s.fragile, express: !!s.express, centreDrop: !!s.centre_drop,
+      qty: s.qty || 1, cashValue: s.value_paid ? 0 : value });
     catChange = { from: s.category || '?', to: cat, fee: pr.fee, lines: pr.lines, moto_only: pr.moto_only };
     fee = pr.fee;
   } else if (b.fee != null && Number(b.fee) !== s.fee) {
@@ -800,9 +822,9 @@ async function pickup(ctx, env) {
     ...(s.value_paid && !s.province ? [q(env, 'UPDATE shipments SET pickup_fee = ?, pickup_fee_by = ? WHERE id = ?', fee, ctx.user.id, s.id)] : []),
   ]);
   if (catChange) {
-    await run(env, 'UPDATE shipments SET category = ?, fee_detail = ?, moto_only = ? WHERE id = ?', catChange.to, JSON.stringify(catChange.lines), catChange.moto_only ? 1 : 0, s.id);
+    await run(env, 'UPDATE shipments SET category = ?, fee_detail = ?, moto_only = ?, cat_changed_at = ? WHERE id = ?', catChange.to, JSON.stringify(catChange.lines), catChange.moto_only ? 1 : 0, now(), s.id);
     await logEvent(env, s, 'category', `Catégorie corrigée par le livreur : ${catChange.from} → ${catChange.to} · nouveau prix ${fee} Ar`, ctx.user);
-    await notify(env, [s.sender_id], 'shipment', `📦 Catégorie corrigée : ${catChange.from} → ${catChange.to}`, `${s.ref} · nouveau prix de livraison ${fee.toLocaleString('fr-FR')} Ar (vérifié sur photo par le livreur)`);
+    await notify(env, [s.sender_id], 'shipment', `📦 Catégorie corrigée : ${catChange.from} → ${catChange.to}`, `${s.ref} · nouveau prix de livraison ${fee.toLocaleString('fr-FR')} Ar (vérifié sur photo par le livreur). Vous pouvez accepter ou annuler sans frais.`);
   }
   if (s.value_paid && !s.province) await logEvent(env, s, 'pickup_fee', `Frais ${fee} Ar encaissés à la récupération par ${ctx.user.name.split(' ')[0]} — à remettre au centre`, ctx.user);
   await logEvent(env, s, 'picked_up', `Valeur ${value} Ar · frais ${fee} Ar`, ctx.user, b.lat ?? null, b.lng ?? null);
@@ -921,18 +943,28 @@ async function refuse(ctx, env) {
   if (!onDeliveryRun(s)) fail(409, 'relay_first', 'Ce colis n\'est pas encore en route vers le client');
   const st = await settings(env);
   const unreachable = [true, 1, '1', 'true'].includes(ctx.body.unreachable);
+  // Destinataire injoignable : retour seulement après 2 tentatives (réglable) ; avant, nouvelle tentative au créneau suivant.
+  if (unreachable && (s.attempts || 0) + 1 < Number(st.max_attempts || 2)) {
+    const w = nextWindows(st, now() + 30 * 60e3, 2)[0];
+    await run(env, 'UPDATE shipments SET attempts = attempts + 1, deliver_from = ?, deliver_to = ?, stage = NULL WHERE id = ?', w?.from ?? s.deliver_from, w?.to ?? s.deliver_to, s.id);
+    await logEvent(env, s, 'unreachable', `Destinataire injoignable (tentative ${(s.attempts || 0) + 1}/${st.max_attempts || 2}) — nouvelle tentative`, ctx.user);
+    await broadcast(env, s, '📵 Destinataire injoignable', 'Nouvelle tentative de livraison au prochain créneau');
+    return json({ ok: true, attempt: (s.attempts || 0) + 1, returned: false });
+  }
   const feeDue = s.pickup_fee != null || unreachable ? 0 : s.fee; // frais déjà payés à la récupération (Mobile Money) / personne à qui encaisser
   const collected = ctx.body.collected == null ? feeDue : int(ctx.body.collected, { min: 0, max: 1_000_000, name: 'Frais encaissés' });
   const note = unreachable ? str(ctx.body.note || 'Destinataire injoignable', { max: 200 }) : str(ctx.body.note, { min: 2, max: 200, name: 'Motif du refus' });
   const cShare = centreShare(st, s.fee);
   // Retour à l'expéditeur : si le destinataire n'a pas payé les frais, l'expéditeur paie 50 % des frais (réglable).
-  const returnFee = collected >= s.fee || s.pickup_fee != null ? 0 : Math.round((s.fee * Number(st.return_fee_percent ?? 50)) / 100);
-  await run(env, "UPDATE shipments SET status = 'refused', collected = ?, done_at = ?, outcome_note = ?, centre_share = ?, courier_share = ?, return_fee = ? WHERE id = ?", collected, now(), note, cShare, s.fee - cShare, returnFee, s.id);
+  // Refus : le destinataire paie les frais, l'expéditeur paie 50 % de retour ; injoignable (après 2 tentatives) : l'expéditeur paie frais + 50 %.
+  const half = Math.round((s.fee * Number(st.return_fee_percent ?? 50)) / 100);
+  const returnFee = unreachable ? (s.pickup_fee != null ? half : returnFeeFull(st, s)) : collected >= s.fee || s.pickup_fee != null ? half : returnFeeFull(st, s) - collected;
+  await run(env, "UPDATE shipments SET status = 'refused', collected = ?, done_at = ?, outcome_note = ?, centre_share = ?, courier_share = ?, return_fee = ?, attempts = attempts + ? WHERE id = ?", collected, now(), note, cShare, s.fee - cShare, returnFee, unreachable ? 1 : 0, s.id);
   await logEvent(env, s, 'refused', `${note} · frais encaissés ${collected} Ar`, ctx.user);
   if (collected < feeDue) await alertAdmins(env, 'alert', `Colis ${s.ref} refusé : frais encaissés ${collected} Ar au lieu de ${feeDue} Ar`, null, ctx.user.id);
   if (returnFee) await logEvent(env, s, 'return_fee', `Retour à l'expéditeur : ${returnFee} Ar (${st.return_fee_percent ?? 50} % des frais)`, null);
   await broadcast(env, s, '↩️ Colis refusé par le destinataire', `${note} — retour à l'expéditeur`);
-  return json({ ok: true, collected });
+  return json({ ok: true, collected, returned: true, return_fee: returnFee });
 }
 
 // Annulation : avant récupération → simple annulation. Après récupération → retour à l'expéditeur, qui paie les frais.
@@ -989,13 +1021,14 @@ async function cancel(ctx, env) {
   const isSender = s.sender_id === u.id, isCourier = s.courier_id === u.id, isAdmin = u.role === 'admin';
   if (!isSender && !isCourier && !isAdmin) fail(403, 'forbidden', 'Accès refusé');
   if (!OPEN.includes(s.status)) fail(409, 'closed', 'Colis déjà clôturé');
-  if (isSender && !isAdmin && s.status === 'picked_up') fail(409, 'picked', 'Le colis est déjà récupéré : contactez le centre');
+  // Catégorie corrigée par le livreur : l'expéditeur peut annuler sans frais (le colis lui revient).
+  if (isSender && !isAdmin && s.status === 'picked_up' && !s.cat_changed_at) fail(409, 'picked', 'Le colis est déjà récupéré : contactez le centre');
   if (isCourier && !isAdmin && s.status !== 'picked_up') fail(409, 'bad_status', 'Signalez au centre un problème avant récupération');
   const note = str(ctx.body.note, { min: 2, max: 200, name: 'Motif' });
   const afterPickup = s.status === 'picked_up';
   await run(env, "UPDATE shipment_offers SET status = 'closed' WHERE shipment_id = ? AND status = 'open'", s.id);
   await run(env, "UPDATE shipments SET status = 'cancelled', done_at = ?, outcome_note = ?, return_fee = ?, collected = 0 WHERE id = ?",
-    now(), note, afterPickup ? (ctx.body.return_fee != null && isAdmin ? int(ctx.body.return_fee, { min: 0 }) : Math.round((s.fee * Number((await settings(env)).return_fee_percent ?? 50)) / 100)) : 0, s.id);
+    now(), note, afterPickup ? (ctx.body.return_fee != null && isAdmin ? int(ctx.body.return_fee, { min: 0 }) : s.cat_changed_at && isSender ? 0 : returnFeeFull(await settings(env), s)) : 0, s.id);
   await logEvent(env, s, 'cancelled', note, u);
   await audit(env, ctx, 'shipment_cancel', { ref: s.ref, afterPickup });
   await broadcast(env, s, afterPickup ? '↩️ Livraison annulée — retour à l\'expéditeur' : 'Colis annulé', afterPickup ? `${note} · frais de retour ${s.fee} Ar` : note);
@@ -1094,6 +1127,25 @@ async function proofPhoto(ctx, env) {
   if (!p) fail(404, 'not_found', 'Pas de photo pour cette étape');
   return new Response(Uint8Array.from(atob(p.data), (c) => c.charCodeAt(0)), { headers: { 'Content-Type': p.mime, 'Cache-Control': 'private, max-age=3600' } });
 }
+
+// Réclamation (expéditeur ou destinataire) dans les 48 h après la livraison, avec photo si possible. Réponse du centre sous 72 h.
+async function shipmentComplaint(ctx, env) {
+  const s = await loadShipment(env, ctx.params.id);
+  const u = ctx.user;
+  if (s.sender_id !== u.id && s.recipient_phone !== u.phone && u.role !== 'admin') fail(403, 'forbidden', 'Accès refusé');
+  if (!['delivered', 'refused', 'cancelled'].includes(s.status) && s.status !== 'picked_up') fail(409, 'too_early', 'La réclamation se fait après la livraison');
+  if (s.done_at && now() - s.done_at > 48 * 3600e3) fail(409, 'too_late', 'Le délai de réclamation (48 h après la livraison) est dépassé');
+  const body = str(ctx.body.body, { min: 5, max: 1000, name: 'Réclamation' });
+  if (ctx.body.photo) await saveProof(env, s, 'complaint', ctx.body.photo, u);
+  await run(env, "INSERT INTO complaints (user_id, kind, body, at) VALUES (?, 'complaint', ?, ?)", u.id, `Colis ${s.ref} : ${body}${ctx.body.photo ? ' (photo jointe)' : ''}`, now());
+  await logEvent(env, s, 'complaint', body, u);
+  const admins = await all(env, "SELECT id FROM users WHERE role = 'admin' AND status = 'active'");
+  await notify(env, admins.map((a) => a.id), 'complaint', `Nouvelle réclamation · ${s.ref}`, `${u.name} : ${body.slice(0, 120)}`);
+  return json({ ok: true, answer_within_hours: 72 }, 201);
+}
+
+// Retour à l'expéditeur (annulation après récupération, destinataire injoignable) : frais de livraison + 50 % (réglable).
+const returnFeeFull = (st, s) => s.fee + Math.round((s.fee * Number(st.return_fee_percent ?? 50)) / 100);
 
 // Plafond : trop d'argent gardé (ou depuis trop longtemps) → plus de nouvelles missions tant qu'il n'a pas remis l'argent au centre.
 export async function cashBlock(env, cid) {
@@ -1494,9 +1546,10 @@ export function registerShipmentRoutes(route) {
   route('GET', '/api/schedule', ['admin', 'courier'], schedule); // heures & axes : centre et livreurs seulement (pas les clients)
   route('POST', '/api/shipments/quote', ANY, quoteShipment);
   route('GET', '/api/shipments/windows', ANY, windowsList);
-  route('GET', '/api/conditions', ANY, conditions);
+  route('GET', '/api/conditions', null, conditions); // public : affiché aussi avant l'inscription
   route('POST', '/api/shipments/:id/wait', ['courier'], waitFee);
   route('GET', '/api/shipments/:id/proof/:step', ANY, proofPhoto);
+  route('POST', '/api/shipments/:id/complaint', ANY, shipmentComplaint);
   route('GET', '/api/admin/ops', ['admin'], opsBoard);
   route('GET', '/api/shipments', ANY, listMine);
   route('POST', '/api/shipments', ['client', 'admin'], appCreate);

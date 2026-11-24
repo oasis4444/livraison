@@ -10,6 +10,7 @@ const dir = fileURLToPath(new URL('../migrations', import.meta.url));
 const env = { DB: createD1(dir), PBKDF2_ITER: '1000', APP_VERSION: 'test' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 
 async function call(method, path, body, token) {
@@ -32,12 +33,12 @@ test('création admin + inscriptions', async () => {
   admin = (await call('POST', '/api/auth/login', { phone: '034 00 000 00', password: 'admin123' })).data.token;
   assert.ok(admin);
 
-  const r = await call('POST', '/api/auth/register', { phone: '0331234567', name: 'Rasoa Client', password: 'secret1' });
+  const r = await call('POST', '/api/auth/register', { accept_terms: true, phone: '0331234567', name: 'Rasoa Client', password: 'secret1' });
   assert.equal(r.status, 201); client = r.data.token;
-  assert.equal((await call('POST', '/api/auth/register', { phone: '+261 33 12 345 67', name: 'XY', password: 'secret1' })).status, 409);
-  assert.equal((await call('POST', '/api/auth/register', { phone: '0221234567', name: 'XY', password: 'secret1' })).status, 400);
+  assert.equal((await call('POST', '/api/auth/register', { accept_terms: true, phone: '+261 33 12 345 67', name: 'XY', password: 'secret1' })).status, 409);
+  assert.equal((await call('POST', '/api/auth/register', { accept_terms: true, phone: '0221234567', name: 'XY', password: 'secret1' })).status, 400);
 
-  assert.equal((await call('POST', '/api/auth/register', { role: 'courier', phone: '0341111111', name: 'Hery', password: 'secret1', cin: '101211123456' })).status, 403, 'inscription livreur publique interdite');
+  assert.equal((await call('POST', '/api/auth/register', { accept_terms: true, role: 'courier', phone: '0341111111', name: 'Hery', password: 'secret1', cin: '101211123456' })).status, 403, 'inscription livreur publique interdite');
   for (const [phone, name, cin] of [['0341111111', 'Hery Vélo', '101 211 123 456'], ['0322222222', 'Faly Vélo', '101 211 999 456']])
     assert.equal((await call('POST', '/api/admin/users', { role: 'courier', phone, name, cin, password: 'secret1' }, admin)).status, 201);
   c1 = (await call('POST', '/api/auth/login', { phone: '0341111111', password: 'secret1' })).data.token;

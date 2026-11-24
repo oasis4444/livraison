@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = '0' WHERE key = 'direct_km';"); // répartition par l'admin (réglage par défaut), tarif normal
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = '0' WHERE key IN ('direct_km', 'zones_enabled');"); // répartition par l'admin (réglage par défaut), tarif normal
 
 const LEAFLET_STUB = `
 (() => {
@@ -63,7 +63,7 @@ try {
     for (const [phone, name, cin] of [['0341111111', 'Hery Vélo', '101211123456'], ['0342222222', 'Naina Moto', '101211123457']])
       if ((await api('POST', '/api/admin/users', { role: 'courier', phone, name, cin, password: 'velo1234', vehicle: name.includes('Moto') ? 'moto' : 'velo' }, auth(tok.admin))).status !== 201) throw new Error('livreur ' + name);
     tok.naina = await login('0342222222', 'velo1234');
-    if ((await api('POST', '/api/auth/register', { name: 'Soa Boutique', phone: '0331234567', password: 'secret12' })).status !== 201) throw new Error('client');
+    if ((await api('POST', '/api/auth/register', { accept_terms: true, name: 'Soa Boutique', phone: '0331234567', password: 'secret12' })).status !== 201) throw new Error('client');
   });
   await step('livreur : « Je pars du centre » vers Ivandry (tournée)', async () => {
     await courier.goto(BASE + '/livreur');

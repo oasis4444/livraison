@@ -433,6 +433,20 @@ const VIEWS = {
           <p class="tiny muted">Récupéré le matin → livré l'après-midi ; récupéré l'après-midi → livré le lendemain matin au plus tard. Le client peut demander un créneau plus tard.</p>
           <div class="row">${f('am_start', 'Matin : début', '', 'text')}${f('am_end', 'Matin : fin', '', 'text')}</div>
           <div class="row">${f('pm_start', 'Après-midi : début', '', 'text')}${f('pm_end', 'Après-midi : fin', '', 'text')}</div></div>
+        <div class="panel stack"><h3>Tarifs selon la distance</h3>
+          <p class="tiny muted">Distance route ≈ vol d'oiseau × coefficient route, entre la récupération et la livraison. Les suppléments (catégorie, options) s'ajoutent.</p>
+          <label class="field"><span>Calcul des frais</span><select class="input" data-s="zones_enabled"><option value="1" ${s.zones_enabled === '1' ? 'selected' : ''}>Par zone de distance</option><option value="0" ${s.zones_enabled !== '1' ? 'selected' : ''}>Par axe (frais de l'axe ou par défaut)</option></select></label>
+          <div class="row">${f('zone1_km', 'Zone 1 : jusqu\'à (km)')}${f('zone1_fee', 'Frais (Ar)')}</div>
+          <div class="row">${f('zone2_km', 'Zone 2 : jusqu\'à (km)')}${f('zone2_fee', 'Frais (Ar)')}</div>
+          <div class="row">${f('zone3_km', 'Zone 3 : jusqu\'à (km)')}${f('zone3_fee', 'Frais (Ar)')}</div>
+          ${f('zone4_fee', 'Périphérie, au-delà (Ar)', 'Ou sur devis')}
+          <div class="row">${f('multi_discount', 'Plusieurs colis, même adresse (− %)', 'À partir du 2e colis')}${f('xl_min_fee', 'XL : devis minimum (Ar)')}</div>
+          <div class="row">${f('big_value', 'Encaissement grosse valeur au-delà de (Ar)')}${f('big_value_pct', 'Supplément (%)')}</div></div>
+        <div class="panel stack"><h3>Conditions générales</h3>
+          <div class="row">${f('max_attempts', 'Tentatives avant retour (injoignable)')}${f('centre_keep_days', 'Garde au centre avant de contacter l\'expéditeur (jours)')}</div>
+          ${f('liability_cap', 'Remboursement maximum en cas de perte ou casse (Ar)', 'Vide = limité à la valeur déclarée')}
+          ${f('terms_version', 'Version des conditions (date)', 'Changer la date oblige chaque client à accepter de nouveau les conditions', 'date')}
+          <button class="btn sm" data-act="showterms">Voir le texte affiché aux clients</button></div>
         <div class="panel stack"><h3>Conditions de transport</h3>
           <p class="tiny muted">Catégorie retenue : la plus élevée entre celle choisie par le client, le poids et la plus grande dimension. Le livreur peut la corriger à la récupération (l'expéditeur est prévenu du nouveau prix).</p>
           ${['s', 'm', 'l'].map((k) => `<div class="row">${f(`cat_${k}_kg`, `${k.toUpperCase()} : jusqu'à (kg)`)}${f(`cat_${k}_cm`, 'jusqu\'à (cm)')}${f(`cat_${k}_fee`, 'supplément (Ar)')}</div>${f(`cat_${k}_ex`, `Exemples ${k.toUpperCase()}`, '', 'text')}`).join('')}
@@ -709,6 +723,7 @@ const actions = {
   tx: (el) => txForm(+el.dataset.id, el.dataset.name),
   paid: async (el) => { await api('POST', `/api/admin/deliveries/${el.dataset.id}/payment`, { payment_status: 'paid' }); show(); },
   cst: (el) => { sessionStorage.setItem('adm_cst', el.dataset.v); show(); },
+  showterms: () => import('./terms.js').then((m) => m.loadConditions(true).then(() => m.showConditions())),
   resolve: async (el) => { const r = await promptBox('Traitement', { label: 'Action menée / commentaire' }); if (r === null) return; await api('POST', `/api/admin/complaints/${el.dataset.id}/resolve`, { resolution: r }); refreshCounts(); show(); },
   period: (el) => { sessionStorage.setItem('adm_period', el.dataset.v); show(); },
   print: () => window.print(),
@@ -991,7 +1006,7 @@ async function parcelDetail(id) {
     const rv = document.createElement('div');
     rv.className = 'card stack'; rv.style.background = 'var(--sun-soft)'; rv.style.border = '0';
     rv.innerHTML = `<b>⚠️ À valider : ${esc(s.review)}</b>
-      <div class="row wrap" style="gap:8px"><label class="field grow"><span>Frais (Ar)</span><input class="input" data-rfee inputmode="numeric" value="${s.fee}"></label>
+      <div class="row wrap" style="gap:8px"><label class="field grow"><span>Frais (Ar)${s.category === 'XL' || s.review === 'devis' ? ' — XL : devis, minimum 15 000 Ar' : ''}</span><input class="input" data-rfee inputmode="numeric" value="${s.category === 'XL' && s.fee < 15000 ? 15000 : s.fee}"></label>
         <label class="field grow"><span>Motif si refus</span><input class="input" data-rreason value="Valeur ou poids trop élevé"></label></div>
       <div class="row" style="gap:8px"><button class="btn primary grow" data-approve>✅ Valider</button><button class="btn danger grow" data-reject>❌ Refuser</button></div>`;
     d.actions.prepend(rv);

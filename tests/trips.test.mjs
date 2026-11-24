@@ -10,6 +10,7 @@ import { hashPassword } from '../src/lib.js';
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'zones_enabled'").run(); // frais fixes (zones testées à part)
 env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 async function call(method, path, body, token, headers = {}) {
   const h = { 'content-type': 'application/json', ...headers };
@@ -102,6 +103,9 @@ test('suivi public : position visible seulement pendant la livraison', async () 
   // attribué à Hery, parti, position fraîche
   env.DB.raw.prepare("UPDATE shipments SET status='assigned', courier_id=?, stage='departed' WHERE id=?").run(c1id, sA.id);
   env.DB.raw.prepare('UPDATE couriers SET lat=?, lng=?, last_seen=? WHERE user_id=?').run(-18.9, 47.525, Date.now(), c1id);
+  t = await call('GET', `/api/track/${s.track_token}`);
+  assert.equal(t.data.position, null, 'pas encore en livraison : position cachée'); assert.equal(t.data.courier, 'Hery');
+  env.DB.raw.prepare("UPDATE shipments SET status='picked_up', stage='en_route' WHERE id=?").run(sA.id);
   t = await call('GET', `/api/track/${s.track_token}`);
   assert.deepEqual(t.data.position, [-18.9, 47.525]); assert.ok(t.data.eta > Date.now()); assert.equal(t.data.courier, 'Hery');
   env.DB.raw.prepare("UPDATE shipments SET status='delivered', done_at=? WHERE id=?").run(Date.now(), sA.id);

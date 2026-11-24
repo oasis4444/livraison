@@ -114,22 +114,8 @@ export async function scheduleHtml(map, onDeps) {
 // ---------------------------------------------------------------- formulaire d'envoi (client ou centre)
 // Conditions de transport : catégories, options et règles (réglées par le centre dans Paramètres).
 export async function conditionsModal() {
-  const mg = state.lang === 'mg';
-  const r = await api('GET', '/api/conditions');
-  modal('Conditions de transport', `<div class="stack small">
-    <p class="muted">${mg ? 'Ny ambony indrindra amin\'ny lanja sy ny habe no raisina.' : 'On retient le plus élevé des deux : le poids ou la taille.'}</p>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>${mg ? 'Karazana' : 'Catégorie'}</th><th>${mg ? 'Ohatra' : 'Exemples'}</th><th>Limites</th><th>Supplément</th><th>${mg ? 'Fitaterana' : 'Véhicule'}</th></tr></thead><tbody>
-    ${r.categories.map((k) => `<tr><td><b>${k.k}</b></td><td>${esc(k.ex)}</td><td>${k.kg ? `${mg ? 'hatramin\'ny' : 'jusqu\'à'} ${k.kg} kg, ${k.cm} cm` : (mg ? 'mihoatra ny L' : 'au-delà de L')}</td><td>${k.fee == null ? (mg ? 'devis' : 'sur devis') : '+' + ar(k.fee)}</td><td>${k.vehicle === 'moto' ? 'moto' : k.vehicle === 'velo' ? (mg ? 'bisikileta' : 'vélo') : '—'}</td></tr>`).join('')}</tbody></table></div>
-    <b>Options</b>
-    <div>${mg ? 'Mora vaky' : 'Fragile'} (verre, écran, gâteau) : +${ar(r.options.fragile)} · ${mg ? 'ny fonosana dia an\'ny mpandefa' : 'emballage à la charge de l\'expéditeur'}</div>
-    <div>Express (${mg ? 'ato anatin\'ny ora iray, tsy mandalo amin\'ny centre' : 'dans l\'heure, sans passer par le centre'}) : +${ar(r.options.express)}</div>
-    <div>${mg ? 'Fiandrasana mihoatra ny 10 minitra any amin\'ny mpandray' : 'Attente chez le destinataire au-delà de 10 min'} : +${ar(r.options.wait)}</div>
-    <div>${mg ? 'Famerenana amin\'ny mpandefa (lavina na tsy azo antsoina)' : 'Retour à l\'expéditeur (refus ou injoignable)'} : ${r.options.return_percent} % ${mg ? 'amin\'ny frais' : 'des frais'}</div>
-    <b>${mg ? 'Fitsipika' : 'Règles'}</b>
-    <div>${mg ? 'Maimaimpoana ny fakana ho an\'ny S sy M. L / XL' : 'Récupération gratuite pour S et M. Pour L / XL'} : +${ar(r.options.pickup_large)}, ${mg ? 'na apetraho ao amin\'ny centre' : 'ou déposez l\'objet au centre'}.</div>
-    <div>${mg ? 'Mivantana (fakana sy fanaterana akaiky' : 'Livraison directe (récupération et livraison à moins de'} ${r.direct.km} km${mg ? ')' : ')'} : ${ar(r.direct.fee)}.</div>
-    <div>${mg ? 'Fetra' : 'Limites'} : ${r.limits.bike_kg} kg ${mg ? 'amin\'ny bisikileta' : 'à vélo'}, ${r.limits.moto_kg} kg ${mg ? 'amin\'ny moto' : 'à moto'} ; ${mg ? 'mihoatra izany : devis' : 'au-delà : devis'}. ${mg ? 'Vidin\'entana mihoatra ny' : 'Valeur au-delà de'} ${ar(r.limits.max_value)} : ${mg ? 'manamarina ny centre' : 'validation du centre'}.</div>
-    <div class="muted">${mg ? 'Hamarinin\'ny livreur amin\'ny sary ny karazana rehefa haka : raha lehibe kokoa dia ovainy ary ampandrenesina ianao amin\'ny vidiny vaovao.' : 'Le livreur vérifie la catégorie sur photo à la récupération : si le colis est plus gros, il la corrige et vous recevez le nouveau prix.'}</div></div>`, { wide: true });
+  const m = await import('./terms.js');
+  return m.showConditions();
 }
 
 export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
@@ -152,6 +138,8 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     <details class="small"><summary>${mg ? 'Habe sy lanja marina (tsy voatery)' : 'Taille et poids exacts (facultatif)'}</summary>
       <div class="row" style="gap:6px;align-items:center;margin-top:6px"><input class="input" data-dl inputmode="decimal" placeholder="L cm" style="width:76px"> × <input class="input" data-dw inputmode="decimal" placeholder="l cm" style="width:76px"> × <input class="input" data-dh inputmode="decimal" placeholder="h cm" style="width:76px">
         <input class="input" data-kg inputmode="decimal" placeholder="kg" style="width:76px"></div></details>
+    <label class="row small" style="gap:8px;align-items:center">${mg ? 'Isan\'ny colis (adiresy iray ihany)' : 'Nombre de colis (même adresse)'} <input class="input" data-qty type="number" min="1" max="50" value="1" style="width:76px"></label>
+    <div class="tiny muted">${mg ? 'Tsy azo alefa : vola, fitaovam-piadiana, entana mampidi-doza na tsy ara-dalàna, biby velona.' : 'Interdit : argent liquide, armes, produits dangereux ou illégaux, animaux vivants.'}</div>
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label>
     <div class="field"><span>💳 ${mg ? 'Ny vidin\'entana' : 'Paiement de la marchandise'}</span>
       <div class="seg" data-pay><button type="button" class="on" data-pv="cash">💵 ${mg ? 'Vola an-tanana, raisin\'ny livreur' : 'Espèces, à encaisser par le livreur'}</button><button type="button" data-pv="mm">📱 ${mg ? 'Efa nalefa Mobile Money' : 'Déjà payée par Mobile Money'}</button></div>
@@ -174,12 +162,13 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const v = Number(el.querySelector('[data-v]').value.replace(/\D/g, '')) || 0;
     const dims = ['[data-dl]', '[data-dw]', '[data-dh]'].map((k) => el.querySelector(k).value.replace(',', '.'));
     const r = await api('POST', '/api/shipments/quote', { drop_lat: f.drop.lat, drop_lng: f.drop.lng, pickup_lat: f.pickup?.lat, pickup_lng: f.pickup?.lng, value: v, weight: el.querySelector('[data-kg]').value,
-      l: dims[0], w: dims[1], h: dims[2], category: f.cat || 'S', fragile: el.querySelector('[data-frag]').checked, express: el.querySelector('[data-expr]').checked, centre_drop: f.pick === 'centre' }).catch(() => null);
+      l: dims[0], w: dims[1], h: dims[2], category: f.cat || 'S', fragile: el.querySelector('[data-frag]').checked, express: el.querySelector('[data-expr]').checked, centre_drop: f.pick === 'centre',
+      qty: Math.max(1, Number(el.querySelector('[data-qty]').value) || 1), value_paid: f.pay === 'mm' }).catch(() => null);
     if (!r) return;
     const prov = el.querySelector('[data-prov]').checked;
     const due = prov ? 0 : (f.pay === 'mm' ? 0 : v) + r.fee;
     if (r.category && r.category !== (f.cat || 'S')) { f.cat = r.category; drawCats(); }
-    box.innerHTML = `${(r.lines || []).map(([l, a]) => `<div class="row between tiny muted"><span>${esc(l)}${l === 'Livraison' && r.direct ? (mg ? ' (mivantana, akaiky)' : ' (directe, proche)') : ''}</span><span>${ar(a)}</span></div>`).join('')}
+    box.innerHTML = `${r.distance_km ? `<div class="tiny muted">${mg ? 'Halavirana' : 'Distance'} : ${String(Math.round(r.distance_km * 10) / 10).replace('.', ',')} km</div>` : ''}${(r.lines || []).map(([l, a]) => `<div class="row between tiny muted"><span>${esc(l)}${l === 'Livraison' && r.direct ? (mg ? ' (mivantana, akaiky)' : ' (directe, proche)') : ''}</span><span>${ar(a)}</span></div>`).join('')}
       <div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div>${r.moto_only ? `<div class="tiny muted">${mg ? 'Moto no mitondra' : 'Transporté à moto'}</div>` : ''}
       <div class="row between"><span>${c('to_collect')}</span><b>${ar(due)}</b></div>
       ${f.pay === 'mm' && !prov ? `<div class="small">💵 ${mg ? 'Ny frais' : 'Frais'} <b>${ar(r.fee)}</b> ${mg ? 'aloanao amin\'ny livreur rehefa haka ny entana' : 'à payer au livreur à la récupération'}</div>` : ''}
@@ -226,7 +215,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
   el.addEventListener('change', (e) => { if (e.target.matches('[data-pw]')) fillDeliv(); });
   el.addEventListener('input', (e) => {
     const k = e.target.dataset.a;
-    if (e.target.matches('[data-v], [data-kg], [data-dl], [data-dw], [data-dh]')) return quote();
+    if (e.target.matches('[data-v], [data-kg], [data-dl], [data-dw], [data-dh], [data-qty]')) return quote();
     if (!k) return;
     f[k] = null;
     clearTimeout(tmr);
@@ -278,6 +267,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         drop_addr: dr.label, drop_lat: dr.lat, drop_lng: dr.lng, declared_value: Number(txt('[data-v]').replace(/\D/g, '')) || 0, description: txt('[data-d]'),
         size: txt('[data-dl]') || txt('[data-dw]') || txt('[data-dh]') ? { l: txt('[data-dl]').replace(',', '.'), w: txt('[data-dw]').replace(',', '.'), h: txt('[data-dh]').replace(',', '.') } : undefined,
         weight: txt('[data-kg]') ? txt('[data-kg]').replace(',', '.') : undefined,
+        qty: Math.max(1, Number(el.querySelector('[data-qty]').value) || 1),
         category: f.cat || undefined, fragile: el.querySelector('[data-frag]').checked || undefined, express: el.querySelector('[data-expr]').checked || undefined,
         centre_drop: ['L', 'XL'].includes(f.cat) && f.pick === 'centre' ? true : undefined,
         slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
@@ -322,6 +312,23 @@ async function photoUrl(id) {
 }
 
 // ---------------------------------------------------------------- détail d'un colis
+function complaintShip(s, done) {
+  const mg = state.lang === 'mg';
+  const m = modal(mg ? 'Fitarainana' : 'Réclamation', `<div class="stack">
+    <p class="small muted">${mg ? 'Colis' : 'Colis'} ${esc(s.ref)} · ${mg ? 'valiana ao anatin\'ny 72 ora' : 'réponse sous 72 heures'}</p>
+    <label class="field"><span>${mg ? 'Inona no olana?' : 'Quel est le problème ?'}</span><textarea class="input" rows="4" data-body></textarea></label>
+    <label class="field"><span>${mg ? 'Sary (raha misy)' : 'Photo (si possible)'}</span><input type="file" accept="image/*" capture="environment" data-ph></label>
+    <button class="btn primary block" data-ok>${mg ? 'Alefa' : 'Envoyer'}</button></div>`);
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    const body = m.el.querySelector('[data-body]').value.trim();
+    if (body.length < 5) return toast(mg ? 'Soraty ny olana' : 'Décrivez le problème', 'err');
+    let photo;
+    const f = m.el.querySelector('[data-ph]').files[0];
+    if (f) photo = await compressImage(f).catch(() => undefined);
+    try { await api('POST', `/api/shipments/${s.id}/complaint`, { body, photo }); m.close(); toast(mg ? 'Voaray ny fitarainanao' : 'Réclamation envoyée', 'ok'); done?.(); } catch (e) { toastErr(e); }
+  };
+}
+
 export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
   const { shipment: s } = await api('GET', `/api/shipments/${id}`);
   const isCourier = role === 'courier', isAdmin = role === 'admin';
@@ -412,7 +419,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
       });
       btn(`📵 ${state.lang === 'mg' ? 'Tsy azo antsoina' : 'Injoignable'}`, 'sun', async () => {
         if (!(await confirmBox(state.lang === 'mg' ? 'Tsy azo antsoina ny mpandray : averina amin\'ny mpandefa ny colis?' : 'Destinataire injoignable : le colis retourne à l\'expéditeur ?'))) return;
-        await api('POST', `/api/shipments/${s.id}/refuse`, { unreachable: true }); done();
+        const r = await api('POST', `/api/shipments/${s.id}/refuse`, { unreachable: true });
+        toast(r.returned ? (state.lang === 'mg' ? 'Averina amin\'ny mpandefa ny colis' : 'Colis à retourner à l\'expéditeur') : (state.lang === 'mg' ? `Andrana ${r.attempt} : hiverina hanatitra indray` : `Tentative ${r.attempt} notée : nouvelle tentative au prochain créneau`), r.returned ? 'err' : 'ok'); done();
       });
       btn(c('cancel_btn'), 'danger', async () => {
         const note = await promptBox(c('cancel_btn'), { label: c('reason') }); if (!note) return;
@@ -431,6 +439,18 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
       const note = await promptBox(state.lang === 'mg' ? 'Inona no nitranga?' : 'Que s\'est-il passé ?', { label: c('reason') }); if (!note) return;
       await api('POST', `/api/shipments/${s.id}/confirm`, { received: false, note }); toast(stepLabel('disputed'), 'err'); done();
     });
+  }
+  // Catégorie corrigée à la récupération : l'expéditeur accepte le nouveau prix ou annule sans frais.
+  if (role === 'sender' && !isAdmin && s.status === 'picked_up' && s.cat_changed) {
+    acts.insertAdjacentHTML('beforeend', `<div class="small" style="color:var(--orange)">${state.lang === 'mg' ? `Novain'ny livreur ho ${esc(s.category)} ny karazana colis : ${ar(s.fee)} ny saran-dalana vaovao. Afaka foananao maimaim-poana izy raha tsy ekenao.` : `Le livreur a corrigé la catégorie en ${esc(s.category)} : nouveaux frais ${ar(s.fee)}. Si vous ne l'acceptez pas, vous pouvez annuler sans frais.`}</div>`);
+    btn(state.lang === 'mg' ? 'Foanana maimaim-poana' : 'Annuler sans frais', 'danger', async () => {
+      if (!(await confirmBox(state.lang === 'mg' ? 'Foanana ary averina aminao ny colis?' : 'Annuler l\'envoi ? Le colis vous sera rapporté, sans frais.', 'OK', true))) return;
+      await api('POST', `/api/shipments/${s.id}/cancel`, { note: 'Nouvelle catégorie refusée par l\'expéditeur' }); done();
+    });
+  }
+  // Réclamation : dans les 48 h après la livraison, avec une photo si possible.
+  if (!isCourier && !isAdmin && ['delivered', 'refused', 'returned'].includes(s.status) && s.done_at && Date.now() - s.done_at < 48 * 3600e3) {
+    btn(state.lang === 'mg' ? 'Fitarainana' : 'Réclamation', '', () => complaintShip(s, done));
   }
   if (!isCourier && ['pending', 'assigned'].includes(s.status) && (isAdmin || role === 'sender')) {
     btn('✖ ' + (state.lang === 'mg' ? 'Foanana' : 'Annuler le colis'), 'danger', async () => {

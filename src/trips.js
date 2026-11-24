@@ -138,8 +138,9 @@ async function trackPublic(ctx, env) {
   if (!s) fail(404, 'not_found', 'Lien de suivi invalide');
   const { stepOf, STEP_LABELS } = await import('./shipments.js');
   const step = stepOf(s);
-  // La position du livreur n'est visible que pendant la mission (jamais avant ni après).
-  const live = ['departed', 'at_pickup', 'picked_up', 'to_centre', 'en_route', 'nearby', 'awaiting_recipient', 'awaiting_courier'].includes(step) && s.clat != null && now() - (s.cseen || 0) < 10 * 60e3;
+  // La position du livreur n'est visible que pendant la livraison (en route vers le destinataire), jamais avant ni après.
+  const delivering = s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at));
+  const live = delivering && s.clat != null && now() - (s.cseen || 0) < 10 * 60e3;
   let eta = null;
   if (live && s.drop_lat != null && (!s.relay || s.centre_out_at)) { // pas d'heure d'arrivée tant que le colis va au centre
     const km = (s.status === 'assigned' && s.pickup_lat != null ? haversineKm(s.clat, s.clng, s.pickup_lat, s.pickup_lng) + haversineKm(s.pickup_lat, s.pickup_lng, s.drop_lat, s.drop_lng)
