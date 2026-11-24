@@ -268,6 +268,16 @@ export async function bikeRoute(from, to, vehicle) {
     return out;
   } catch { return straight; }
 }
+// Trace l'itinéraire réel (qui suit les rues) sur la carte : halo + trait ; pointillé fin seulement si le service ne répond pas.
+// Renvoie { layer, km, min, approx } ; l'appelant retire l'ancien calque avec layer.remove().
+export async function drawRoad(map, from, to, { vehicle, color = '#0b6e4f' } = {}) {
+  if (!map || !window.L || !from || !to) return null;
+  const r = await bikeRoute(from, to, vehicle);
+  const layer = L.layerGroup(r.approx
+    ? [L.polyline(r.coords, { color, weight: 2.5, opacity: .7, dashArray: '4 7' })]
+    : [L.polyline(r.coords, { color, weight: 10, opacity: .16, lineCap: 'round', lineJoin: 'round' }), L.polyline(r.coords, { color, weight: 4.5, opacity: .95, lineCap: 'round', lineJoin: 'round' })]).addTo(map);
+  return { layer, coords: r.coords, km: r.km, min: r.min ?? etaMin(r.km, vehicle), approx: !!r.approx };
+}
 export function etaMin(kmv, vehicle) { return Math.max(2, Math.round((kmv / (vehicle === 'moto' ? 25 : 14)) * 60)); }
 
 // Recherche d'adresse (Nominatim, limité à Madagascar, priorité Antananarivo)

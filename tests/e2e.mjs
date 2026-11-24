@@ -67,6 +67,8 @@ try {
     const nm = await client.locator('.modal-back').count(); if (nm !== 1) throw new Error('modales ouvertes : ' + nm);
     await client.locator('.modal [data-x]').click({ force: true }); await client.waitForTimeout(200);
     await client.check('[data-accept]'); await client.click('[type=submit]');
+    await client.waitForSelector('.sp-hero'); await client.screenshot({ path: 'tests/screens/02-espace-client.png' });
+    await client.click('.sp-tab [data-nav=menu]'); await client.click('.sp-sheet [data-nav=express]');
     await client.waitForSelector('[data-t=home]'); await client.click('[data-t=home]');
     await client.waitForSelector('[data-q=b]');
   });

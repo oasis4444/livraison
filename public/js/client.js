@@ -17,7 +17,7 @@ export async function mount(el) {
   root.innerHTML = `<div class="mapapp">
     <div class="map" id="map"></div>
     <div class="topbar">
-      <div class="brand-pill"><img src="/icon.svg" alt=""><span>Alefa</span></div>
+      <button class="brand-pill" data-act="space" title="Espace client" style="border:0;cursor:pointer">← <img src="/icon.svg" alt=""><span>Alefa</span></button>
       <div class="grow"></div>
       <button class="icon-btn" data-act="support" title="Service client">💬</button>
       <button class="icon-btn" data-act="notifs" aria-label="${t('notifications')}">🔔<span class="badge-dot hidden" data-unread></span></button>
@@ -294,6 +294,7 @@ async function endPicking(confirm) {
 const actions = {
   grip: () => sheet.classList.toggle('collapsed'),
   notifs: () => showNotifications(),
+  space: () => { stopTracking(); location.href = '/'; },
   support: () => supportChat(($('[data-colis]')?._list || []).filter((x) => !['delivered', 'cancelled'].includes(x.status)).map((x) => x.ref)),
   profile: () => profileForm(),
   locate: () => locate(false).then(() => me && map?.setView(me, 16)),

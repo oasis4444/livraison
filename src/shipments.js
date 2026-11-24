@@ -99,7 +99,7 @@ export function publicShipment(s) {
     axe: s.axe_name ?? s.trip_label ?? null, departure_at: s.departure_at, trip_id: s.trip_id ?? null, accepted_at: s.accepted_at ?? null, track_token: s.track_token ?? null,
     payment: { value_paid: !!s.value_paid, ref: s.value_paid_ref ?? null, fee_at_pickup: s.value_paid && !s.province ? s.fee : 0, pickup_fee: s.pickup_fee ?? null },
     windows: s.pickup_from ? { pickup: [s.pickup_from, s.pickup_to], delivery: [s.deliver_from, s.deliver_to] } : null,
-    late: lateReason(s), since: stepSince(s), qty: s.qty || 1, distance_km: s.distance_km ?? null, attempts: s.attempts || 0, cat_changed: !!s.cat_changed_at,
+    late: lateReason(s), since: stepSince(s), qty: s.qty || 1, kind: s.kind || null, distance_km: s.distance_km ?? null, attempts: s.attempts || 0, cat_changed: !!s.cat_changed_at,
     review: s.review ?? null, moto_only: !!s.moto_only, category: s.category || null, fragile: !!s.fragile, express: !!s.express, centre_drop: !!s.centre_drop,
     wait_fee: s.wait_fee || 0, fee_detail: (() => { try { return s.fee_detail ? JSON.parse(s.fee_detail) : null; } catch { return null; } })(), shares: s.centre_share != null ? { centre: s.centre_share, courier: s.courier_share, paid: !!s.cash_settled_at } : null,
     province: s.province ? { city: s.dest_city, coop: s.coop_name, plate: s.coop_plate ?? null, driver_phone: s.coop_driver_phone ?? null, fee: s.coop_fee ?? null, fee_status: s.coop_fee_status ?? null } : null,
@@ -364,10 +364,10 @@ export async function createShipment(env, b, { sender, source, merchant = null, 
     str(b.recipient?.address ?? b.drop_addr, { min: 3, max: 200, name: 'Adresse de livraison' }), dlat, dlng,
     str(b.description ?? b.contents, { max: 300 }), declared, fee, now(), String(crypto.getRandomValues(new Uint32Array(1))[0] % 10000).padStart(4, '0'));
   await run(env, `UPDATE shipments SET track_token = ?, dim_l = ?, dim_w = ?, dim_h = ?, weight_kg = ?, value_paid = ?, value_paid_ref = ?, province = ?, dest_city = ?, coop_name = ?,
-      pickup_from = ?, pickup_to = ?, deliver_from = ?, deliver_to = ?, review = ?, moto_only = ?, category = ?, fragile = ?, express = ?, centre_drop = ?, fee_detail = ?, qty = ?, distance_km = ? WHERE id = ?`, randomHex(12),
+      pickup_from = ?, pickup_to = ?, deliver_from = ?, deliver_to = ?, review = ?, moto_only = ?, category = ?, fragile = ?, express = ?, centre_drop = ?, fee_detail = ?, qty = ?, distance_km = ?, kind = ? WHERE id = ?`, randomHex(12),
     size.dims?.[0] ?? null, size.dims?.[1] ?? null, size.dims?.[2] ?? null, size.weight, value_paid, value_paid_ref, province ? 1 : 0, dest_city, coop_name,
     win.pickup_from, win.pickup_to, win.deliver_from, win.deliver_to, review, wr.moto_only ? 1 : 0, category, fragile ? 1 : 0, express ? 1 : 0, centreDrop ? 1 : 0,
-    JSON.stringify(fee === price.fee ? price.lines : [['Frais fixés par le centre', fee]]), qty, bf.km, res.meta.last_row_id);
+    JSON.stringify(fee === price.fee ? price.lines : [['Frais fixés par le centre', fee]]), qty, bf.km, ['document', 'colis', 'alimentaire'].includes(b.kind) ? b.kind : null, res.meta.last_row_id);
   // L / XL déposé par l'expéditeur au centre : la « récupération » se fait au centre.
   if (centreDrop) {
     const C = await centrePoint(env);

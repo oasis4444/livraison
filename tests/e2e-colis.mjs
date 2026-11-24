@@ -42,7 +42,7 @@ async function ctx(geo, vw = { width: 400, height: 860 }) {
     : r.fulfill({ json: [/ivandry/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Ivandry, Antananarivo, Madagascar', lat: '-18.8752', lon: '47.5328' }
       : /analakely/i.test(decodeURIComponent(r.request().url())) ? { display_name: 'Analakely, Antananarivo, Madagascar', lat: '-18.9055', lon: '47.5255' }
       : { display_name: 'Behoririka, Antananarivo, Madagascar', lat: '-18.9020', lon: '47.5170' }] }));
-  await c.route('https://routing.openstreetmap.de/**', (r) => r.abort());
+  await c.route('https://routing.openstreetmap.de/**', (r) => r.fulfill({ json: { routes: [{ geometry: { coordinates: [[47.5255, -18.9055], [47.5290, -18.8990], [47.5280, -18.8900], [47.5328, -18.8752]] }, distance: 5200, duration: 960 }] } }));
   await c.route('https://fonts.googleapis.com/**', (r) => r.fulfill({ contentType: 'text/css', body: '' }));
   return c;
 }
@@ -122,35 +122,44 @@ try {
     if (await client.locator('[data-t=sched]').count()) throw new Error('le client ne doit pas voir les heures & axes');
   });
   await step('client (expéditeur) : envoie un colis depuis l\'application', async () => {
-    await client.click('[data-t=colis]'); await client.click('[data-act=sendparcel]');
+    // nouvel envoi en 4 étapes : trajet → colis → paiement → confirmation
+    await client.click('.sp-tab [data-nav=new]'); await client.waitForSelector('.wz-body [data-a=pickup]');
     await client.click('[data-gps]'); await client.waitForFunction(() => document.querySelector('[data-a=pickup]').value.length > 3);
-    await client.fill('[data-rn]', 'Koto'); await client.fill('[data-rp]', '034 77 777 77');
+    await client.fill('[data-k=rname]', 'Koto'); await client.fill('[data-k=rphone]', '034 77 777 77');
     await client.fill('[data-a=drop]', 'Behoririka'); await client.click('[data-s=drop] button >> nth=0');
-    await client.fill('[data-v]', '12000'); await client.waitForSelector('[data-qok]');
-    if (await client.locator('[data-dep]').count()) throw new Error('le client ne doit pas choisir le départ');
+    await client.screenshot({ path: 'tests/screens/23-envoi-1-trajet.png' });
+    await client.click('[data-next]');
     // contenu et taille obligatoires
-    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Indiquez ce que contient le colis');
-    await client.fill('[data-d]', 'Chaussures');
-    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Choisissez la catégorie du colis');
-    // catégorie S/M/L/XL avec gros boutons (exemples, limites, supplément) ; taille et poids exacts facultatifs
-    await client.click('[data-cat=M]'); await client.waitForSelector('[data-q] >> text=Catégorie M');
-    await client.click('details summary'); await client.fill('[data-kg]', '1,2');
-    await client.screenshot({ path: 'tests/screens/24-client-envoi.png' });
-    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Code à transmettre au destinataire');
-    await client.click('.modal-back [data-x]');
+    await client.click('[data-next]'); await client.waitForSelector('text=Dites ce que contient le colis');
+    await client.fill('[data-k=desc]', 'Chaussures');
+    await client.click('[data-next]'); await client.waitForSelector('text=Choisissez la taille du colis');
+    await client.click('[data-kind=colis]'); await client.click('[data-cat=M]'); await client.waitForSelector('[data-price] b >> text=Ar');
+    await client.fill('[data-k=kg]', '1,2');
+    await client.screenshot({ path: 'tests/screens/24-envoi-2-colis.png' });
+    await client.click('[data-next]');
+    await client.click('[data-next]'); await client.waitForSelector('text=Indiquez la valeur de la marchandise');
+    await client.fill('[data-k=value]', '12000');
+    await client.screenshot({ path: 'tests/screens/24b-envoi-3-paiement.png' });
+    await client.click('[data-next]'); await client.waitForSelector('.wz-total >> text=Catégorie M');
+    if (!/Chaussures/.test(await client.textContent('.wz-sum'))) throw new Error('résumé');
+    await client.screenshot({ path: 'tests/screens/24c-envoi-4-confirmation.png' });
+    await client.click('[data-ok]'); await client.waitForSelector('.wz-pin');
+    await client.screenshot({ path: 'tests/screens/24d-envoi-fait.png' });
   });
   await step('lien « Alefa » depuis le logiciel de vente : formulaire prérempli', async () => {
     await client.goto(BASE + '/envoyer?ref=L-77&nom=Koto&tel=0347777777&adresse=Behoririka&valeur=15000&desc=Sac');
     await client.waitForSelector('text=Commande reçue du logiciel de vente');
     await client.waitForSelector('[data-s=drop] button');
-    await client.click('[data-s=drop] button >> nth=0'); await client.waitForSelector('[data-qok]');
-    await client.click('[data-cat=S]');
+    await client.click('[data-s=drop] button >> nth=0');
+    await client.waitForFunction(() => document.querySelector('[data-a=pickup]').value.length > 3);
     await client.screenshot({ path: 'tests/screens/32-lien-alefa.png' });
-    await client.click('.modal [data-ok]'); await client.waitForSelector('.pin-box');
-    await client.click('.modal-back [data-x]');
+    await client.click('[data-next]'); await client.click('[data-cat=S]'); await client.click('[data-next]');
+    if ((await client.inputValue('[data-k=value]')) !== '15000') throw new Error('valeur préremplie');
+    await client.click('[data-next]'); await client.click('[data-ok]'); await client.waitForSelector('.wz-pin');
+    await client.click('.sp-tab [data-nav=home]'); await client.waitForSelector('.sp-hero');
   });
   await step('import Excel/CSV : une ligne = un colis', async () => {
-    await client.click('[data-act=importparcels]');
+    await client.click('[data-imp]');
     await client.fill('.modal [data-pk]', 'Chez moi, Behoririka');
     await client.setInputFiles('.modal [data-file]', 'tests/fixture-import.csv');
     await client.waitForSelector('text=IMP-2');
@@ -160,7 +169,7 @@ try {
     await client.click('.modal-back [data-x]');
   });
   await step('import direct de l\'export Excel du logiciel de vente (format Tsena)', async () => {
-    await client.click('[data-act=importparcels]');
+    await client.click('[data-imp]');
     await client.fill('.modal [data-pk]', 'Boutique, Behoririka');
     await client.setInputFiles('.modal [data-file]', 'tests/fixture-tsena.csv');
     await client.waitForSelector('text=2 commande(s) « En attente de livraison » sur 4');
@@ -173,7 +182,7 @@ try {
     await client.click('.modal-back [data-x]');
   });
   await step('coller la sauvegarde Tsena Ampandrana', async () => {
-    await client.click('[data-act=importparcels]');
+    await client.click('[data-imp]');
     await client.fill('.modal [data-pk]', 'Tsena Ampandrana, Ampandrana');
     await client.fill('.modal [data-paste]', (await import('node:fs')).readFileSync('tests/fixture-tsena-backup.json', 'utf8'));
     await client.waitForSelector('text=Tsena : 1');
@@ -193,8 +202,8 @@ try {
     await courier.click('.modal [data-go]');
     await courier.waitForSelector('text=Chez l\'expéditeur', { timeout: 15000 });
     await courier.waitForSelector('[data-act=endrun]');
-    await client.click('[data-t=colis]'); await client.waitForSelector('.live-card', { timeout: 15000 });
-    await client.waitForSelector('.live-card >> text=Chez l\'expéditeur');
+    await client.click('.sp-tab [data-nav=parcels]'); await client.click('[data-ext="CMD-1042"]');
+    await client.waitForSelector('[data-tl] li.done'); await client.waitForSelector('[data-pill] >> text=Chez l\'expéditeur');
     await client.screenshot({ path: 'tests/screens/29-client-suivi-direct.png' });
     await admin.click('[data-v=live]'); await admin.waitForSelector('text=Mouvements'); await admin.waitForSelector('.feed >> text=Parti du centre');
     await admin.screenshot({ path: 'tests/screens/30-admin-carte-direct.png' });
@@ -217,7 +226,7 @@ try {
     await courier.click('[data-act=ship][data-ext="CMD-1042"] .small.muted >> nth=0');
     await courier.waitForSelector('[data-ph][src^="blob:"]');
     const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
-    await client.waitForSelector(`text=🔑 ${pin}`);
+    await client.waitForSelector(`.sp-livepin >> text=${pin}`, { timeout: 20000 });
     await courier.click('text=✅ Livré et payé');
     // preuve : sans photo du colis remis, impossible de confirmer
     await courier.fill('.modal [data-pin]', '1234'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Prenez une photo du colis remis');
@@ -329,6 +338,26 @@ try {
     await admin.click('[data-v=couriers]'); await admin.waitForSelector('text=Colis par livreur');
     const row = await admin.textContent('tr:has-text("Hery Vélo")'); if (!/Hery Vélo\s*\d*[1-9]/.test(row.replace(/\s+/g, ' '))) throw new Error('compteur Hery : ' + row);
     await admin.screenshot({ path: 'tests/screens/41-admin-colis-par-livreur.png' });
+  });
+  await step('espace client sur ordinateur : tableau de bord, nouvel envoi, mes colis, suivi', async () => {
+    const dc = await ctx({ latitude: -18.9020, longitude: 47.5170 }, { width: 1440, height: 900 }), d = await dc.newPage(); watch(d, 'client-pc');
+    await d.goto(BASE + '/#connexion'); await d.fill('[name=phone]', '033 12 345 67'); await d.fill('[name=password]', 'secret12'); await d.click('[type=submit]');
+    await d.waitForSelector('.sp-side'); await d.waitForSelector('.sp-kpi'); await d.waitForTimeout(300);
+    await d.screenshot({ path: 'tests/screens/50-espace-accueil.png', fullPage: true });
+    await d.click('.sp-side [data-nav=new]'); await d.waitForFunction(() => document.querySelector('[data-a=pickup]')?.value.length > 3);
+    await d.fill('[data-k=rname]', 'Hery'); await d.fill('[data-k=rphone]', '034 22 222 22');
+    await d.fill('[data-a=drop]', 'Ivandry'); await d.click('[data-s=drop] button >> nth=0');
+    await d.waitForFunction(() => /par la route/.test(document.querySelector('[data-route]')?.textContent || '')); // itinéraire par les rues affiché
+    await d.screenshot({ path: 'tests/screens/51-espace-envoi-1.png' });
+    await d.click('[data-next]'); await d.fill('[data-k=desc]', 'Robe'); await d.click('[data-cat=S]'); await d.waitForSelector('[data-price] b');
+    await d.screenshot({ path: 'tests/screens/52-espace-envoi-2.png', fullPage: true });
+    await d.click('[data-next]'); await d.fill('[data-k=value]', '35000'); await d.click('[data-next]'); await d.waitForSelector('.wz-total');
+    await d.screenshot({ path: 'tests/screens/53-espace-envoi-4.png', fullPage: true });
+    await d.click('.sp-side [data-nav=parcels]'); await d.click('.sp-filters [data-f=sent]'); await d.waitForSelector('.sp-row');
+    await d.screenshot({ path: 'tests/screens/54-espace-mes-colis.png' });
+    await d.click('.sp-row >> nth=0'); await d.waitForSelector('[data-tl] li'); await d.waitForTimeout(300);
+    await d.screenshot({ path: 'tests/screens/55-espace-suivi.png' });
+    await dc.close();
   });
   await step('« Suivre mon colis » : numéro + téléphone, sans compte', async () => {
     const p = await (await ctx(null)).newPage(); watch(p, 'suivi-num');

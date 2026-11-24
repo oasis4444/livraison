@@ -109,7 +109,16 @@ async function trackView(token) {
     if (r.position) { core.upsertMarker(map, mk, 'c', r.position, core.icons.bike('', r.courier || '', r.vehicle)); pts.push(r.position); }
     else if (mk.c) { mk.c.remove(); delete mk.c; }
     if (!fitted && pts.length) { fitted = true; pts.length === 1 ? map.setView(pts[0], 15) : map.fitBounds(pts, { padding: [40, 40] }); }
+    // Itinéraire par les rues : du livreur jusqu'à vous pendant la livraison, sinon récupération → livraison.
+    const from = r.position && r.on_delivery ? r.position : r.pickup;
+    const key = from && r.drop ? [from, r.drop].flat().map((x) => Number(x).toFixed(3)).join(',') : '';
+    if (key && key !== roadKey) {
+      roadKey = key;
+      const rr = await core.drawRoad(map, from, r.drop, { vehicle: r.vehicle, color: r.position && r.on_delivery ? '#e8890c' : '#0b6e4f' });
+      if (roadKey !== key) rr?.layer.remove(); else { road?.layer.remove(); road = rr; }
+    }
   };
+  let road = null, roadKey = '';
   await tick(); setInterval(tick, 8000);
 }
 
@@ -139,7 +148,7 @@ async function boot() {
   const move = (to) => { localStorage.setItem(tokenKeyFor(role), state.token); if (tokenKeyFor(role) !== TOKEN_KEY) localStorage.removeItem(TOKEN_KEY); location.replace(to); };
   if (COURIER_SPACE && role !== 'courier') return move('/');
   if (!COURIER_SPACE && role === 'courier') return move('/livreur');
-  const mod = await import(role === 'admin' ? './admin.js' : role === 'courier' ? './courier.js' : './client.js');
+  const mod = await import(role === 'admin' ? './admin.js' : role === 'courier' ? './courier.js' : './space.js');
   mod.mount(app);
   if (role === 'client' && state.terms && !state.terms.accepted) import('./terms.js').then((m) => m.ensureTerms(state.terms, () => { state.terms.accepted = true; })).catch(() => {});
 }

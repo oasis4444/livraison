@@ -1,6 +1,6 @@
 // Page d'accueil publique (visiteur non connecté) : présentation, tarifs réels, calculateur, suivi d'un colis.
 // Les tarifs et conditions viennent de /api/conditions : la page reste juste quand le centre change ses prix.
-import { state, api, esc, ar, setLang, makeMap, geocode, code128Svg, toastErr, TANA } from './core.js';
+import { state, api, esc, ar, setLang, makeMap, geocode, code128Svg, toastErr, TANA, drawRoad } from './core.js';
 
 const L2 = (fr, mg) => (state.lang === 'mg' ? mg : fr);
 const ICON = {
@@ -240,7 +240,14 @@ function calculator(app, c) {
     layer.clearLayers();
     const mk = (p, cls) => L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: `<span class="h-mk ${cls}"></span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(layer);
     if (pts.p) mk(pts.p, 'g'); if (pts.d) mk(pts.d, 'o');
-    if (pts.p && pts.d) { L.polyline([[pts.p.lat, pts.p.lng], [pts.d.lat, pts.d.lng]], { color: '#0b6e4f', weight: 3, dashArray: '6 8' }).addTo(layer); map.fitBounds([[pts.p.lat, pts.p.lng], [pts.d.lat, pts.d.lng]], { padding: [50, 50], maxZoom: 15 }); }
+    if (pts.p && pts.d) {
+      map.fitBounds([[pts.p.lat, pts.p.lng], [pts.d.lat, pts.d.lng]], { padding: [50, 50], maxZoom: 15 });
+      const seq = (draw.seq = (draw.seq || 0) + 1);
+      drawRoad(map, [pts.p.lat, pts.p.lng], [pts.d.lat, pts.d.lng], { vehicle: ['L', 'XL'].includes(cat) ? 'moto' : 'velo' }).then((r) => {
+        if (!r) return; if (seq !== draw.seq) return r.layer.remove();
+        r.layer.addTo(layer); if (!r.approx) { try { map.fitBounds(L.latLngBounds(r.coords), { padding: [40, 40], maxZoom: 16 }); } catch {} }
+      });
+    }
     else if (pts.p || pts.d) map.setView([(pts.p || pts.d).lat, (pts.p || pts.d).lng], 14);
   };
   const set = (k, p) => { pts[k] = p; box.querySelector(`[data-addr="${k}"]`).value = p.label; draw(); price(); };

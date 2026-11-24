@@ -81,33 +81,36 @@ try {
   await step('client : colis payé par Mobile Money, envoyé en province', async () => {
     await client.goto(BASE + '/#connexion');
     await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.click('[type=submit]');
-    await client.click('[data-t=colis]'); await client.click('[data-act=sendparcel]');
+    await client.waitForSelector('.sp-hero');
+    await client.click('.sp-tab [data-nav=new]'); await client.waitForSelector('.wz-body [data-a=pickup]');
     await client.click('[data-gps]'); await client.waitForFunction(() => document.querySelector('[data-a=pickup]').value.length > 3);
-    await client.fill('[data-rn]', 'Rivo'); await client.fill('[data-rp]', '034 55 555 55');
+    await client.fill('[data-k=rname]', 'Rivo'); await client.fill('[data-k=rphone]', '034 55 555 55');
     await client.fill('[data-a=drop]', 'Analakely gare Kofmad'); await client.click('[data-s=drop] button >> nth=0');
-    await client.fill('[data-v]', '40000'); await client.waitForSelector('[data-qok]');
-    // créneaux : récupération au plus tôt, livraison au plus tard le créneau suivant
-    await client.waitForFunction(() => document.querySelectorAll('[data-pw] option').length >= 3 && document.querySelector('[data-dw2] option'));
-    if (!/plus tôt/.test(await client.textContent('[data-pw] option'))) throw new Error('créneau de récupération');
-    await client.fill('[data-d]', 'Sac de riz');
-    // catégorie L : moto, +3 000, récupération L/XL +2 000 (ou dépôt au centre) ; options fragile / express
-    await client.click('[data-cat=L]'); await client.waitForSelector('.modal [data-large]:not(.hidden)');
-    await client.waitForSelector('[data-q] >> text=Récupération (L/XL)');
-    await client.click('[data-cond]'); await client.waitForSelector('text=Conditions de transport >> nth=-1'); await client.waitForSelector('td >> text=sac de riz');
+    await client.click('.wz-toggle:has([data-k=prov])');
+    await client.click('[data-next]'); await client.waitForSelector('text=Ville et coopérative');
+    await client.fill('[data-k=city]', 'Fianarantsoa'); await client.fill('[data-k=coop]', 'Kofmad');
+    await client.click('[data-next]');
+    await client.fill('[data-k=desc]', 'Sac de riz');
+    // catégorie L : moto, récupération L/XL +2 000 ou dépôt au centre
+    await client.click('[data-cat=L]'); await client.waitForSelector('text=Je dépose au centre'); await client.waitForSelector('[data-price] b >> text=Ar');
+    await client.click('[data-cond]'); await client.waitForSelector('td >> text=sac de riz');
     await client.screenshot({ path: 'tests/screens/40b-conditions-transport.png' });
     await client.click('.modal-back >> nth=-1 >> [data-x]');
     await client.click('[data-cat=M]'); // le livreur de ce test est à vélo : catégorie M
-    await client.click('[data-pv=mm]');
+    // créneaux : récupération au choix, livraison au plus tôt le créneau suivant
+    await client.click('[data-when=plan]'); await client.waitForFunction(() => document.querySelectorAll('[data-k=pw] option').length >= 3 && document.querySelector('[data-k=dw] option'));
+    if (!/plus tôt/.test(await client.textContent('[data-k=dw] option'))) throw new Error('créneau de livraison');
+    await client.click('[data-when=soon]');
+    await client.click('[data-next]');
+    await client.click('[data-pay=mm]');
     if (await client.locator('[data-pref]').count()) throw new Error('pas de référence Mobile Money à saisir');
-    await client.check('[data-prov]');
-    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Ville de destination');
-    await client.fill('[data-city]', 'Fianarantsoa'); await client.fill('[data-coop]', 'Kofmad');
+    await client.fill('[data-k=value]', '40000');
+    await client.click('[data-next]'); await client.waitForSelector('.wz-total >> text=Frais à payer à la récupération');
     await client.screenshot({ path: 'tests/screens/41-client-province-mobile-money.png' });
-    await client.click('.modal [data-ok]'); await client.waitForSelector('.pin-box');
-    ref = (await client.textContent('.modal h2, .modal .modal-title, .modal header')).match(/AL[A-Z0-9]+/)[0];
-    await client.click('.modal-back [data-x]');
-    await client.waitForSelector(`[data-ref="${ref}"]`); await client.waitForSelector('text=🚌 Fianarantsoa');
-    await client.waitForSelector('.card >> text=🏁 Livraison');
+    await client.click('[data-ok]'); await client.waitForSelector('.wz-pin');
+    ref = (await client.textContent('.wz-done p b')).trim();
+    await client.click('[data-see]'); await client.waitForSelector('[data-tl] li');
+    await client.waitForSelector('.sp-kv >> text=Fianarantsoa'); await client.waitForSelector('.sp-kv >> text=Livraison');
   });
   await step('livreur : le colis sur son chemin lui est proposé, il le prend en premier', async () => {
     await courier.click('[data-t=colis]'); await courier.waitForSelector('text=Colis sur ton chemin', { timeout: 15000 });
@@ -146,7 +149,7 @@ try {
     await admin.click('[data-v=dash]'); await admin.waitForSelector('text=Livraisons du jour par livreur');
   });
   await step('service client : le client écrit, l\'admin répond depuis la notification', async () => {
-    await client.click('[data-act=support]'); await client.waitForSelector('.modal [data-cbody]');
+    await client.click('.sp-tab [data-nav=support]'); await client.waitForSelector('.modal [data-cbody]');
     await client.fill('.modal [data-cbody]', 'Bonjour, à quelle heure passe le livreur ?'); await client.click('.modal [data-csend]');
     await client.waitForSelector('.modal >> text=à quelle heure passe le livreur');
     await admin.waitForSelector('[data-v=support] .cnt', { timeout: 15000 });
