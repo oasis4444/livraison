@@ -98,7 +98,7 @@ try {
     await client.click('.modal [data-ok]'); await client.waitForSelector('.pin-box');
     ref = (await client.textContent('.modal h2, .modal .modal-title, .modal header')).match(/AL[A-Z0-9]+/)[0];
     await client.click('.modal-back [data-x]');
-    await client.waitForSelector(`text=${ref}`); await client.waitForSelector('text=🚌 Fianarantsoa');
+    await client.waitForSelector(`[data-ref="${ref}"]`); await client.waitForSelector('text=🚌 Fianarantsoa');
     await client.waitForSelector('.card >> text=🏁 Livraison');
   });
   await step('livreur : le colis sur son chemin lui est proposé, il le prend en premier', async () => {
@@ -128,10 +128,10 @@ try {
   });
   await step('admin : suivi des livraisons (carte, filtres, chiffres par livreur)', async () => {
     while (await admin.locator('.modal-back [data-x]').count()) await admin.click('.modal-back [data-x] >> nth=-1');
-    await admin.click('[data-v=ops]'); await admin.waitForSelector(`[data-ops-list] >> text=${ref}`);
+    await admin.click('[data-v=ops]'); await admin.waitForSelector(`[data-ops-list] [data-ref="${ref}"]`);
     await admin.waitForSelector('[data-ops-table] >> text=Hery Vélo');
     await admin.click('[data-ostep] [data-k=delivery]'); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
-    await admin.click('[data-ostep] [data-k=pickup]'); await admin.waitForSelector(`[data-ops-list] >> text=${ref}`);
+    await admin.click('[data-ostep] [data-k=pickup]'); await admin.waitForSelector(`[data-ops-list] [data-ref="${ref}"]`);
     await admin.selectOption('[data-oc]', { label: '🏍️ Naina Moto' }); await admin.waitForSelector('[data-ops-list] >> text=Aucun colis');
     await admin.selectOption('[data-oc]', ''); await admin.click('[data-ostep] [data-k=active]');
     await admin.screenshot({ path: 'tests/screens/46-admin-suivi-livraisons.png' });
@@ -156,20 +156,20 @@ try {
     const big = r.data.shipment;
     if (!big.review) throw new Error('devrait attendre la validation');
     await admin.click('[data-v=ops]'); await admin.click('[data-ostep] [data-k=review]');
-    await admin.click(`[data-ops-list] >> text=${big.ref}`); await admin.waitForSelector('.modal [data-approve]');
+    await admin.click(`[data-ops-list] [data-ref="${big.ref}"] .pill`); await admin.waitForSelector('.modal [data-approve]');
     await admin.screenshot({ path: 'tests/screens/49-admin-valider-colis.png' });
     await admin.fill('.modal [data-rfee]', '6000'); await admin.click('.modal [data-approve]'); await admin.waitForSelector('text=Colis validé');
     const after = (await api('GET', `/api/shipments/${big.id}`, null, auth(tok.admin))).data.shipment;
     if (after.review || after.fee !== 6000) throw new Error('validation : ' + JSON.stringify({ review: after.review, fee: after.fee }));
   });
   await step('livreur : récupère puis remet à la coopérative (véhicule, frais PA)', async () => {
-    await courier.click(`[data-act=ship] >> text=${ref}`);
+    await courier.click(`[data-act=ship][data-ref="${ref}"]`);
     await courier.click('text=📦 Récupérer');
     await courier.setInputFiles('[data-file]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('[data-prev][src^="data:image"]');
     await courier.waitForSelector('[data-tot] >> text=rien à encaisser');
     await courier.click('.modal [data-ok]');
     await courier.waitForSelector('.modal [data-later]'); await courier.click('.modal [data-later]');
-    await courier.click(`[data-act=ship] >> text=${ref}`);
+    await courier.click(`[data-act=ship][data-ref="${ref}"]`);
     await courier.click('text=Remettre à la coopérative');
     await courier.setInputFiles('.modal [data-dphoto]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('[data-dprev][src^="data:image"]');
     await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Indiquez le véhicule');
@@ -183,8 +183,8 @@ try {
     while (await admin.locator('.modal-back [data-x]').count()) await admin.click('.modal-back [data-x] >> nth=-1');
     await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', '');
     await admin.selectOption('[data-pf=courier]', { label: '🚲 Hery Vélo' }); await admin.click('[data-act=pfilter]');
-    await admin.waitForSelector(`tr >> text=${ref}`);
-    const row = admin.locator('tr', { hasText: ref });
+    await admin.waitForSelector(`tr[data-ref="${ref}"]`);
+    const row = admin.locator(`tr[data-ref="${ref}"]`);
     for (const t of ['Soa Boutique', 'Rivo', '034 55 555 55', 'Récup. : Hery Vélo', 'non payé']) if (!(await row.textContent()).includes(t)) throw new Error('ligne colis sans « ' + t + ' »');
     await admin.screenshot({ path: 'tests/screens/50-admin-colis-liste.png' });
     await admin.selectOption('[data-pf=courier]', { label: '🏍️ Naina Moto' }); await admin.click('[data-act=pfilter]');

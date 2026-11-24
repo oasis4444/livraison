@@ -374,9 +374,10 @@ async function loadMissions() {
     ? `<div class="card" style="margin-bottom:10px;background:var(--green-soft);border:0"><div class="row between"><span>🚀 <b>${mg ? 'Mandeha' : 'En tournée'}</b> → ${esc(rn.run.to || '')}<div class="tiny muted">${mg ? 'nanomboka' : 'depuis'} ${time(rn.run.started_at)} · ${mg ? 'ho tonga aminao ny colis eny an-dalana' : 'les colis sur ton chemin te sont proposés'}</div></div>
         <button class="btn sm" data-act="endrun">🏁 ${mg ? 'Vita' : 'Fin'}</button></div></div>`
     : `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${mg ? 'Miala amin\'ny centre' : 'Je pars du centre'}${toLeave ? ` (${toLeave} ${c('parcels')})` : ''}</button>`;
-  const offerCard = (o) => `<div class="card" style="${o.status === 'lost' ? 'opacity:.55' : 'border:2px solid var(--sun)'}">
-      <div class="row between"><b>${esc(o.ref)}</b><span>${o.province ? `🚌 ${esc(o.province.city)} ` : ''}${o.value_paid ? '📱 ' : ''}<b>${ar(o.amount_to_collect)}</b></span></div>
-      <div class="small">🟢 ${esc(o.pickup.address)}<br>🟠 ${esc(o.drop.address)}</div>
+  const offerCard = (o) => `<div class="card" data-ref="${esc(o.ref)}" style="${o.status === 'lost' ? 'opacity:.55' : 'border:2px solid var(--sun)'}">
+      <div class="row between"><span class="small muted">${time(o.at)}</span><span>${o.province ? `🚌 ${esc(o.province.city)} ` : ''}${o.value_paid ? '📱 ' : ''}<b>${ar(o.amount_to_collect)}</b></span></div>
+      <div class="small" style="line-height:1.45">🟢 <b>${esc(o.pickup.name || '')}</b>${o.pickup.phone ? ` · <a href="tel:${esc(o.pickup.phone)}">📞 ${esc(phoneFmt(o.pickup.phone))}</a>` : ''}<div class="tiny muted">${esc(o.pickup.address)}</div>
+        🟠 <b>${esc(o.drop.name || '')}</b>${o.drop.phone ? ` · <a href="tel:${esc(o.drop.phone)}">📞 ${esc(phoneFmt(o.drop.phone))}</a>` : ''}<div class="tiny muted">${esc(o.drop.address)}</div></div>
       ${o.contents || o.size ? `<div class="tiny muted">📦 ${esc([o.contents, o.size].filter(Boolean).join(' · '))}</div>` : ''}
       ${o.status === 'lost' ? `<div class="small" style="color:var(--red)">❌ ${mg ? 'Efa nisy naka' : 'Déjà pris'}${o.taken_by ? ` (${esc(o.taken_by)})` : ''}</div>`
         : `<div class="row" style="margin-top:6px"><button class="btn primary grow" data-act="take" data-id="${o.id}">✋ ${mg ? 'Raisiko' : 'Je le prends'}</button><button class="btn" data-act="skip" data-id="${o.id}">✕</button></div>`}</div>`;

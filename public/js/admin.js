@@ -174,10 +174,11 @@ const VIEWS = {
       // liste
       $('[data-ops-list]').innerHTML = ps.length ? ps.map((p) => {
         const g = opsGroup(p);
-        return `<div class="card" data-act="parcel" data-id="${p.id}" style="cursor:pointer;margin-bottom:6px">
-          <div class="row between small"><b>${esc(p.ref)}</b><span class="pill ${g === 'done' ? '' : g === 'review' ? 'warn' : 'live'}">${esc(p.step_label)}</span></div>
-          <div class="tiny">🟢 ${esc(p.pickup_addr)}<br>🟠 ${esc(p.drop_addr)}${p.province ? ` · 🚌 ${esc(p.province)}` : ''}</div>
-          <div class="tiny muted">${p.courier ? `${esc(p.courier)}` : '<span style="color:var(--orange)">sans livreur</span>'}${['todo', 'pickup', 'review'].includes(g) && p.windows ? ` · 🕘 ${win(p.windows.pickup)}` : g !== 'done' && p.windows ? ` · 🏁 ${win(p.windows.delivery)}` : ''} · ${ar(p.value || 0)}${p.value_paid ? ' 📱' : ''} · frais ${ar(p.fee)}${p.review ? ` · ⚠️ ${esc(p.review)}` : ''}</div></div>`;
+        return `<div class="card" data-act="parcel" data-id="${p.id}" data-ref="${esc(p.ref)}" style="cursor:pointer;margin-bottom:6px">
+          <div class="row between small"><span class="muted">${dt(p.created_at)}</span><span class="pill ${g === 'done' ? '' : g === 'review' ? 'warn' : 'live'}">${esc(p.step_label)}</span></div>
+          <div class="tiny" style="line-height:1.45">🟢 <b>${esc(p.sender)}</b>${p.sender_phone ? ` · <a href="tel:${esc(p.sender_phone)}">📞 ${esc(phoneFmt(p.sender_phone))}</a>` : ''}<br><span class="muted">${esc(p.pickup_addr)}</span><br>
+            🟠 <b>${esc(p.recipient)}</b>${p.recipient_phone ? ` · <a href="tel:${esc(p.recipient_phone)}">📞 ${esc(phoneFmt(p.recipient_phone))}</a>` : ''}<br><span class="muted">${esc(p.drop_addr)}</span>${p.province ? ` · 🚌 ${esc(p.province)}` : ''}</div>
+          <div class="tiny muted">${p.courier ? `🚲 <b>${esc(p.courier)}</b>${p.courier_phone ? ` · <a href="tel:${esc(p.courier_phone)}">📞 ${esc(phoneFmt(p.courier_phone))}</a>` : ''}` : '<span style="color:var(--orange)">sans livreur</span>'}${['todo', 'pickup', 'review'].includes(g) && p.windows ? ` · 🕘 ${win(p.windows.pickup)}` : g !== 'done' && p.windows ? ` · 🏁 ${win(p.windows.delivery)}` : ''} · ${ar(p.value || 0)}${p.value_paid ? ' 📱' : ''} · frais ${ar(p.fee)}${p.review ? ` · ⚠️ ${esc(p.review)}` : ''}</div></div>`;
       }).join('') : '<p class="muted small">Aucun colis pour ces filtres.</p>';
       // tableau par livreur
       $('[data-ops-period]').textContent = { 1: 'aujourd\'hui', 7: '7 derniers jours', 30: '30 derniers jours' }[data.days] || `${data.days} jours`;
@@ -498,16 +499,15 @@ const VIEWS = {
         <select class="input" data-pf="paid">${[['', 'Payé ou non'], ['unpaid', '❌ Non réglés'], ['paid', '✅ Tout réglé']].map(([v, l]) => `<option value="${v}" ${pv === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <input class="input" data-pf="q" placeholder="Réf, nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
       <div class="row wrap small" style="gap:16px;margin:6px 0 10px">${tot.n} colis · valeur livrée <b>${ar(tot.value)}</b> · frais <b>${ar(tot.fees)}</b>${cv && cv !== 'none' ? ` · part du livreur <b>${ar(tot.share)}</b>` : ''} · ${tot.unpaid ? `<span style="color:var(--orange)">❌ ${tot.unpaid} livraison(s) non payée(s)</span>` : '✅ livraisons payées'}</div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Réf</th><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur</th><th class="num">Frais</th><th>Payé ?</th><th>Statut</th></tr></thead><tbody>
-      ${rows.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}">
-        <td><b>${esc(x.ref)}</b>${x.external_ref ? `<div class="tiny muted">${esc(x.external_ref)}</div>` : ''}<div class="tiny muted">${dt(x.created_at)} · ${esc(x.source || '')}</div>${x.review ? '<div class="tiny" style="color:var(--orange)">⚠️ à valider</div>' : ''}</td>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur</th><th class="num">Frais</th><th>Payé ?</th><th>Statut</th></tr></thead><tbody>
+      ${rows.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}" data-ref="${esc(x.ref)}">
         <td class="small">${person(x.sender, '🟢', x.windows && ['pending', 'assigned'].includes(x.status) ? `🕘 ${win(x.windows.pickup)}` : '')}</td>
         <td class="small">${person(x.recipient, '🟠', x.windows && !['delivered', 'refused', 'cancelled'].includes(x.status) ? `🏁 ${win(x.windows.delivery)}` : '')}${x.province ? `<div class="tiny">🚌 ${esc(x.province.city)} · ${esc(x.province.coop)}</div>` : ''}</td>
         <td class="small">${x.pickup_courier || x.delivery_courier || x.courier
           ? `<div>🟢 Récup. : <b>${esc(x.pickup_courier?.name || x.courier?.name || '—')}</b></div><div>🟠 Livr. : <b>${esc(x.delivery_courier?.name || x.courier?.name || '—')}</b></div>${x.courier?.phone ? `<div class="tiny"><a href="tel:${esc(x.courier.phone)}" data-stop>📞 ${esc(phoneFmt(x.courier.phone))}</a></div>` : ''}`
           : '<span style="color:var(--orange)">Sans livreur</span>'}</td>
         <td class="num">${ar(x.value ?? x.declared_value)}${x.payment?.value_paid ? '<div class="tiny">📱 MM</div>' : ''}</td><td class="num">${ar(x.fee)}${x.collected ? `<div class="tiny muted">encaissé ${ar(x.collected)}</div>` : ''}</td>
-        <td>${money(x)}</td><td>${shipPill(x)}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
+        <td>${money(x)}</td><td>${shipPill(x)}<div class="tiny muted">${dt(x.created_at)}</div>${x.review ? '<div class="tiny" style="color:var(--orange)">⚠️ à valider</div>' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
   },
 
   async cash() {

@@ -1231,7 +1231,7 @@ async function myRun(ctx, env) {
     run: r ? { id: r.id, to: r.to_addr, to_lat: r.to_lat, to_lng: r.to_lng, route: runPath(r), started_at: r.started_at } : null,
     offers: offers.map((o) => ({ id: o.id, ref: o.ref, status: o.offer_status === 'open' && (o.status !== 'pending' || o.courier_id) ? 'lost' : o.offer_status, at: o.offered_at,
       taken_by: o.courier_id && o.courier_id !== ctx.user.id ? (o.courier_name || '').split(' ')[0] : null,
-      pickup: { address: o.pickup_addr, lat: o.pickup_lat, lng: o.pickup_lng }, drop: { address: o.drop_addr, lat: o.drop_lat, lng: o.drop_lng },
+      pickup: { address: o.pickup_addr, lat: o.pickup_lat, lng: o.pickup_lng, name: o.sender_name, phone: o.sender_phone }, drop: { address: o.drop_addr, lat: o.drop_lat, lng: o.drop_lng, name: o.recipient_name, phone: o.recipient_phone },
       contents: o.description, size: o.dim_l ? `${o.dim_l}×${o.dim_w}×${o.dim_h} cm` : null, fee: o.fee, amount_to_collect: toPay(o),
       value_paid: !!o.value_paid, province: o.province ? { city: o.dest_city, coop: o.coop_name } : null })),
   });
@@ -1288,7 +1288,8 @@ async function opsBoard(ctx, env) {
   const rows = await all(env, `${SHIP_SQL} WHERE s.status IN ('pending','assigned','picked_up') OR (s.done_at >= ? AND s.status IN ('delivered','refused','cancelled')) ORDER BY s.created_at DESC LIMIT 500`, from);
   const parcels = rows.map((s) => ({ id: s.id, ref: s.ref, status: s.status, step: stepOf(s) || s.status, step_label: STEP_FR[stepOf(s)] || s.status,
     courier_id: s.courier_id, courier: s.courier_name, pickup_courier_id: s.pickup_courier_id, delivery_courier_id: s.delivery_courier_id,
-    sender: s.sender_name, recipient: s.recipient_name, pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
+    sender: s.sender_name, recipient: s.recipient_name, sender_phone: s.sender_phone, recipient_phone: s.recipient_phone, courier_phone: s.courier_phone,
+    pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
     pickup_addr: s.pickup_addr, drop_addr: s.drop_addr, value: s.value ?? s.declared_value, fee: s.fee, amount: toPay(s), value_paid: !!s.value_paid,
     province: s.province ? s.dest_city : null, review: s.review, moto_only: !!s.moto_only,
     windows: s.pickup_from ? { pickup: [s.pickup_from, s.pickup_to], delivery: [s.deliver_from, s.deliver_to] } : null, done_at: s.done_at, created_at: s.created_at }));

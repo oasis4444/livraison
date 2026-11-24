@@ -67,14 +67,19 @@ export function winTxt(s) {
 }
 
 export function shipCard(s, extra = '') {
-  return `<div class="card" data-act="ship" data-id="${s.id}" style="cursor:pointer">
-    <div class="row between"><span class="small"><b>${esc(s.ref)}</b>${s.external_ref ? ` <span class="muted">· ${esc(s.external_ref)}</span>` : ''}</span>${shipPill(s)}</div>
-    <div class="route-line" style="margin:6px 0"><span class="dot"></span><span class="small ellipsis">${esc(s.sender.name)} — ${esc(s.sender.address)}</span><span class="bar"></span><span></span><span class="dot b"></span><span class="small ellipsis">${esc(s.recipient.name)} — ${esc(s.recipient.address)}</span></div>
+  const tel = (p) => (p ? ` · <a href="tel:${esc(p)}">📞 ${esc(phoneFmt(p))}</a>` : '');
+  const cr = s.delivery_courier && s.pickup_courier && s.delivery_courier.id !== s.pickup_courier.id;
+  return `<div class="card" data-act="ship" data-id="${s.id}" data-ref="${esc(s.ref)}" data-ext="${esc(s.external_ref || '')}" style="cursor:pointer">
+    <div class="row between"><span class="small muted">${s.created_at ? `${dayLabel(s.created_at)} ${time(s.created_at)}` : ''}</span>${shipPill(s)}</div>
+    <div class="small" style="margin:6px 0;line-height:1.45">
+      <div>🟢 <b>${esc(s.sender.name)}</b>${tel(s.sender.phone)}<div class="tiny muted ellipsis">${esc(s.sender.address)}</div></div>
+      <div style="margin-top:4px">🟠 <b>${esc(s.recipient.name)}</b>${tel(s.recipient.phone)}<div class="tiny muted ellipsis">${esc(s.recipient.address)}</div></div>
+      ${s.courier || s.pickup_courier ? `<div style="margin-top:4px">${cr ? `🚲 ${state.lang === 'mg' ? 'Haka' : 'Récup.'} <b>${esc(s.pickup_courier.name || '')}</b> · ${state.lang === 'mg' ? 'Hatitra' : 'Livr.'} <b>${esc(s.delivery_courier.name || '')}</b>` : `🚲 <b>${esc(s.courier?.name || s.pickup_courier?.name || '')}</b>`}${tel(s.courier?.phone)}</div>` : ''}
+    </div>
     ${sizeTxt(s) ? `<div class="tiny muted ellipsis">📦 ${esc(sizeTxt(s))}</div>` : ''}
     ${winTxt(s) ? `<div class="tiny ellipsis">${winTxt(s)}</div>` : ''}
     ${s.review ? `<div class="tiny" style="color:var(--orange)">⚠️ ${state.lang === 'mg' ? 'Andrasana ny fanamarinan\'ny centre' : 'En attente de validation du centre'}</div>` : ''}
-    ${s.relay ? `<div class="tiny" style="color:var(--blue,#2563eb)">🏢 ${state.lang === 'mg' ? 'Relais' : 'Relais'} : ${esc(s.pickup_courier?.name?.split(' ')[0] || '?')} → centre → ${esc(s.delivery_courier?.name?.split(' ')[0] || '?')}</div>` : ''}
-    <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? `🚲 ${esc(s.courier.name || '')}` : '⏳'}</span><b>${s.province ? `🚌 ${esc(s.province.city)}` : ''}${s.payment?.value_paid ? '📱 ' : ''}${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
+    <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? '' : '⏳'}</span><b>${s.province ? `🚌 ${esc(s.province.city)}` : ''}${s.payment?.value_paid ? '📱 ' : ''}${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
 }
 
 // ---------------------------------------------------------------- heures & axes (visibles par tous les clients)

@@ -100,7 +100,7 @@ try {
     await client.goto(BASE);
     await client.click('[data-m=register]');
     await client.fill('[name=name]', 'Rasoa Rakoto'); await client.fill('[name=phone]', '033 12 345 67'); await client.fill('[name=password]', 'secret12'); await client.click('[type=submit]');
-    await client.waitForSelector('text=CMD-1042');
+    await client.waitForSelector('[data-ext="CMD-1042"]');
     await client.screenshot({ path: 'tests/screens/22-client-colis.png' });
     if (await client.locator('[data-t=sched]').count()) throw new Error('le client ne doit pas voir les heures & axes');
   });
@@ -163,7 +163,7 @@ try {
     await client.click('.modal-back [data-x]');
   });
   await step('livreur part du centre → le client le voit en direct (statut + carte)', async () => {
-    await courier.click('[data-t=colis]'); await courier.waitForSelector('text=CMD-1042');
+    await courier.click('[data-t=colis]'); await courier.waitForSelector('[data-ext="CMD-1042"]');
     await courier.click('[data-act=depart]'); await courier.waitForSelector('.modal [data-go]');
     // destination : l'arrivée du créneau en cours si elle existe, sinon le livreur la tape
     if (!(await courier.inputValue('.modal [data-dest]'))) {
@@ -180,8 +180,8 @@ try {
     await admin.screenshot({ path: 'tests/screens/30-admin-carte-direct.png' });
   });
   await step('livreur : récupère (photo + valeur) puis livre', async () => {
-    await courier.waitForSelector('text=CMD-1042');
-    await courier.click('[data-act=ship] >> text=CMD-1042');
+    await courier.waitForSelector('[data-ext="CMD-1042"]');
+    await courier.click('[data-act=ship][data-ext="CMD-1042"]');
     await courier.click('text=📦 Récupérer');
     await courier.setInputFiles('[data-file]', 'tests/fixture-colis.jpg');
     await courier.waitForSelector('[data-prev][src^="data:image"]');
@@ -193,7 +193,7 @@ try {
     const sms = await courier.getAttribute('.modal a[href^="sms:"]', 'href'); if (!/suivi%2F[0-9a-f]{24}|suivi\/[0-9a-f]{24}/.test(decodeURIComponent(sms))) throw new Error('lien SMS : ' + sms);
     await courier.screenshot({ path: 'tests/screens/26-livreur-lien-destinataire.png' });
     await courier.click('.modal [data-later]');
-    await courier.click('[data-act=ship] >> text=CMD-1042');
+    await courier.click('[data-act=ship][data-ext="CMD-1042"]');
     await courier.waitForSelector('[data-ph][src^="blob:"]');
     const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
     await client.waitForSelector(`text=🔑 ${pin}`);
@@ -210,7 +210,7 @@ try {
   });
   await step('centre : encaissement du livreur puis paiement du vendeur', async () => {
     await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', ''); await admin.click('[data-act=pfilter]');
-    await admin.waitForSelector('text=CMD-1042');
+    await admin.waitForSelector('tr.click >> text=📞');
     await admin.screenshot({ path: 'tests/screens/27-admin-colis.png' });
     await admin.click('[data-v=cash]'); await admin.click('[data-act=settle]'); await admin.click('[data-yes]');
     await admin.waitForSelector('text=encaissés');
@@ -276,7 +276,7 @@ try {
     const A = (m, p, b) => admin.evaluate(async ({ m, p, b, tok }) => { const r = await fetch(p, { method: m, headers: { authorization: 'Bearer ' + tok, 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return r.json(); }, { m, p, b, tok });
     await A('POST', '/api/admin/users', { role: 'courier', phone: '034 22 222 22', name: 'Tiana Vélo', cin: '101 211 123 457', password: 'velo1234' });
     const koto = (await A('GET', '/api/admin/shipments?q=Koto')).shipments[0];
-    await admin.click('[data-v=parcels]'); await admin.click(`text=${koto.ref}`);
+    await admin.click('[data-v=parcels]'); await admin.click(`tr[data-ref="${koto.ref}"]`);
     await admin.waitForSelector('text=Livreurs proposés');
     const ids = await A('GET', `/api/admin/shipments/${koto.id}/suggest`);
     const hery = ids.pickup.find((c) => c.name === 'Hery Vélo').id, tiana = ids.delivery.find((c) => c.name === 'Tiana Vélo').id;
@@ -294,7 +294,7 @@ try {
     await courier.click(`[data-act=ship][data-id="${koto.id}"]`); await courier.click('text=Déposé au centre');
     await courier.waitForSelector('.toast >> text=Au centre');
     // le centre remet le colis à Tiana
-    await admin.click('[data-v=parcels]'); await admin.click(`text=${koto.ref}`); await admin.click('text=Remis à Tiana');
+    await admin.click('[data-v=parcels]'); await admin.click(`tr[data-ref="${koto.ref}"]`); await admin.click('text=Remis à Tiana');
     x = (await A('GET', `/api/shipments/${koto.id}`)).shipment;
     if (x.step !== 'en_route' || x.courier.id !== tiana) throw new Error('reprise au centre : ' + x.step);
     await admin.click('[data-v=couriers]'); await admin.waitForSelector('text=Colis par livreur');
