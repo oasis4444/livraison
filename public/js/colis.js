@@ -1,5 +1,5 @@
 // Colis du centre : éléments partagés entre client, livreur et administration.
-import { state, t, api, esc, $, ar, km, dt, time, hm, modal, toast, toastErr, confirmBox, promptBox, phoneFmt, geocode, reverse, getPosition, vehIcon } from './core.js';
+import { state, t, api, esc, $, ar, km, dt, time, hm, modal, toast, toastErr, confirmBox, promptBox, phoneFmt, geocode, reverse, getPosition, vehIcon, printLabel } from './core.js';
 
 const L_FR = {
   sh_pending: 'À programmer', sh_assigned: 'Programmé', sh_picked_up: 'Récupéré · en route', sh_delivered: 'Livré', sh_refused: 'Refusé', sh_cancelled: 'Annulé',
@@ -66,19 +66,25 @@ export function winTxt(s) {
   return [['pending', 'assigned'].includes(s.status) ? `🕘 ${mg ? 'Haka' : 'Récup.'} ${w(s.windows.pickup)}` : null, `🏁 ${mg ? 'Hatitra' : 'Livraison'} ${w(s.windows.delivery)}`].filter(Boolean).join(' · ');
 }
 
+// « 5 h », « 20 min », « 2 j » : depuis quand.
+export const ago = (t) => { const m = Math.max(0, Math.round((Date.now() - t) / 60e3)); return m < 60 ? `${m} min` : m < 2880 ? `${Math.floor(m / 60)} h${m % 60 && m < 600 ? ` ${m % 60}` : ''}` : `${Math.floor(m / 1440)} j`; };
+const HIDDEN = () => `<span class="muted">🔒 ${state.lang === 'mg' ? 'hita rehefa voamarina' : 'visible après confirmation'}</span>`;
+const nm = (p) => (p.name ? `<b>${esc(p.name)}</b>` : HIDDEN());
+
 export function shipCard(s, extra = '') {
   const tel = (p) => (p ? ` · <a href="tel:${esc(p)}">📞 ${esc(phoneFmt(p))}</a>` : '');
   const cr = s.delivery_courier && s.pickup_courier && s.delivery_courier.id !== s.pickup_courier.id;
   return `<div class="card" data-act="ship" data-id="${s.id}" data-ref="${esc(s.ref)}" data-ext="${esc(s.external_ref || '')}" style="cursor:pointer">
     <div class="row between"><span class="small muted">${s.created_at ? `${dayLabel(s.created_at)} ${time(s.created_at)}` : ''}</span>${shipPill(s)}</div>
     <div class="small" style="margin:6px 0;line-height:1.45">
-      <div>🟢 <b>${esc(s.sender.name)}</b>${tel(s.sender.phone)}<div class="tiny muted ellipsis">${esc(s.sender.address)}</div></div>
-      <div style="margin-top:4px">🟠 <b>${esc(s.recipient.name)}</b>${tel(s.recipient.phone)}<div class="tiny muted ellipsis">${esc(s.recipient.address)}</div></div>
-      ${s.courier || s.pickup_courier ? `<div style="margin-top:4px">${cr ? `🚲 ${state.lang === 'mg' ? 'Haka' : 'Récup.'} <b>${esc(s.pickup_courier.name || '')}</b> · ${state.lang === 'mg' ? 'Hatitra' : 'Livr.'} <b>${esc(s.delivery_courier.name || '')}</b>` : `🚲 <b>${esc(s.courier?.name || s.pickup_courier?.name || '')}</b>`}${tel(s.courier?.phone)}</div>` : ''}
+      <div>🟢 ${nm(s.sender)}${tel(s.sender.phone)}<div class="tiny muted ellipsis">${esc(s.sender.address)}</div></div>
+      <div style="margin-top:4px">🟠 ${nm(s.recipient)}${tel(s.recipient.phone)}<div class="tiny muted ellipsis">${esc(s.recipient.address)}</div></div>
+      ${s.courier_hidden ? `<div style="margin-top:4px">🚲 ${HIDDEN()}</div>` : ''}${s.courier || s.pickup_courier ? `<div style="margin-top:4px">${cr ? `🚲 ${state.lang === 'mg' ? 'Haka' : 'Récup.'} <b>${esc(s.pickup_courier.name || '')}</b> · ${state.lang === 'mg' ? 'Hatitra' : 'Livr.'} <b>${esc(s.delivery_courier.name || '')}</b>` : `🚲 <b>${esc(s.courier?.name || s.pickup_courier?.name || '')}</b>`}${tel(s.courier?.phone)}</div>` : ''}
     </div>
     ${sizeTxt(s) ? `<div class="tiny muted ellipsis">📦 ${esc(sizeTxt(s))}</div>` : ''}
     ${winTxt(s) ? `<div class="tiny ellipsis">${winTxt(s)}</div>` : ''}
     ${s.review ? `<div class="tiny" style="color:var(--orange)">⚠️ ${state.lang === 'mg' ? 'Andrasana ny fanamarinan\'ny centre' : 'En attente de validation du centre'}</div>` : ''}
+    ${s.late ? `<div class="tiny" style="color:var(--red)">⏰ ${esc(s.late)}</div>` : ''}
     <div class="row between small"><span class="muted">${s.departure_at ? `🕘 ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : s.courier ? '' : '⏳'}</span><b>${s.province ? `🚌 ${esc(s.province.city)}` : ''}${s.payment?.value_paid ? '📱 ' : ''}${ar(s.amount_to_collect)}</b></div>${stepBar(s)}${extra}</div>`;
 }
 
@@ -106,10 +112,30 @@ export async function scheduleHtml(map, onDeps) {
 }
 
 // ---------------------------------------------------------------- formulaire d'envoi (client ou centre)
-export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
-  const f = { pickup: null, drop: null, slot: '', pay: 'cash' };
+// Conditions de transport : catégories, options et règles (réglées par le centre dans Paramètres).
+export async function conditionsModal() {
   const mg = state.lang === 'mg';
+  const r = await api('GET', '/api/conditions');
+  modal('Conditions de transport', `<div class="stack small">
+    <p class="muted">${mg ? 'Ny ambony indrindra amin\'ny lanja sy ny habe no raisina.' : 'On retient le plus élevé des deux : le poids ou la taille.'}</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>${mg ? 'Karazana' : 'Catégorie'}</th><th>${mg ? 'Ohatra' : 'Exemples'}</th><th>Limites</th><th>Supplément</th><th>${mg ? 'Fitaterana' : 'Véhicule'}</th></tr></thead><tbody>
+    ${r.categories.map((k) => `<tr><td><b>${k.k}</b></td><td>${esc(k.ex)}</td><td>${k.kg ? `${mg ? 'hatramin\'ny' : 'jusqu\'à'} ${k.kg} kg, ${k.cm} cm` : (mg ? 'mihoatra ny L' : 'au-delà de L')}</td><td>${k.fee == null ? (mg ? 'devis' : 'sur devis') : '+' + ar(k.fee)}</td><td>${k.vehicle === 'moto' ? 'moto' : k.vehicle === 'velo' ? (mg ? 'bisikileta' : 'vélo') : '—'}</td></tr>`).join('')}</tbody></table></div>
+    <b>Options</b>
+    <div>${mg ? 'Mora vaky' : 'Fragile'} (verre, écran, gâteau) : +${ar(r.options.fragile)} · ${mg ? 'ny fonosana dia an\'ny mpandefa' : 'emballage à la charge de l\'expéditeur'}</div>
+    <div>Express (${mg ? 'ato anatin\'ny ora iray, tsy mandalo amin\'ny centre' : 'dans l\'heure, sans passer par le centre'}) : +${ar(r.options.express)}</div>
+    <div>${mg ? 'Fiandrasana mihoatra ny 10 minitra any amin\'ny mpandray' : 'Attente chez le destinataire au-delà de 10 min'} : +${ar(r.options.wait)}</div>
+    <div>${mg ? 'Famerenana amin\'ny mpandefa (lavina na tsy azo antsoina)' : 'Retour à l\'expéditeur (refus ou injoignable)'} : ${r.options.return_percent} % ${mg ? 'amin\'ny frais' : 'des frais'}</div>
+    <b>${mg ? 'Fitsipika' : 'Règles'}</b>
+    <div>${mg ? 'Maimaimpoana ny fakana ho an\'ny S sy M. L / XL' : 'Récupération gratuite pour S et M. Pour L / XL'} : +${ar(r.options.pickup_large)}, ${mg ? 'na apetraho ao amin\'ny centre' : 'ou déposez l\'objet au centre'}.</div>
+    <div>${mg ? 'Mivantana (fakana sy fanaterana akaiky' : 'Livraison directe (récupération et livraison à moins de'} ${r.direct.km} km${mg ? ')' : ')'} : ${ar(r.direct.fee)}.</div>
+    <div>${mg ? 'Fetra' : 'Limites'} : ${r.limits.bike_kg} kg ${mg ? 'amin\'ny bisikileta' : 'à vélo'}, ${r.limits.moto_kg} kg ${mg ? 'amin\'ny moto' : 'à moto'} ; ${mg ? 'mihoatra izany : devis' : 'au-delà : devis'}. ${mg ? 'Vidin\'entana mihoatra ny' : 'Valeur au-delà de'} ${ar(r.limits.max_value)} : ${mg ? 'manamarina ny centre' : 'validation du centre'}.</div>
+    <div class="muted">${mg ? 'Hamarinin\'ny livreur amin\'ny sary ny karazana rehefa haka : raha lehibe kokoa dia ovainy ary ampandrenesina ianao amin\'ny vidiny vaovao.' : 'Le livreur vérifie la catégorie sur photo à la récupération : si le colis est plus gros, il la corrige et vous recevez le nouveau prix.'}</div></div>`, { wide: true });
+}
+
+export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
   const P = prefill || {};
+  const f = { pickup: null, drop: null, slot: '', pay: 'cash', cat: P.categorie || P.category || '', pick: 'home' };
+  const mg = state.lang === 'mg';
   const m = modal(c('send_parcel'), `<div class="stack">
     ${adminMode ? `<label class="field"><span>Téléphone de l'expéditeur (compte client)</span><input class="input" data-sp type="tel" value="${esc(P.vendeur || '')}"></label>` : ''}
     ${P.ref ? `<div class="card small" style="background:var(--sun-soft);border:0">🔗 ${state.lang === 'mg' ? 'Baiko avy amin\'ny logiciel de vente' : 'Commande reçue du logiciel de vente'} : <b>${esc(P.ref)}</b></div>` : ''}
@@ -117,10 +143,15 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     <div class="row"><label class="field grow"><span>${c('rname')}</span><input class="input" data-rn value="${esc(P.nom || '')}"></label><label class="field grow"><span>${c('rphone')}</span><input class="input" data-rp type="tel" placeholder="034 12 345 67" value="${esc(P.tel || '')}"></label></div>
     <label class="field"><span>🟠 ${c('drop_addr')}</span><div class="addr"><span class="ic b"></span><input class="input" data-a="drop" autocomplete="off" placeholder="Quartier, rue, repère…" value="${esc(P.adresse || '')}"><div class="suggest hidden" data-s="drop"></div></div></label>
     <label class="field"><span>📦 ${state.lang === 'mg' ? 'Inona no ao anaty colis?' : 'Que contient le colis ?'}${adminMode ? '' : ' *'}</span><input class="input" data-d placeholder="${state.lang === 'mg' ? 'Ohatra : akanjo 2, kiraro' : 'Ex : 2 robes, chaussures'}" value="${esc(P.desc || P.description || '')}"></label>
-    <div class="field"><span>📐 ${state.lang === 'mg' ? 'Haben\'ny colis (cm) : lava × sakany × haavony' : 'Taille du colis (cm) : longueur × largeur × hauteur'}${adminMode ? '' : ' *'}</span>
-      <div class="row" style="gap:6px;align-items:center"><input class="input" data-dl inputmode="decimal" placeholder="30" style="width:80px"> × <input class="input" data-dw inputmode="decimal" placeholder="20" style="width:80px"> × <input class="input" data-dh inputmode="decimal" placeholder="10" style="width:80px">
-        <input class="input" data-kg inputmode="decimal" placeholder="kg" style="width:80px" title="${state.lang === 'mg' ? 'Lanja (kg), tsy voatery' : 'Poids (kg), facultatif'}"></div>
-      <div class="row wrap" style="gap:6px;margin-top:6px">${[['S', 20, 15, 5], ['M', 30, 25, 15], ['L', 45, 35, 25], ['XL', 60, 40, 40]].map(([k, l, w, h]) => `<button type="button" class="btn sm" data-sz="${l}|${w}|${h}">${k} · ${l}×${w}×${h}</button>`).join('')}</div></div>
+    <div class="field"><span>${mg ? 'Karazana colis' : 'Catégorie du colis'}${adminMode ? '' : ' *'} <a href="#" data-cond class="tiny">${mg ? 'Conditions de transport' : 'Conditions de transport'}</a></span>
+      <div class="cat-grid" data-cats style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px"></div></div>
+    <div class="stack hidden" data-large style="gap:6px"><span class="small"><b>${mg ? 'Entana lehibe (L / XL)' : 'Gros colis (L / XL)'}</b></span>
+      <div class="seg" data-pick><button type="button" class="on" data-pk="home">${mg ? 'Alaina ao an-trano' : 'Récupération à domicile'} <span data-pkfee></span></button><button type="button" data-pk="centre">${mg ? 'Apetrako ao amin\'ny centre' : 'Je dépose au centre'}</button></div></div>
+    <div class="row wrap" style="gap:14px"><label class="row small" style="gap:6px"><input type="checkbox" data-frag> ${mg ? 'Mora vaky (verre, écran, gâteau)' : 'Fragile (verre, écran, gâteau)'} <span class="muted" data-fragfee></span></label>
+      <label class="row small" style="gap:6px"><input type="checkbox" data-expr> ${mg ? 'Express (ato anatin\'ny ora iray)' : 'Express (dans l\'heure)'} <span class="muted" data-exprfee></span></label></div>
+    <details class="small"><summary>${mg ? 'Habe sy lanja marina (tsy voatery)' : 'Taille et poids exacts (facultatif)'}</summary>
+      <div class="row" style="gap:6px;align-items:center;margin-top:6px"><input class="input" data-dl inputmode="decimal" placeholder="L cm" style="width:76px"> × <input class="input" data-dw inputmode="decimal" placeholder="l cm" style="width:76px"> × <input class="input" data-dh inputmode="decimal" placeholder="h cm" style="width:76px">
+        <input class="input" data-kg inputmode="decimal" placeholder="kg" style="width:76px"></div></details>
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" placeholder="20000" value="${esc(P.valeur || '')}"></label>
     <div class="field"><span>💳 ${mg ? 'Ny vidin\'entana' : 'Paiement de la marchandise'}</span>
       <div class="seg" data-pay><button type="button" class="on" data-pv="cash">💵 ${mg ? 'Vola an-tanana, raisin\'ny livreur' : 'Espèces, à encaisser par le livreur'}</button><button type="button" data-pv="mm">📱 ${mg ? 'Efa nalefa Mobile Money' : 'Déjà payée par Mobile Money'}</button></div>
@@ -141,19 +172,40 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const box = el.querySelector('[data-q]');
     if (!f.drop) return;
     const v = Number(el.querySelector('[data-v]').value.replace(/\D/g, '')) || 0;
-    const r = await api('POST', '/api/shipments/quote', { drop_lat: f.drop.lat, drop_lng: f.drop.lng, value: v, weight: el.querySelector('[data-kg]').value }).catch(() => null);
+    const dims = ['[data-dl]', '[data-dw]', '[data-dh]'].map((k) => el.querySelector(k).value.replace(',', '.'));
+    const r = await api('POST', '/api/shipments/quote', { drop_lat: f.drop.lat, drop_lng: f.drop.lng, pickup_lat: f.pickup?.lat, pickup_lng: f.pickup?.lng, value: v, weight: el.querySelector('[data-kg]').value,
+      l: dims[0], w: dims[1], h: dims[2], category: f.cat || 'S', fragile: el.querySelector('[data-frag]').checked, express: el.querySelector('[data-expr]').checked, centre_drop: f.pick === 'centre' }).catch(() => null);
     if (!r) return;
     const prov = el.querySelector('[data-prov]').checked;
     const due = prov ? 0 : (f.pay === 'mm' ? 0 : v) + r.fee;
-    box.innerHTML = `<div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div>${r.weight_extra ? `<div class="tiny muted">${mg ? 'Anatin\'izany ny lanja' : 'Dont supplément poids'} : ${ar(r.weight_extra)}${r.moto_only ? ' · 🏍️ moto' : ''}</div>` : ''}
+    if (r.category && r.category !== (f.cat || 'S')) { f.cat = r.category; drawCats(); }
+    box.innerHTML = `${(r.lines || []).map(([l, a]) => `<div class="row between tiny muted"><span>${esc(l)}${l === 'Livraison' && r.direct ? (mg ? ' (mivantana, akaiky)' : ' (directe, proche)') : ''}</span><span>${ar(a)}</span></div>`).join('')}
+      <div class="row between"><span>${c('fee')}</span><b>${ar(r.fee)}</b></div>${r.moto_only ? `<div class="tiny muted">${mg ? 'Moto no mitondra' : 'Transporté à moto'}</div>` : ''}
       <div class="row between"><span>${c('to_collect')}</span><b>${ar(due)}</b></div>
       ${f.pay === 'mm' && !prov ? `<div class="small">💵 ${mg ? 'Ny frais' : 'Frais'} <b>${ar(r.fee)}</b> ${mg ? 'aloanao amin\'ny livreur rehefa haka ny entana' : 'à payer au livreur à la récupération'}</div>` : ''}
-      ${r.review ? `<div class="small" style="color:var(--orange)">⚠️ ${r.review === 'value' ? (mg ? `Mihoatra ny ${ar(r.max_value)} ny vidin'entana : ny centre aloha no manamarina.` : `Valeur au-delà de ${ar(r.max_value)} : le centre doit d'abord valider.`) : (mg ? 'Mavesatra loatra : ny centre aloha no manamarina sy milaza ny vidiny.' : 'Trop lourd : le centre doit d\'abord valider et fixer le prix.')}</div>` : ''}
+      ${r.review === 'devis' ? `<div class="small" style="color:var(--orange)">⚠️ ${mg ? 'XL : ny centre no milaza ny vidiny (devis) alohan\'ny handefasana.' : 'XL : le centre vous envoie un devis avant l\'envoi.'}</div>` : ''}
+      ${r.review && r.review !== 'devis' ? `<div class="small" style="color:var(--orange)">⚠️ ${r.review === 'value' ? (mg ? `Mihoatra ny ${ar(r.max_value)} ny vidin'entana : ny centre aloha no manamarina.` : `Valeur au-delà de ${ar(r.max_value)} : le centre doit d'abord valider.`) : (mg ? 'Mavesatra loatra : ny centre aloha no manamarina sy milaza ny vidiny.' : 'Trop lourd : le centre doit d\'abord valider et fixer le prix.')}</div>` : ''}
       ${prov ? `<div class="tiny muted">${mg ? 'Province : tsy misy vola raisina any amin\'ny koperativa ; esorina amin\'ny vola aloa anao ny frais Alefa.' : 'Province : rien à encaisser à la coopérative ; les frais Alefa sont retenus sur votre paiement.'}</div>` : f.pay === 'mm' ? `<div class="tiny muted">${mg ? 'Efa voaloa ny entana : ny frais ihany no raisin\'ny livreur.' : 'Marchandise déjà payée : le livreur n\'encaisse que les frais.'}</div>` : ''}
       ${adminMode ? `<label class="field" style="margin-top:8px"><span>${c('departure')}</span><select class="input" data-dep><option value="">${c('auto_dep')}</option>
       ${r.departures.map((d) => `<option value="${d.slot_id}|${d.departure_at}">${dayLabel(d.departure_at)} ${time(d.departure_at)} · ${esc(d.axe)}${d.from_addr ? ` (${esc(d.from_addr.split(',')[0])} → ${esc(d.to_addr.split(',')[0])})` : ''} · ${vehIcon(d.vehicle)} ${esc(d.courier)}</option>`).join('')}</select></label>
       ${r.departures.length ? '' : `<div class="tiny" style="color:var(--orange)">${c('no_dep')}</div>`}` : `<div class="tiny muted" data-qok>${mg ? 'Ny centre no mandahatra ny livreur haka ny entana.' : 'Le centre programme le livreur qui viendra récupérer le colis.'}</div>`}`;
   };
+  // Catégories S / M / L / XL (grands boutons) : exemples, limites et supplément, depuis les conditions de transport.
+  let cond = null;
+  const drawCats = () => {
+    if (!cond) return;
+    el.querySelector('[data-cats]').innerHTML = cond.categories.map((k) => `<button type="button" class="btn ${f.cat === k.k ? 'primary' : ''}" data-cat="${k.k}" style="text-align:left;white-space:normal;display:block;padding:10px">
+      <b style="font-size:1.1rem">${k.k}</b> <span class="tiny">${k.k === 'XL' ? (mg ? 'devis' : 'sur devis') : `${k.fee ? '+' + ar(k.fee) : '+0 Ar'}`}</span>
+      <div class="tiny" style="opacity:.85">${k.kg ? `≤ ${k.kg} kg · ≤ ${k.cm} cm` : (mg ? 'mihoatra' : 'au-delà')}${k.vehicle === 'moto' ? ' · moto' : ''}</div><div class="tiny" style="opacity:.75">${esc(k.ex)}</div></button>`).join('');
+    el.querySelector('[data-large]').classList.toggle('hidden', !['L', 'XL'].includes(f.cat));
+  };
+  api('GET', '/api/conditions').then((r) => {
+    cond = r;
+    el.querySelector('[data-pkfee]').textContent = `(+${ar(r.options.pickup_large)})`;
+    el.querySelector('[data-fragfee]').textContent = `+${ar(r.options.fragile)}`;
+    el.querySelector('[data-exprfee]').textContent = `+${ar(r.options.express)}`;
+    drawCats();
+  }).catch(() => {});
   // Créneaux matin / après-midi : récupération (le plus tôt par défaut) et livraison (au plus tard le créneau suivant).
   let wins = [];
   const winLabel = (w) => {
@@ -174,7 +226,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
   el.addEventListener('change', (e) => { if (e.target.matches('[data-pw]')) fillDeliv(); });
   el.addEventListener('input', (e) => {
     const k = e.target.dataset.a;
-    if (e.target.matches('[data-v], [data-kg]')) return quote();
+    if (e.target.matches('[data-v], [data-kg], [data-dl], [data-dw], [data-dh]')) return quote();
     if (!k) return;
     f[k] = null;
     clearTimeout(tmr);
@@ -199,8 +251,12 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const pv = e.target.closest('[data-pv]');
     if (pv) { f.pay = pv.dataset.pv; el.querySelectorAll('[data-pv]').forEach((x) => x.classList.toggle('on', x === pv)); quote(); }
     if (e.target.matches('[data-prov]')) { el.querySelector('[data-provf]').classList.toggle('hidden', !e.target.checked); quote(); }
-    const sz = e.target.closest('[data-sz]');
-    if (sz) { const [l, w, h] = sz.dataset.sz.split('|'); el.querySelector('[data-dl]').value = l; el.querySelector('[data-dw]').value = w; el.querySelector('[data-dh]').value = h; }
+    const cb = e.target.closest('[data-cat]');
+    if (cb) { f.cat = cb.dataset.cat; drawCats(); quote(); }
+    const pk = e.target.closest('[data-pk]');
+    if (pk) { f.pick = pk.dataset.pk; el.querySelectorAll('[data-pk]').forEach((x) => x.classList.toggle('on', x === pk)); quote(); }
+    if (e.target.matches('[data-frag], [data-expr]')) quote();
+    if (e.target.closest('[data-cond]')) { e.preventDefault(); conditionsModal(); }
     if (e.target.closest('[data-gps]')) {
       try { const [lat, lng] = await getPosition(); const label = await reverse(lat, lng); f.pickup = { label, lat, lng }; el.querySelector('[data-a=pickup]').value = label; } catch (err) { toastErr(err); }
     }
@@ -214,6 +270,7 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
     const txt = (s) => el.querySelector(s).value.trim();
     const pk = f.pickup || { label: txt('[data-a=pickup]') }, dr = f.drop || { label: txt('[data-a=drop]') };
     const dep = el.querySelector('[data-dep]')?.value || '';
+    if (!adminMode && !f.cat && txt('[data-d]')) return toast(mg ? 'Safidio ny karazana colis (S, M, L na XL)' : 'Choisissez la catégorie du colis (S, M, L ou XL)', 'err');
     try {
       const r = await api('POST', '/api/shipments', {
         sender_phone: adminMode ? txt('[data-sp]') : undefined,
@@ -221,6 +278,8 @@ export function sendForm({ me, onDone, adminMode = false, prefill = null }) {
         drop_addr: dr.label, drop_lat: dr.lat, drop_lng: dr.lng, declared_value: Number(txt('[data-v]').replace(/\D/g, '')) || 0, description: txt('[data-d]'),
         size: txt('[data-dl]') || txt('[data-dw]') || txt('[data-dh]') ? { l: txt('[data-dl]').replace(',', '.'), w: txt('[data-dw]').replace(',', '.'), h: txt('[data-dh]').replace(',', '.') } : undefined,
         weight: txt('[data-kg]') ? txt('[data-kg]').replace(',', '.') : undefined,
+        category: f.cat || undefined, fragile: el.querySelector('[data-frag]').checked || undefined, express: el.querySelector('[data-expr]').checked || undefined,
+        centre_drop: ['L', 'XL'].includes(f.cat) && f.pick === 'centre' ? true : undefined,
         slot_id: dep ? Number(dep.split('|')[0]) : undefined, departure_at: dep ? Number(dep.split('|')[1]) : undefined, external_ref: txt('[data-ref]') || undefined,
         value_paid: f.pay === 'mm',
         pickup_at: Number(el.querySelector('[data-pw]').value) || undefined, deliver_at: Number(el.querySelector('[data-dw2]').value) || undefined,
@@ -267,11 +326,12 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
   const { shipment: s } = await api('GET', `/api/shipments/${id}`);
   const isCourier = role === 'courier', isAdmin = role === 'admin';
   const call = (p, n) => (p ? `<a class="btn sm" href="tel:${esc(p)}">📞 ${esc(n || phoneFmt(p))}</a>` : '');
-  const m = modal(s.ref, `<div class="stack">
-    <div class="row between">${shipPill(s)}<span class="small muted">${dt(s.created_at)}${s.external_ref ? ' · ' + esc(s.external_ref) : ''}</span></div>
-    <div class="card"><div class="small muted">🟢 ${c('sender')}</div><b>${esc(s.sender.name)}</b> <span class="small">${esc(s.sender.address)}</span>
+  const m = modal(`${c('colis')}${s.category ? ` ${s.category}` : ''}${s.fragile ? ' · fragile' : ''}${s.express ? ' · express' : ''}`, `<div class="stack">
+    <div class="row between">${shipPill(s)}<span class="small muted">${dt(s.created_at)}${s.since && !['delivered', 'cancelled'].includes(s.status) ? ` · ${state.lang === 'mg' ? 'nanomboka' : 'depuis'} ${ago(s.since)}` : ''}</span></div>
+    ${s.late ? `<div class="card small" style="background:#fde8e8;border:0;color:var(--red)">⏰ <b>${state.lang === 'mg' ? 'Tara' : 'En retard'}</b> : ${esc(s.late)}</div>` : ''}
+    <div class="card"><div class="small muted">🟢 ${c('sender')}</div>${nm(s.sender)} <span class="small">${esc(s.sender.address)}</span>
       <div class="row" style="margin-top:6px">${call(s.sender.phone)}${isCourier && s.sender.lat != null ? `<a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${s.sender.lat},${s.sender.lng}&travelmode=bicycling">🧭</a>` : ''}</div></div>
-    <div class="card"><div class="small muted">🟠 ${c('recipient')}</div><b>${esc(s.recipient.name)}</b> <span class="small">${esc(s.recipient.address)}</span>
+    <div class="card"><div class="small muted">🟠 ${c('recipient')}</div>${nm(s.recipient)} <span class="small">${esc(s.recipient.address)}</span>
       <div class="row" style="margin-top:6px">${call(s.recipient.phone)}${isCourier && s.recipient.lat != null ? `<a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${s.recipient.lat},${s.recipient.lng}&travelmode=bicycling">🧭</a>` : ''}</div></div>
     ${sizeTxt(s) ? `<div class="small">📦 ${esc(sizeTxt(s))}</div>` : ''}
     ${s.relay ? `<div class="card small" style="background:var(--bg);border:0">🏢 <b>${state.lang === 'mg' ? 'Relais amin\'ny centre' : 'Relais par le centre'}</b><br>
@@ -294,7 +354,8 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
       ${s.return_fee ? `<div class="row between small" style="color:var(--red)"><span>Frais de retour (expéditeur)</span><b>${ar(s.return_fee)}</b></div>` : ''}
     </div>
     ${s.courier ? `<div class="small">🚲 <b>${esc(s.courier.name || '')}</b>${s.departure_at ? ` · ${c('departure')} ${dayLabel(s.departure_at)} ${time(s.departure_at)} · ${esc(s.axe || '')}` : ''} ${s.courier.phone && !isCourier ? call(s.courier.phone) : ''}</div>` : ''}
-    ${s.has_photo ? `<img data-ph alt="${c('photo')}" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;background:var(--bg)">` : ''}
+    ${s.has_photo ? `<div class="tiny muted">📷 ${state.lang === 'mg' ? 'Porofo : fakana' : 'Preuve : récupération'}</div><img data-ph alt="${c('photo')}" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;background:var(--bg)">` : ''}
+    ${s.proofs?.centre_in ? `<div class="tiny muted">📷 ${state.lang === 'mg' ? 'Porofo : napetraka tao amin\'ny centre' : 'Preuve : dépôt au centre'} · ${dt(s.proofs.centre_in)}</div><img data-cph alt="" style="width:100%;border-radius:12px;max-height:320px;object-fit:cover;background:var(--bg)">` : ''}
     ${isCourier && s.delivery_pin && s.status === 'picked_up' ? `<div class="card" style="text-align:center;background:var(--green-soft);border:0">
       <div class="small"><b>✅ ${state.lang === 'mg' ? 'Nanamarina ny client — kaody voaray' : 'Le client a confirmé — code reçu'}</b></div>
       <div class="pin-box" style="margin-top:6px">${[...s.delivery_pin].map((x) => `<span>${x}</span>`).join('')}</div></div>`
@@ -311,11 +372,14 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     <div class="stack" data-actions></div></div>`);
   const el = m.el;
   if (s.has_photo) photoUrl(s.id).then((u) => { const im = el.querySelector('[data-ph]'); if (u && im) im.src = u; });
+  if (s.proofs?.centre_in && el.querySelector('[data-cph]')) fetch(`/api/shipments/${s.id}/proof/centre_in`, { headers: { authorization: `Bearer ${state.token}` } }).then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) el.querySelector('[data-cph]').src = URL.createObjectURL(b); });
   if (s.delivery_proof?.photo && el.querySelector('[data-dph]')) fetch(`/api/shipments/${s.id}/delivery-photo`, { headers: { authorization: `Bearer ${state.token}` } }).then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) el.querySelector('[data-dph]').src = URL.createObjectURL(b); });
   if (courierMarker && s.courier?.lat != null) courierMarker(s);
   const acts = el.querySelector('[data-actions]');
   const done = () => { m.close(); onChange?.(); };
   const btn = (label, cls, fn) => { const b = document.createElement('button'); b.className = `btn block ${cls}`; b.textContent = label; b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { toastErr(e); } b.disabled = false; }; acts.append(b); };
+  // Étiquette à coller sur le colis (code-barres + code à 4 caractères) : expéditeur, centre, livreur.
+  if ((isAdmin || role === 'sender' || isCourier) && ['pending', 'assigned', 'picked_up'].includes(s.status) && !s.contacts_hidden) btn(`🖨 ${state.lang === 'mg' ? 'Étiquette' : 'Imprimer l\'étiquette'}`, '', () => printLabel(s));
   el.querySelector('[data-fee]')?.addEventListener('click', async () => {
     const v = await promptBox(c('fee'), { label: 'Ariary', type: 'number', value: s.fee }); if (v == null || v === '') return;
     await api('POST', `/api/shipments/${s.id}/fee`, { fee: Number(v) }).then(done).catch(toastErr);
@@ -331,17 +395,24 @@ export async function shipDetail(id, { role, onChange, courierMarker } = {}) {
     }
     if (s.status === 'assigned' && s.courier?.id === state.user?.id) btn(`📦 ${c('pickup_btn')}`, s.accepted_at ? 'primary lg' : '', () => { m.close(); pickupForm(s, () => onChange?.()); });
     const me = state.user?.id;
-    if (s.step === 'to_centre' && s.courier?.id === me) btn(`🏢 ${state.lang === 'mg' ? 'Napetrako tao amin\'ny centre' : 'Déposé au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/drop-centre`, {}); toast(stepLabel('at_centre'), 'ok'); done(); });
-    else if (s.step === 'at_centre' && s.delivery_courier?.id === me) btn(`📦 ${state.lang === 'mg' ? 'Noraisiko tao amin\'ny centre' : 'Pris au centre'}`, 'primary lg', async () => { await api('POST', `/api/shipments/${s.id}/take-centre`, {}); toast(stepLabel('centre_out'), 'ok'); done(); sendLinkPrompt(s); });
+    if (s.step === 'to_centre' && s.courier?.id === me) btn(`🏢 ${state.lang === 'mg' ? 'Napetrako tao amin\'ny centre' : 'Déposé au centre'}`, 'primary lg', () => { m.close(); centreForm(s, () => onChange?.()); });
+    else if (s.step === 'at_centre' && s.delivery_courier?.id === me) btn(`📦 ${state.lang === 'mg' ? 'Noraisiko tao amin\'ny centre' : 'Pris au centre'}`, 'primary lg', () => { m.close(); takeCentre(s, () => onChange?.()); });
     else if (s.relay && s.status === 'assigned' && s.delivery_courier?.id === me && s.pickup_courier?.id !== me)
       acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">🏢 ${state.lang === 'mg' ? `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} no maka azy ary mametraka azy ao amin'ny centre ; avy eo ianao no manatitra.` : `${esc(s.pickup_courier?.name?.split(' ')[0] || '')} le récupère et le dépose au centre ; vous le livrez ensuite.`}</div>`);
     if (s.status === 'picked_up' && !['to_centre', 'at_centre'].includes(s.step)) {
       if (!s.courier_confirmed_at) btn(s.province ? `🚌 ${state.lang === 'mg' ? 'Atolotra amin\'ny koperativa' : 'Remettre à la coopérative'} ${esc(s.province.coop)}` : `${c('delivered_ok')} · ${ar(s.amount_to_collect)}`, 'primary lg', () => { m.close(); deliverForm(s, () => onChange?.()); });
       else acts.insertAdjacentHTML('beforeend', `<div class="card small" style="background:var(--sun-soft);border:0">⏳ ${esc(stepLabel('awaiting_recipient'))}</div>`);
+      if (!s.courier_confirmed_at && !s.wait_fee) btn(`⏱ ${state.lang === 'mg' ? 'Niandry > 10 min' : 'Attente > 10 min'}`, '', async () => {
+        const r = await api('POST', `/api/shipments/${s.id}/wait`, {}); toast(`${state.lang === 'mg' ? 'Vola raisina' : 'À encaisser'} : ${ar(r.amount_to_collect)}`, 'ok'); done();
+      });
       btn(c('refused_btn'), 'sun', async () => {
         const note = await promptBox(c('refused_btn'), { label: c('reason') }); if (!note) return;
-        const v = await promptBox(c('fee'), { label: c('collected') + ' (Ar)', type: 'number', value: s.fee }); if (v == null) return;
+        const v = await promptBox(c('fee'), { label: c('collected') + ' (Ar)', type: 'number', value: s.payment?.pickup_fee != null ? 0 : s.fee }); if (v == null) return;
         await api('POST', `/api/shipments/${s.id}/refuse`, { note, collected: Number(v) }); done();
+      });
+      btn(`📵 ${state.lang === 'mg' ? 'Tsy azo antsoina' : 'Injoignable'}`, 'sun', async () => {
+        if (!(await confirmBox(state.lang === 'mg' ? 'Tsy azo antsoina ny mpandray : averina amin\'ny mpandefa ny colis?' : 'Destinataire injoignable : le colis retourne à l\'expéditeur ?'))) return;
+        await api('POST', `/api/shipments/${s.id}/refuse`, { unreachable: true }); done();
       });
       btn(c('cancel_btn'), 'danger', async () => {
         const note = await promptBox(c('cancel_btn'), { label: c('reason') }); if (!note) return;
@@ -386,6 +457,65 @@ export function provinceCard(s) {
       <br>💰 ${mg ? 'Saran-dalana' : 'Transport'} : <b>${ar(p.fee || 0)}</b> · ${p.fee_status === 'pa' ? `<b>PA</b> (${mg ? 'aloa rehefa tonga' : 'payé à l\'arrivée'})` : `✅ ${mg ? 'efa voaloa' : 'déjà payé'}`}` : ''}</div>`;
 }
 
+// Code du colis : scanné sur l'étiquette (code-barres) ou ses 4 derniers caractères tapés à la main.
+const codeField = () => `<label class="field"><span>🔖 ${state.lang === 'mg' ? 'Kaodin\'ny colis (scan na soraty ny 4 farany)' : 'Code du colis (scan ou 4 derniers caractères)'} *</span>
+  <div class="row" style="gap:6px"><input class="input grow" data-code autocomplete="off" autocapitalize="characters" maxlength="12" placeholder="ex : 7HTM" style="text-transform:uppercase;font-weight:800;letter-spacing:.2em"><button type="button" class="btn" data-scan>📷 Scan</button></div></label>`;
+function bindCode(root) {
+  root.querySelector('[data-scan]')?.addEventListener('click', async () => { const v = await scanCode(); if (v) root.querySelector('[data-code]').value = v; });
+  return () => root.querySelector('[data-code]')?.value.trim().toUpperCase() || undefined;
+}
+export async function scanCode() {
+  const mg = state.lang === 'mg';
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) { toast(mg ? 'Tsy mahay mi-scan ity finday ity : soraty ny kaody' : 'Scanner indisponible sur ce téléphone : tapez le code', 'err'); return null; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); } catch (e) { toastErr(e); return null; }
+  const m = modal(mg ? 'Scan ny étiquette' : 'Scanner l\'étiquette', '<video data-v playsinline muted style="width:100%;border-radius:12px;background:#000"></video><p class="small muted">' + (mg ? 'Atondrohy amin\'ny code-barres' : 'Visez le code-barres') + '</p>');
+  const v = m.el.querySelector('[data-v]'); v.srcObject = stream; await v.play().catch(() => {});
+  const det = new window.BarcodeDetector({ formats: ['code_128', 'qr_code'] });
+  return new Promise((resolve) => {
+    let done = false;
+    const stop = (val) => { if (done) return; done = true; stream.getTracks().forEach((t) => t.stop()); m.close(); resolve(val); };
+    m.el.closest('.modal-back')?.addEventListener('click', (e) => { if (e.target.matches('[data-x], .modal-back')) stop(null); });
+    const tick = async () => { if (done) return; try { const r = await det.detect(v); if (r[0]?.rawValue) return stop(r[0].rawValue.trim().toUpperCase()); } catch {} setTimeout(tick, 250); };
+    tick();
+  });
+}
+// Gros bouton de « Ma tournée du jour » : ouvre directement l'étape suivante du colis.
+export async function nextAction(id, onChange) {
+  const { shipment: s } = await api('GET', `/api/shipments/${id}`);
+  const me = state.user?.id;
+  if (s.status === 'assigned') return pickupForm(s, onChange);
+  if (s.step === 'to_centre') return centreForm(s, onChange);
+  if (s.step === 'at_centre' && s.delivery_courier?.id === me) return takeCentre(s, onChange);
+  if (s.status === 'picked_up' && !s.courier_confirmed_at) return deliverForm(s, onChange);
+  return shipDetail(id, { role: 'courier', onChange });
+}
+
+// Dépôt au centre (relais) : photo + code obligatoires.
+function centreForm(s, done) {
+  const mg = state.lang === 'mg';
+  const m = modal(`🏢 ${mg ? 'Mametraka ao amin\'ny centre' : 'Dépôt au centre'}`, `<div class="stack">
+    <label class="field"><span>📷 ${mg ? 'Sarin\'ny colis ao amin\'ny centre *' : 'Photo du colis au centre *'}</span><input class="input" data-dphoto type="file" accept="image/*" capture="environment"></label>
+    <img data-dprev alt="" style="display:none;width:100%;max-height:180px;object-fit:cover;border-radius:10px">
+    ${codeField()}<button class="btn primary lg block" data-ok>✅ ${mg ? 'Napetrako tao amin\'ny centre' : 'Déposé au centre'}</button></div>`);
+  let photo = null;
+  const code = bindCode(m.el);
+  m.el.querySelector('[data-dphoto]').onchange = async (e) => { const f = e.target.files?.[0]; if (!f) return; try { photo = await compressImage(f); const im = m.el.querySelector('[data-dprev]'); im.src = photo; im.style.display = 'block'; } catch (err) { toastErr(err); } };
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    if (!photo) return toast(mg ? 'Makà sary ny colis' : 'Prenez une photo du colis', 'err');
+    try { await api('POST', `/api/shipments/${s.id}/drop-centre`, { photo, code: code() }); m.close(); toast(stepLabel('at_centre'), 'ok'); done(); } catch (err) { toastErr(err); }
+  };
+}
+// Reprise au centre : code obligatoire (bon colis en main).
+async function takeCentre(s, done) {
+  const mg = state.lang === 'mg';
+  const m = modal(`📦 ${mg ? 'Maka ao amin\'ny centre' : 'Reprise au centre'}`, `<div class="stack">${codeField()}<button class="btn primary lg block" data-ok>✅ ${mg ? 'Noraisiko' : 'Pris au centre'}</button></div>`);
+  const code = bindCode(m.el);
+  m.el.querySelector('[data-ok]').onclick = async () => {
+    try { await api('POST', `/api/shipments/${s.id}/take-centre`, { code: code() }); m.close(); toast(stepLabel('centre_out'), 'ok'); done(); sendLinkPrompt(s); } catch (err) { toastErr(err); }
+  };
+}
+
 // Remise à la coopérative (province) : photo, véhicule, téléphone du chauffeur, frais de transport PA ou déjà payés.
 function coopForm(s, done) {
   const mg = state.lang === 'mg';
@@ -397,9 +527,11 @@ function coopForm(s, done) {
     <label class="field"><span>🚐 ${mg ? 'Fiara : laharana (plaque) / marika *' : 'Véhicule : immatriculation / repère *'}</span><input class="input" data-plate placeholder="1234 TBA"></label>
     <label class="field"><span>📞 ${mg ? 'Laharan\'ny mpamily na koperativa' : 'Téléphone du chauffeur ou de la coopérative'}</span><input class="input" data-dphone type="tel" placeholder="034 12 345 67"></label>
     <label class="field"><span>💰 ${mg ? 'Saran-dalan\'ny fiara (Ar) *' : 'Frais de transport (Ar) *'}</span><input class="input" data-cfee inputmode="numeric" placeholder="15000" style="font-size:1.2rem;font-weight:800"></label>
+    ${codeField()}
     <div class="seg" data-cst><button type="button" class="on" data-st="pa"><b>PA</b> · ${mg ? 'aloa rehefa tonga' : 'payé à l\'arrivée'}</button><button type="button" data-st="paid">✅ ${mg ? 'Efa voaloa' : 'Déjà payé'}</button></div>
     <button class="btn primary lg block" data-ok>✅ ${mg ? 'Voatolotra amin\'ny koperativa' : 'Remis à la coopérative'}</button></div>`);
   let photo = null, st = 'pa';
+  bindCode(m.el);
   m.el.querySelector('[data-dphoto]').onchange = async (e) => {
     const f = e.target.files?.[0]; if (!f) return;
     try { photo = await compressImage(f); const im = m.el.querySelector('[data-dprev]'); im.src = photo; im.style.display = 'block'; } catch (err) { toastErr(err); }
@@ -413,7 +545,7 @@ function coopForm(s, done) {
     let pos = [];
     try { pos = await getPosition({ timeout: 5000 }); } catch {}
     try {
-      await api('POST', `/api/shipments/${s.id}/deliver`, { photo, lat: pos[0], lng: pos[1], coop_plate: v('[data-plate]'), coop_driver_phone: v('[data-dphone]') || undefined,
+      await api('POST', `/api/shipments/${s.id}/deliver`, { photo, lat: pos[0], lng: pos[1], code: m.el.querySelector('[data-code]').value.trim().toUpperCase() || undefined, coop_plate: v('[data-plate]'), coop_driver_phone: v('[data-dphone]') || undefined,
         coop_fee: Number(v('[data-cfee]').replace(/\D/g, '')) || 0, coop_fee_status: st });
       m.close(); toast(mg ? 'Voatolotra amin\'ny koperativa ✅' : 'Remis à la coopérative ✅', 'ok'); done();
     } catch (err) { toastErr(err); }
@@ -431,12 +563,14 @@ function deliverForm(s, done) {
     <label class="field"><span>📷 ${mg ? 'Sarin\'ny colis natolotra (porofo) *' : 'Photo du colis remis (preuve) *'}</span>
       <input class="input" data-dphoto type="file" accept="image/*" capture="environment"></label>
     <img data-dprev alt="" style="display:none;width:100%;max-height:180px;object-fit:cover;border-radius:10px">
-    <label class="field"><span>${mg ? 'Kaody 4 isa' : 'Code à 4 chiffres'}</span>
+    ${codeField()}
+    <label class="field"><span>${mg ? 'Kaody 4 isa (avy amin\'ny mpandray)' : 'Code à 4 chiffres (donné par le destinataire)'}</span>
       <input class="input" data-pin inputmode="numeric" maxlength="4" placeholder="••••" value="${got ? esc(s.delivery_pin) : ''}" style="text-align:center;font-size:1.8rem;letter-spacing:.5em;font-weight:850"></label>
     <button class="btn primary lg block" data-ok>✅ ${mg ? 'Hamafisina amin\'ny kaody' : 'Confirmer avec le code'}</button>
     <button class="btn block" data-nopin style="white-space:normal;line-height:1.3">${mg ? 'Tsy manana kaody → ny mpandray no hanamarina amin\'ny application-ny' : 'Pas de code → le destinataire confirmera dans son application'}</button>
     <p class="tiny muted">${mg ? 'Tsy ho « Tonga » ny entana raha tsy samy manamarina ianao sy ny mpandray.' : 'Le colis n\'est « Livré » qu\'une fois confirmé par vous ET par le destinataire.'}</p></div>`);
   let photo = null;
+  const pcode = bindCode(m.el);
   m.el.querySelector('[data-dphoto]').onchange = async (e) => {
     const f = e.target.files?.[0]; if (!f) return;
     try { photo = await compressImage(f); const im = m.el.querySelector('[data-dprev]'); im.src = photo; im.style.display = 'block'; } catch (err) { toastErr(err); }
@@ -448,7 +582,7 @@ function deliverForm(s, done) {
     let pos = [];
     try { pos = await getPosition({ timeout: 5000 }); } catch {}
     try {
-      const r = await api('POST', `/api/shipments/${s.id}/deliver`, { collected: Number(m.el.querySelector('[data-v]').value.replace(/\D/g, '')), pin: withPin ? pin : undefined, lat: pos[0], lng: pos[1], photo });
+      const r = await api('POST', `/api/shipments/${s.id}/deliver`, { collected: Number(m.el.querySelector('[data-v]').value.replace(/\D/g, '')), pin: withPin ? pin : undefined, lat: pos[0], lng: pos[1], photo, code: pcode() });
       m.close(); toast(r.delivered ? stepLabel('delivered') : stepLabel('awaiting_recipient'), 'ok'); done();
     } catch (err) { toastErr(err); }
   };
@@ -472,10 +606,15 @@ function deliverForm(s, done) {
 }
 
 function pickupForm(s, done) {
-  const m = modal(`${c('pickup_btn')} · ${s.ref}`, `<div class="stack">
+  const mg = state.lang === 'mg';
+  const m = modal(`${c('pickup_btn')}`, `<div class="stack">
+    ${s.code ? `<div class="card" style="text-align:center;background:var(--sun-soft);border:0"><div class="small">${mg ? 'Soraty amin\'ny colis ity kaody ity (na apetaho ny étiquette)' : 'Écrivez ce code sur le colis (ou collez l\'étiquette)'}</div>
+      <div style="font-size:2.2rem;font-weight:900;letter-spacing:.3em">${esc(s.code)}</div></div>` : ''}
     <label class="btn sun lg block" style="cursor:pointer">${c('take_photo')}<input type="file" accept="image/*" capture="environment" data-file hidden></label>
     <img data-prev alt="" style="width:100%;border-radius:12px;display:none;max-height:280px;object-fit:cover">
     <label class="field"><span>${c('value')} (Ar)</span><input class="input" data-v inputmode="numeric" value="${s.declared_value || ''}" style="font-size:1.3rem;font-weight:800"></label>
+    <label class="field"><span>${mg ? 'Karazana (hamarino amin\'ny sary)' : 'Catégorie (vérifiez sur la photo)'}</span><select class="input" data-cat>${['S', 'M', 'L', 'XL'].map((k) => `<option ${(s.category || 'S') === k ? 'selected' : ''}>${k}</option>`).join('')}</select>
+      <span class="tiny muted">${mg ? 'Raha lehibe noho ny voalaza : ovay, ampandrenesina ny mpandefa amin\'ny vidiny vaovao.' : 'Plus gros que déclaré ? Changez : l\'expéditeur reçoit le nouveau prix.'}</span></label>
     <label class="field"><span>${c('fee')} (Ar)</span><input class="input" data-fee inputmode="numeric" value="${s.fee}"></label>
     <div class="card small" style="background:var(--bg);border:0" data-tot></div>
     <button class="btn primary lg block" data-ok>✅ ${c('pickup_btn')}</button></div>`);
@@ -494,7 +633,9 @@ function pickupForm(s, done) {
     let pos = [];
     try { pos = await getPosition({ timeout: 5000 }); } catch {}
     try {
-      await api('POST', `/api/shipments/${s.id}/pickup`, { photo, value: Number(el.querySelector('[data-v]').value.replace(/\D/g, '')), fee: Number(el.querySelector('[data-fee]').value.replace(/\D/g, '')), lat: pos[0], lng: pos[1] });
+      const cat = el.querySelector('[data-cat]').value;
+      await api('POST', `/api/shipments/${s.id}/pickup`, { photo, value: Number(el.querySelector('[data-v]').value.replace(/\D/g, '')), lat: pos[0], lng: pos[1],
+        ...(cat !== (s.category || 'S') ? { category: cat } : { fee: Number(el.querySelector('[data-fee]').value.replace(/\D/g, '')) }) });
       m.close(); toast(c('sh_picked_up'), 'ok'); done();
       if (!s.relay) sendLinkPrompt(s); // en route vers le destinataire : on lui envoie le lien
     } catch (err) { toastErr(err); }

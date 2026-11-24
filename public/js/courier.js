@@ -4,7 +4,7 @@ import {
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, supportChat, profileForm,
   sendSOS, complaintForm, chatHtml, haversine, beep,
 } from './core.js';
-import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel } from './colis.js';
+import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel, nextAction } from './colis.js';
 
 let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null, myRun = null, runLayer = null, toLeaveN = 0;
 const mk = {};
@@ -152,7 +152,7 @@ function axeLine() {
 }
 function header() {
   return `<button class="switch ${available ? 'on' : 'off'}" data-act="toggle"><span class="knob"></span><span class="grow" style="text-align:left">${available ? t('available') : t('unavailable')}</span><span class="small">${available ? '🟢 GPS' : ''}</span></button>${axeLine()}
-    <div class="tabs" style="margin-top:10px"><button data-act="tab" data-t="colis" class="${tab === 'colis' ? 'on' : ''}">📦 ${c('colis')}</button><button data-act="tab" data-t="plan" class="${tab === 'plan' ? 'on' : ''}">🕘 ${c('my_schedule')}</button><button data-act="tab" data-t="req" class="${tab === 'req' ? 'on' : ''}">Express${requests.length ? ` (${requests.length})` : ''}</button><button data-act="tab" data-t="wallet" class="${tab === 'wallet' ? 'on' : ''}">${t('wallet')}</button><button data-act="tab" data-t="hist" class="${tab === 'hist' ? 'on' : ''}">${t('history')}</button></div>`;
+    <div class="tabs" style="margin-top:10px"><button data-act="tab" data-t="colis" class="${tab === 'colis' ? 'on' : ''}">${c('colis')}</button><button data-act="tab" data-t="plan" class="${tab === 'plan' ? 'on' : ''}">${c('my_schedule')}</button><button data-act="tab" data-t="req" class="${tab === 'req' ? 'on' : ''}">Express${requests.length ? ` (${requests.length})` : ''}</button><button data-act="tab" data-t="wallet" class="${tab === 'wallet' ? 'on' : ''}">${t('wallet')}</button><button data-act="tab" data-t="hist" class="${tab === 'hist' ? 'on' : ''}">${t('history')}</button></div>`;
 }
 
 function reqCard(q) {
@@ -356,12 +356,27 @@ async function loadMissions() {
   const el = $('[data-colis]'); if (!el) return;
   const me = state.user?.id, mg = state.lang === 'mg';
   const mine = (x) => x.courier?.id === me;
+  // « Ma tournée du jour » : toutes les actions à faire, dans l'ordre du trajet (le plus proche d'abord), avec un gros bouton.
+  const todo = shipments.map((x) => {
+    if (x.status === 'assigned' && (x.accepted_at || ['departed', 'at_pickup'].includes(x.step)) && mine(x)) return { x, act: 'pickup', at: x.sender.lat != null ? [x.sender.lat, x.sender.lng] : null, label: mg ? '📦 Nalaiko' : '📦 Récupéré' };
+    if (x.step === 'to_centre' && mine(x)) return { x, act: 'centre_in', at: null, label: mg ? '🏢 Napetrako tao amin\'ny centre' : '🏢 Déposé au centre' };
+    if (x.step === 'at_centre' && x.delivery_courier?.id === me) return { x, act: 'centre_out', at: null, label: mg ? '📦 Noraisiko tao amin\'ny centre' : '📦 Pris au centre' };
+    if (x.status === 'picked_up' && !['to_centre', 'at_centre'].includes(x.step) && mine(x) && !x.courier_confirmed_at) return { x, act: 'deliver', at: x.recipient.lat != null ? [x.recipient.lat, x.recipient.lng] : null, label: x.province ? (mg ? '🚌 Natolotra ny koperativa' : '🚌 Remis à la coopérative') : (mg ? '✅ Natolotra' : '✅ Livré') };
+    return null;
+  }).filter(Boolean);
+  const ordered = [];
+  let cur = pos ? [pos[0], pos[1]] : null;
+  const pool = [...todo];
+  while (pool.length) {
+    let bi = 0;
+    if (cur) { let bd = Infinity; pool.forEach((t, i) => { const d = t.at ? Math.hypot(t.at[0] - cur[0], t.at[1] - cur[1]) : 1; if (d < bd) { bd = d; bi = i; } }); }
+    const [t] = pool.splice(bi, 1); ordered.push(t); if (t.at) cur = t.at;
+  }
+  const tourBox = ordered.length ? `<h3>🗺 ${mg ? 'Ny fihodinako anio' : 'Ma tournée du jour'} (${ordered.length})</h3><div class="list">${ordered.map((t, i) => shipCard(t.x,
+    `<div class="row" style="gap:8px;margin-top:8px"><span class="pill">${i + 1}</span><button class="btn primary lg grow" data-act="next" data-id="${t.x.id}">${t.label}</button></div>`)).join('')}</div>` : '';
   const grp = [
-    [mg ? '🔔 Iraka vaovao hekena' : '🔔 Nouvelles missions à accepter', shipments.filter((x) => x.status === 'assigned' && !x.accepted_at && mine(x))],
-    [c('to_pickup'), shipments.filter((x) => x.status === 'assigned' && x.accepted_at && mine(x))],
-    [mg ? '🏢 Hapetraka ao amin\'ny centre' : '🏢 À déposer au centre', shipments.filter((x) => x.step === 'to_centre' && mine(x))],
-    [mg ? '📦 Halaina ao amin\'ny centre' : '📦 À prendre au centre', shipments.filter((x) => x.step === 'at_centre' && x.delivery_courier?.id === me)],
-    [c('to_deliver'), shipments.filter((x) => x.status === 'picked_up' && !['to_centre', 'at_centre'].includes(x.step) && mine(x))],
+    [mg ? '🔔 Iraka vaovao hekena' : '🔔 Nouvelles missions à accepter', shipments.filter((x) => x.status === 'assigned' && !x.accepted_at && !['departed', 'at_pickup'].includes(x.step) && mine(x))],
+    [mg ? '⏳ Miandry ny fanamarinan\'ny mpandray' : '⏳ En attente de confirmation du destinataire', shipments.filter((x) => x.status === 'picked_up' && mine(x) && x.courier_confirmed_at)],
     [mg ? '⏳ Ho avy amin\'ny centre (relais)' : '⏳ Arrivera au centre (relais)', shipments.filter((x) => x.relay && ['assigned', 'picked_up'].includes(x.status) && x.step !== 'at_centre' && x.delivery_courier?.id === me && !mine(x))],
     [c('to_return'), shipments.filter((x) => x.to_return)],
     [c('done_today'), shipments.filter((x) => ['delivered', 'refused', 'cancelled'].includes(x.status) && !x.to_return)],
@@ -376,14 +391,14 @@ async function loadMissions() {
     : `<button class="btn sun lg block" data-act="depart" style="margin-bottom:10px">🚀 ${mg ? 'Miala amin\'ny centre' : 'Je pars du centre'}${toLeave ? ` (${toLeave} ${c('parcels')})` : ''}</button>`;
   const offerCard = (o) => `<div class="card" data-ref="${esc(o.ref)}" style="${o.status === 'lost' ? 'opacity:.55' : 'border:2px solid var(--sun)'}">
       <div class="row between"><span class="small muted">${time(o.at)}</span><span>${o.province ? `🚌 ${esc(o.province.city)} ` : ''}${o.value_paid ? '📱 ' : ''}<b>${ar(o.amount_to_collect)}</b></span></div>
-      <div class="small" style="line-height:1.45">🟢 <b>${esc(o.pickup.name || '')}</b>${o.pickup.phone ? ` · <a href="tel:${esc(o.pickup.phone)}">📞 ${esc(phoneFmt(o.pickup.phone))}</a>` : ''}<div class="tiny muted">${esc(o.pickup.address)}</div>
-        🟠 <b>${esc(o.drop.name || '')}</b>${o.drop.phone ? ` · <a href="tel:${esc(o.drop.phone)}">📞 ${esc(phoneFmt(o.drop.phone))}</a>` : ''}<div class="tiny muted">${esc(o.drop.address)}</div></div>
+      <div class="small" style="line-height:1.45">🟢 ${esc(o.pickup.address)}<br>🟠 ${esc(o.drop.address)}</div>
+      <div class="tiny muted">🔒 ${mg ? 'Anarana sy laharana hita rehefa noraisinao' : 'Noms et téléphones visibles une fois le colis pris'}</div>
       ${o.contents || o.size ? `<div class="tiny muted">📦 ${esc([o.contents, o.size].filter(Boolean).join(' · '))}</div>` : ''}
       ${o.status === 'lost' ? `<div class="small" style="color:var(--red)">❌ ${mg ? 'Efa nisy naka' : 'Déjà pris'}${o.taken_by ? ` (${esc(o.taken_by)})` : ''}</div>`
         : `<div class="row" style="margin-top:6px"><button class="btn primary grow" data-act="take" data-id="${o.id}">✋ ${mg ? 'Raisiko' : 'Je le prends'}</button><button class="btn" data-act="skip" data-id="${o.id}">✕</button></div>`}</div>`;
   const offersBox = rn.offers.length ? `<h3>📦 ${mg ? 'Colis eny an-dalanao' : 'Colis sur ton chemin'} (${rn.offers.filter((o) => o.status === 'open').length})</h3>
     <p class="tiny muted">${mg ? 'Izay manamarina voalohany no maka azy.' : 'Le premier qui confirme le prend.'}</p><div class="list">${rn.offers.map(offerCard).join('')}</div>` : '';
-  el.innerHTML = stats + runBox + offersBox + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
+  el.innerHTML = stats + runBox + offersBox + tourBox + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
     + grp.filter(([, l]) => l.length).map(([title, l]) => `<h3>${esc(title)} (${l.length})</h3><div class="list">${l.map((x) => shipCard(x)).join('')}</div>`).join('')
     || `<p class="muted" style="text-align:center;padding:16px">${c('empty')}</p>`;
   // repères sur la carte (+ colis proposés et chemin de la tournée)
@@ -418,6 +433,7 @@ const actions = {
   tab: (el) => { tab = el.dataset.t; lastSig = ''; render(); },
   open: (el) => openRequest(+el.dataset.id),
   ship: (el) => openShip(+el.dataset.id),
+  next: (el) => nextAction(+el.dataset.id, () => { lastSig = ''; render(); }),
   depart: () => { if (!pos) return toast(t('gps_off_title'), 'err'); departForm(); },
   endrun: async () => { await api('POST', '/api/courier/run/end', {}); toast(state.lang === 'mg' ? '🏁 Vita ny fihodinana' : '🏁 Tournée terminée', 'ok'); loadMissions(); },
   take: async (el) => {

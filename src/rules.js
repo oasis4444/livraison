@@ -55,3 +55,36 @@ export function centreShare(st, fee) {
   const share = f <= Number(st.share_t1_max ?? 4000) ? Number(st.share_t1 ?? 1000) : f <= Number(st.share_t2_max ?? 8000) ? Number(st.share_t2 ?? 2000) : Number(st.share_t3 ?? 3000);
   return Math.min(f, share);
 }
+
+// ---------------------------------------------------------------- conditions de transport (catégories S / M / L / XL)
+export const CATS = ['S', 'M', 'L', 'XL'];
+export function catTable(st) {
+  const n = (k, d) => Number(st[k] ?? d);
+  return [
+    { k: 'S', kg: n('cat_s_kg', 3), cm: n('cat_s_cm', 40), fee: n('cat_s_fee', 0), ex: st.cat_s_ex || '', vehicle: 'velo' },
+    { k: 'M', kg: n('cat_m_kg', 10), cm: n('cat_m_cm', 50), fee: n('cat_m_fee', 1000), ex: st.cat_m_ex || '', vehicle: 'velo' },
+    { k: 'L', kg: n('cat_l_kg', 25), cm: n('cat_l_cm', 80), fee: n('cat_l_fee', 3000), ex: st.cat_l_ex || '', vehicle: 'moto' },
+    { k: 'XL', kg: null, cm: null, fee: null, ex: st.cat_xl_ex || '', vehicle: 'devis' },
+  ];
+}
+// Catégorie retenue : la plus élevée entre celle choisie, le poids et la plus grande dimension.
+export function categoryOf(st, { category = null, weight = null, dims = null } = {}) {
+  const t = catTable(st);
+  const idx = (k) => Math.max(0, CATS.indexOf(String(k || '').toUpperCase()));
+  let i = category ? idx(category) : 0;
+  const w = Number(weight) || 0, side = dims ? Math.max(...dims.map(Number)) : 0;
+  const byLimit = (v, key) => { if (!v) return 0; const j = t.findIndex((c) => c[key] != null && v <= c[key]); return j < 0 ? 3 : j; };
+  i = Math.max(i, byLimit(w, 'kg'), byLimit(side, 'cm'));
+  if (w > Number(st.moto_max_kg ?? 30)) i = 3;
+  return CATS[i];
+}
+// Prix : base (axe / défaut, ou tarif direct si récupération et livraison proches) + catégorie + options.
+export function priceOf(st, { base, category, fragile = false, express = false, centreDrop = false }) {
+  const c = catTable(st).find((x) => x.k === category) || catTable(st)[0];
+  const lines = [['Livraison', base]];
+  if (c.fee) lines.push([`Catégorie ${c.k}`, c.fee]);
+  if (['L', 'XL'].includes(c.k) && !centreDrop) lines.push(['Récupération (L/XL)', Number(st.pickup_fee_large ?? 2000)]);
+  if (fragile) lines.push(['Fragile', Number(st.opt_fragile ?? 1000)]);
+  if (express) lines.push(['Express', Number(st.opt_express ?? 2000)]);
+  return { fee: lines.reduce((a, l) => a + l[1], 0), lines, moto_only: c.k === 'L', devis: c.k === 'XL' };
+}

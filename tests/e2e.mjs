@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode';"); // parcours historique : attribution automatique
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'; UPDATE settings SET value = '0' WHERE key IN ('direct_km', 'scan_required');"); // parcours historique : attribution automatique
 
 const LEAFLET_STUB = `
 (() => {

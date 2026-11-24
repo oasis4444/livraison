@@ -9,6 +9,8 @@ import { hashPassword } from '../src/lib.js';
 
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 async function call(method, path, body, token, headers = {}) {
   const h = { 'content-type': 'application/json', ...headers };
   if (token) h.authorization = `Bearer ${token}`;
@@ -65,8 +67,10 @@ test('parcours en relais : récupéré → déposé au centre → repris → liv
   assert.equal((await P('deliver', { photo: PHOTO }, hery)).status, 409, 'doit passer par le centre');
   assert.equal((await call('POST', `/api/track/${s1.track_token}/confirm`, {})).status, 409);
   assert.equal((await P('take-centre', {}, tiana)).status, 409, 'pas encore au centre');
-  const d = await P('drop-centre', {}, hery);
+  assert.equal((await P('drop-centre', {}, hery)).status, 400, 'photo obligatoire au dépôt au centre');
+  const d = await P('drop-centre', { photo: PHOTO }, hery);
   assert.equal(d.status, 200); assert.equal(d.data.shipment.step, 'at_centre'); assert.equal(d.data.shipment.courier.id, tianaId);
+  assert.ok((await call('GET', `/api/shipments/${s1.id}`, null, admin)).data.shipment.proofs.centre_in, 'preuve photo au centre');
   assert.ok(db.prepare("SELECT title FROM notifications WHERE user_id = ? ORDER BY id DESC").get(tianaId).title.includes('centre'));
   assert.equal((await P('take-centre', {}, hery)).status, 403, 'Hery n\'est pas le livreur de livraison');
   const tk = await P('take-centre', {}, tiana);

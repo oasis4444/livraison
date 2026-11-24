@@ -8,6 +8,8 @@ import { hashPassword } from '../src/lib.js';
 
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 const hooks = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => { if (String(url).startsWith('https://vente.test')) { hooks.push({ url, init }); return new Response('ok'); } return realFetch(url, init); };
@@ -155,9 +157,9 @@ test('caisse : remise du livreur puis paiement du vendeur', async () => {
   cash = (await call('GET', '/api/admin/cash', null, admin)).data;
   assert.equal(cash.couriers.length, 0);
   const vendor = cash.vendors.find((x) => x.phone === '+261329999999');
-  assert.equal(vendor.due, 20000 - 3000, 'valeur livrée (CMD-1) − frais de retour (CMD-3 annulé après récupération)');
+  assert.equal(vendor.due, 20000 - 1500, 'valeur livrée (CMD-1) − frais de retour (CMD-3 annulé après récupération : 50 % des frais)');
   const pay = await call('POST', `/api/admin/vendors/${vendor.id}/pay`, {}, admin);
-  assert.equal(pay.data.amount, 17000);
+  assert.equal(pay.data.amount, 18500);
   assert.equal((await call('GET', '/api/shipments/balance', null, vendorTok)).data.due, 0);
   assert.equal((await call('POST', `/api/admin/vendors/${vendor.id}/pay`, {}, admin)).status, 409);
 });
@@ -174,7 +176,7 @@ test('centre : attribution manuelle, frais, export', async () => {
   const base = { pickup_addr: 'Chez moi, Analakely', pickup_lat: ANALAKELY.lat, pickup_lng: ANALAKELY.lng, recipient_name: 'Koto', recipient_phone: '0347777777', drop_addr: 'Behoririka', drop_lat: BEHORIRIKA.lat, drop_lng: BEHORIRIKA.lng, declared_value: 5000 };
   // depuis l'application : contenu et taille obligatoires
   assert.match((await call('POST', '/api/shipments', base, recipient)).data.message, /contient/);
-  assert.match((await call('POST', '/api/shipments', { ...base, description: 'Chaussures' }, recipient)).data.message, /taille/);
+  assert.match((await call('POST', '/api/shipments', { ...base, description: 'Chaussures' }, recipient)).data.message, /catégorie/);
   assert.equal((await call('POST', '/api/shipments', { ...base, description: 'Chaussures', size: '30x20' }, recipient)).status, 400, '3 mesures');
   const c = await call('POST', '/api/shipments', { ...base, description: 'Chaussures', size: '30 x 20 x 12', weight: 1.5 }, recipient);
   assert.deepEqual(c.data.shipment.size, { l: 30, w: 20, h: 12 }); assert.equal(c.data.shipment.weight_kg, 1.5); assert.equal(c.data.shipment.contents, 'Chaussures');

@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql); // répartition par l'admin (réglage par défaut)
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = '0' WHERE key = 'direct_km';"); // répartition par l'admin (réglage par défaut), tarif normal
 
 const LEAFLET_STUB = `
 (() => {
@@ -88,7 +88,14 @@ try {
     // créneaux : récupération au plus tôt, livraison au plus tard le créneau suivant
     await client.waitForFunction(() => document.querySelectorAll('[data-pw] option').length >= 3 && document.querySelector('[data-dw2] option'));
     if (!/plus tôt/.test(await client.textContent('[data-pw] option'))) throw new Error('créneau de récupération');
-    await client.fill('[data-d]', 'Sac de riz'); await client.click('[data-sz^="45|"]');
+    await client.fill('[data-d]', 'Sac de riz');
+    // catégorie L : moto, +3 000, récupération L/XL +2 000 (ou dépôt au centre) ; options fragile / express
+    await client.click('[data-cat=L]'); await client.waitForSelector('.modal [data-large]:not(.hidden)');
+    await client.waitForSelector('[data-q] >> text=Récupération (L/XL)');
+    await client.click('[data-cond]'); await client.waitForSelector('text=Conditions de transport >> nth=-1'); await client.waitForSelector('td >> text=sac de riz');
+    await client.screenshot({ path: 'tests/screens/40b-conditions-transport.png' });
+    await client.click('.modal-back >> nth=-1 >> [data-x]');
+    await client.click('[data-cat=M]'); // le livreur de ce test est à vélo : catégorie M
     await client.click('[data-pv=mm]');
     if (await client.locator('[data-pref]').count()) throw new Error('pas de référence Mobile Money à saisir');
     await client.check('[data-prov]');
@@ -163,17 +170,18 @@ try {
     if (after.review || after.fee !== 6000) throw new Error('validation : ' + JSON.stringify({ review: after.review, fee: after.fee }));
   });
   await step('livreur : récupère puis remet à la coopérative (véhicule, frais PA)', async () => {
-    await courier.click(`[data-act=ship][data-ref="${ref}"]`);
-    await courier.click('text=📦 Récupérer');
+    await courier.click(`[data-act=ship][data-ref="${ref}"] [data-act=next]`);
     await courier.setInputFiles('[data-file]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('[data-prev][src^="data:image"]');
     await courier.waitForSelector('[data-tot] >> text=rien à encaisser');
     await courier.click('.modal [data-ok]');
     await courier.waitForSelector('.modal [data-later]'); await courier.click('.modal [data-later]');
-    await courier.click(`[data-act=ship][data-ref="${ref}"]`);
-    await courier.click('text=Remettre à la coopérative');
+    await courier.click(`[data-act=ship][data-ref="${ref}"] [data-act=next]`);
     await courier.setInputFiles('.modal [data-dphoto]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('[data-dprev][src^="data:image"]');
     await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Indiquez le véhicule');
     await courier.fill('.modal [data-plate]', '1234 TBA'); await courier.fill('.modal [data-dphone]', '034 66 666 66'); await courier.fill('.modal [data-cfee]', '15000');
+    // code du colis exigé : mauvais code refusé, puis les 4 derniers caractères
+    await courier.fill('.modal [data-code]', 'ZZZZ'); await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Ce n\'est pas le bon colis');
+    await courier.fill('.modal [data-code]', ref.slice(-4).toLowerCase());
     await courier.screenshot({ path: 'tests/screens/44-livreur-cooperative.png' });
     await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Remis à la coopérative ✅');
     const s = (await api('GET', '/api/admin/shipments?status=delivered', null, auth(tok.admin))).data.shipments?.find((x) => x.ref === ref);

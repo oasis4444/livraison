@@ -8,6 +8,7 @@ import { registerTsenaRoutes, syncTsena } from './tsena.js';
 import { registerTripRoutes, rateLimit, purgeLogs, nearest, simplify } from './trips.js';
 import { validHHMM } from './rules.js';
 import { registerSupportRoutes } from './support.js';
+import { registerSmsRoutes } from './sms.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -799,7 +800,9 @@ async function adminSettingsGet(ctx, env) {
 
 const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per_km', 'min_price', 'road_factor', 'request_radius_km', 'request_ttl_min',
   'bike_speed_kmh', 'moto_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m',
-  'max_value', 'bike_max_kg', 'moto_max_kg', 'weight_free_kg', 'weight_step_kg', 'weight_step_fee', 'share_t1_max', 'share_t1', 'share_t2_max', 'share_t2', 'share_t3'];
+  'max_value', 'bike_max_kg', 'moto_max_kg', 'weight_free_kg', 'weight_step_kg', 'weight_step_fee', 'share_t1_max', 'share_t1', 'share_t2_max', 'share_t2', 'share_t3',
+  'cat_s_kg', 'cat_s_cm', 'cat_s_fee', 'cat_m_kg', 'cat_m_cm', 'cat_m_fee', 'cat_l_kg', 'cat_l_cm', 'cat_l_fee', 'pickup_fee_large', 'opt_fragile', 'opt_express', 'opt_wait',
+  'return_fee_percent', 'direct_km', 'direct_fee', 'late_hours', 'cash_cap', 'cash_cap_hours'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
   const stmts = [];
@@ -810,7 +813,9 @@ async function adminSettingsPut(ctx, env) {
     if (k === 'commission_mode' && !['percent', 'subscription'].includes(val)) fail(400, 'invalid', 'Mode de commission invalide');
     if (k === 'courier_can_edit_fee') val = val === '1' || val === 'true' ? '1' : '0';
     if (k === 'commission_percent' && Number(val) > 50) fail(400, 'invalid', 'Commission maximum 50 %');
-    if (['delivery_photo_required', 'relay_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
+    if (['delivery_photo_required', 'relay_enabled', 'scan_required', 'sms_enabled'].includes(k)) val = val === '1' || val === 'true' ? '1' : '0';
+    if (['sms_gateway_url', 'public_url'].includes(k) && val && !/^https:\/\//.test(val)) fail(400, 'invalid', 'Adresse invalide (https://…)');
+    if (k === 'return_fee_percent' && Number(val) > 100) fail(400, 'invalid', 'Pourcentage maximum 100');
     if (k === 'dispatch_mode' && !['admin', 'auto'].includes(val)) fail(400, 'invalid', 'Mode de répartition invalide');
     if (['am_start', 'am_end', 'pm_start', 'pm_end'].includes(k) && !validHHMM(val)) fail(400, 'invalid', `Heure invalide pour ${k} (format 08:00)`);
     stmts.push(q(env, 'UPDATE settings SET value = ? WHERE key = ?', val, k));
@@ -1109,6 +1114,7 @@ registerShipmentRoutes(route);
 registerTsenaRoutes(route);
 registerTripRoutes(route);
 registerSupportRoutes(route);
+registerSmsRoutes(route);
 
 // API publique v1 : appelée par les logiciels de vente (souvent côté serveur, CORS ouvert pour les intégrations web).
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, Idempotency-Key', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400' };
@@ -1165,7 +1171,7 @@ export default {
   // Chaque minute : synchronisation Tsena ; une fois par heure : maintenance.
   async scheduled(event, env, ctx) {
     ctx.waitUntil(syncTsena(env).catch((e) => console.error('tsena', e))
-      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env)).catch((e) => console.error('reassign', e)));
+      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env).then(() => m.alertLate(env))).catch((e) => console.error('reassign', e)));
     if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() === 17) ctx.waitUntil(maintenance(env));
   },
 };

@@ -13,7 +13,7 @@ const server = spawn('node', ['--no-warnings', 'tools/dev-server.mjs'], { env: {
 await new Promise((r) => setTimeout(r, 1200));
 const sql = execFileSync('node', ['tools/create-admin.mjs', '0340000000', 'Admin Alefa', 'admin12345']).toString();
 const { DatabaseSync } = await import('node:sqlite');
-new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode';"); // parcours historique : attribution automatique
+new DatabaseSync(DB).exec(sql + "\nUPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'; UPDATE settings SET value = '0' WHERE key IN ('direct_km', 'scan_required');"); // parcours historique : attribution automatique
 
 const LEAFLET_STUB = `
 (() => {
@@ -113,9 +113,11 @@ try {
     if (await client.locator('[data-dep]').count()) throw new Error('le client ne doit pas choisir le départ');
     // contenu et taille obligatoires
     await client.click('.modal [data-ok]'); await client.waitForSelector('text=Indiquez ce que contient le colis');
-    await client.fill('[data-d]', 'Chaussures'); await client.click('[data-sz^="30|"]');
-    if (await client.inputValue('[data-dl]') !== '30') throw new Error('taille M non remplie');
-    await client.fill('[data-kg]', '1,2');
+    await client.fill('[data-d]', 'Chaussures');
+    await client.click('.modal [data-ok]'); await client.waitForSelector('text=Choisissez la catégorie du colis');
+    // catégorie S/M/L/XL avec gros boutons (exemples, limites, supplément) ; taille et poids exacts facultatifs
+    await client.click('[data-cat=M]'); await client.waitForSelector('[data-q] >> text=Catégorie M');
+    await client.click('details summary'); await client.fill('[data-kg]', '1,2');
     await client.screenshot({ path: 'tests/screens/24-client-envoi.png' });
     await client.click('.modal [data-ok]'); await client.waitForSelector('text=Code à transmettre au destinataire');
     await client.click('.modal-back [data-x]');
@@ -125,6 +127,7 @@ try {
     await client.waitForSelector('text=Commande reçue du logiciel de vente');
     await client.waitForSelector('[data-s=drop] button');
     await client.click('[data-s=drop] button >> nth=0'); await client.waitForSelector('[data-qok]');
+    await client.click('[data-cat=S]');
     await client.screenshot({ path: 'tests/screens/32-lien-alefa.png' });
     await client.click('.modal [data-ok]'); await client.waitForSelector('.pin-box');
     await client.click('.modal-back [data-x]');
@@ -181,19 +184,20 @@ try {
   });
   await step('livreur : récupère (photo + valeur) puis livre', async () => {
     await courier.waitForSelector('[data-ext="CMD-1042"]');
-    await courier.click('[data-act=ship][data-ext="CMD-1042"]');
-    await courier.click('text=📦 Récupérer');
+    // « Ma tournée du jour » : gros bouton de l'étape suivante
+    await courier.waitForSelector('text=Ma tournée du jour');
+    await courier.click('[data-act=ship][data-ext="CMD-1042"] [data-act=next]');
     await courier.setInputFiles('[data-file]', 'tests/fixture-colis.jpg');
     await courier.waitForSelector('[data-prev][src^="data:image"]');
     await courier.fill('.modal [data-v]', '25000');
     await courier.screenshot({ path: 'tests/screens/25-livreur-recuperation.png' });
-    await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=À livrer');
+    await courier.click('.modal [data-ok]'); await courier.waitForSelector('[data-ext="CMD-1042"] [data-act=next] >> text=Livré');
     // le destinataire n'a pas de compte : on propose tout de suite au livreur de lui envoyer le lien
     await courier.waitForSelector('text=Envoyer le lien au destinataire');
     const sms = await courier.getAttribute('.modal a[href^="sms:"]', 'href'); if (!/suivi%2F[0-9a-f]{24}|suivi\/[0-9a-f]{24}/.test(decodeURIComponent(sms))) throw new Error('lien SMS : ' + sms);
     await courier.screenshot({ path: 'tests/screens/26-livreur-lien-destinataire.png' });
     await courier.click('.modal [data-later]');
-    await courier.click('[data-act=ship][data-ext="CMD-1042"]');
+    await courier.click('[data-act=ship][data-ext="CMD-1042"] .small.muted >> nth=0');
     await courier.waitForSelector('[data-ph][src^="blob:"]');
     const pin = await client.evaluate(() => fetch('/api/shipments', { headers: { authorization: 'Bearer ' + localStorage.getItem('alefa_token') } }).then((r) => r.json()).then((j) => j.shipments.find((x) => x.external_ref === 'CMD-1042').delivery_pin));
     await client.waitForSelector(`text=🔑 ${pin}`);
@@ -258,9 +262,13 @@ try {
       const r = await fetch(`/api/shipments/${s.id}/pickup`, { method: 'POST', headers: h, body: JSON.stringify({ value: 5000, photo }) }); if (!r.ok) throw new Error(await r.text());
       return s.id;
     }, { photo });
-    await courier.click('[data-t=colis]'); await courier.click(`[data-act=ship][data-id="${id}"]`);
-    await courier.click('button:has-text("Livré et payé")'); await courier.waitForSelector('text=appuyer sur « J\'ai reçu »');
-    await p.reload(); await p.click('[data-recv]'); await p.waitForSelector('text=Le code a été transmis au livreur');
+    await courier.click('[data-t=colis]'); await courier.click(`[data-act=ship][data-id="${id}"] [data-act=next]`); await courier.waitForSelector('text=appuyer sur « J\'ai reçu »');
+    await p.reload();
+    // frise horodatée, montant en gros, code à donner, appeler le livreur, changer l'heure, âge de la position
+    for (const t of ['Commande reçue', 'Récupéré chez l\'expéditeur', 'En livraison', 'À payer au livreur', 'Code à donner au livreur', 'Appeler le livreur', 'changer l\'heure']) await p.waitForSelector(`text=${t}`);
+    await p.screenshot({ path: 'tests/screens/31b-suivi-en-route.png' });
+    await p.click('[data-resched]'); await p.click('[data-w] >> nth=0'); await p.waitForSelector('text=Livraison prévue');
+    await p.click('[data-recv]'); await p.waitForSelector('text=Le code a été transmis au livreur');
     await p.screenshot({ path: 'tests/screens/31-suivi-public.png' });
     await courier.waitForSelector('text=Le client a confirmé — code reçu', { timeout: 10000 });
     const pin = await courier.inputValue('[data-pin]'); if (!/^\d{4}$/.test(pin)) throw new Error('code non reçu : ' + pin);
@@ -290,8 +298,12 @@ try {
     const photo = 'data:image/jpeg;base64,' + (await import('node:fs')).readFileSync('tests/fixture-colis.jpg').toString('base64');
     await courier.evaluate(async ({ id, photo }) => { const h = { authorization: 'Bearer ' + localStorage.getItem('alefa_token_livreur'), 'content-type': 'application/json' };
       await fetch(`/api/shipments/${id}/accept`, { method: 'POST', headers: h, body: '{}' }); const r = await fetch(`/api/shipments/${id}/pickup`, { method: 'POST', headers: h, body: JSON.stringify({ value: 12000, photo }) }); if (!r.ok) throw new Error(await r.text()); }, { id: koto.id, photo });
-    await courier.click('[data-t=colis]'); await courier.waitForSelector('text=À déposer au centre');
-    await courier.click(`[data-act=ship][data-id="${koto.id}"]`); await courier.click('text=Déposé au centre');
+    await courier.click('[data-t=colis]'); await courier.waitForSelector(`[data-act=ship][data-id="${koto.id}"] [data-act=next] >> text=Déposé au centre`);
+    await courier.click(`[data-act=ship][data-id="${koto.id}"] [data-act=next]`);
+    // preuve au centre : photo obligatoire
+    await courier.click('.modal [data-ok]'); await courier.waitForSelector('text=Prenez une photo du colis');
+    await courier.setInputFiles('.modal [data-dphoto]', 'tests/fixture-colis.jpg'); await courier.waitForSelector('.modal [data-dprev][src^="data:image"]');
+    await courier.click('.modal [data-ok]');
     await courier.waitForSelector('.toast >> text=Au centre');
     // le centre remet le colis à Tiana
     await admin.click('[data-v=parcels]'); await admin.click(`tr[data-ref="${koto.ref}"]`); await admin.click('text=Remis à Tiana');

@@ -104,7 +104,7 @@ function renderHome() {
   sheet.classList.remove('collapsed');
   const body = $('#sheet-body');
   const tb = (k, l) => `<button data-act="tab" data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`;
-  const tabs = `<div class="tabs">${tb('colis', '📦 ' + c('colis'))}${tb('home', 'Express')}${tb('history', t('history'))}${tb('fav', '⭐')}</div>`;
+  const tabs = `<div class="tabs">${tb('colis', c('colis'))}${tb('home', 'Express')}${tb('history', t('history'))}${tb('fav', state.lang === 'mg' ? 'Ankafizina' : 'Favoris')}</div>`;
   liveTimer?.stop(); liveTimer = null; clearLive();
   if (tab === 'colis') { body.innerHTML = tabs + '<div data-live></div><div data-colis>…</div>'; liveTimer = every(5000, () => loadColis()); return; }
   if (tab === 'sched') {

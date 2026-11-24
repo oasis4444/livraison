@@ -15,6 +15,8 @@ async function call(method, path, body, token, headers = {}) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 const db = env.DB.raw;
+db.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // tarif normal dans ces tests
+db.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé dans ces tests (testé à part)
 const ST = { am_start: '08:00', am_end: '12:00', pm_start: '13:00', pm_end: '17:00', bike_max_kg: '10', moto_max_kg: '25', weight_free_kg: '5', weight_step_kg: '5', weight_step_fee: '1000',
   share_t1_max: '4000', share_t1: '1000', share_t2_max: '8000', share_t2: '2000', share_t3: '3000' };
 const tana = (d, h, m = 0) => Date.UTC(2026, 10, d, h - 3, m); // heure de Madagascar → ms
@@ -107,12 +109,13 @@ test('plus de 300 000 Ar : envoyé à l\'admin, qui valide ou refuse', async () 
 test('poids : supplément sur les frais, trop lourd pour un vélo → seulement les motos ; > 25 kg → admin', async () => {
   await call('POST', '/api/courier/depart', { to: { address: 'Ankorondrano', ...D }, route: [[-18.9055, 47.5255], [P.lat, P.lng], [D.lat, D.lng]] }, moto);
   let r = await call('POST', '/api/shipments', base({ size: { l: 50, w: 40, h: 30, weight: 12 } }), client);
-  assert.equal(r.data.shipment.fee, 3000 + 2000); assert.equal(r.data.shipment.moto_only, true);
+  // 12 kg → catégorie L : +3 000, récupération L/XL +2 000, moto seulement
+  assert.equal(r.data.shipment.category, 'L'); assert.equal(r.data.shipment.fee, 3000 + 3000 + 2000); assert.equal(r.data.shipment.moto_only, true);
   const id = r.data.shipment.id;
   assert.ok((await call('GET', '/api/courier/run', null, moto)).data.offers.some((o) => o.id === id));
   assert.ok(!(await call('GET', '/api/courier/run', null, velo)).data.offers.some((o) => o.id === id), 'pas proposé au vélo');
   r = await call('POST', '/api/shipments', base({ size: { l: 80, w: 60, h: 50, weight: 30 } }), client);
-  assert.match(r.data.shipment.review, /poids 30 kg > 25 kg/);
+  assert.match(r.data.shipment.review, /catégorie XL \(30 kg\) : devis/);
 });
 
 test('parts : 4 500 Ar → 2 000 au centre ; la récupération est gratuite, le livreur qui livre garde le reste', async () => {

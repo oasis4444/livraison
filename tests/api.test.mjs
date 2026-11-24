@@ -9,6 +9,8 @@ import { hashPassword } from '../src/lib.js';
 const dir = fileURLToPath(new URL('../migrations', import.meta.url));
 const env = { DB: createD1(dir), PBKDF2_ITER: '1000', APP_VERSION: 'test' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 
 async function call(method, path, body, token) {
   const headers = { 'content-type': 'application/json' };

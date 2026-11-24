@@ -230,9 +230,9 @@ export const icons = {
   me: () => icon('<div class="mk-me"></div>', [20, 20]),
   a: () => icon('<div class="mk-pin mk-a"><b>A</b></div>', [34, 34], [17, 34]),
   b: () => icon('<div class="mk-pin mk-b"><b>B</b></div>', [34, 34], [17, 34]),
-  bike: (cls = '', label = '', vehicle) => label
-    ? icon(`<div class="mk-bike ${cls}">${vehIcon(vehicle)}</div><div class="mk-label">${esc(label)}</div>`, [38, 38])
-    : icon(`<div class="mk-bike ${cls}">${vehIcon(vehicle)}</div>`),
+  bike: (cls = '', label = '', vehicle, color = '') => label
+    ? icon(`<div class="mk-bike ${cls}" ${color ? `style="box-shadow:0 0 0 4px ${color}"` : ''}>${vehIcon(vehicle)}</div><div class="mk-label" ${color ? `style="background:${color};color:#fff"` : ''}>${esc(label)}</div>`, [38, 38])
+    : icon(`<div class="mk-bike ${cls}" ${color ? `style="box-shadow:0 0 0 4px ${color}"` : ''}>${vehIcon(vehicle)}</div>`),
   dot: (color, label = '') => icon(`<div class="mk-dot" style="background:${color}"></div>${label ? `<div class="mk-label">${esc(label)}</div>` : ''}`, [16, 16]),
   req: (label) => icon(`<div class="mk-req">${esc(label)}</div>`, [80, 24], [40, 12]),
   sos: () => icon('<div class="mk-sos">!</div>', [30, 30]),
@@ -431,4 +431,24 @@ export async function supportChat(refs = []) {
   const close = m.close; m.close = () => { p.stop(); close(); };
   m.el.closest('.modal-back')?.addEventListener('click', (e) => { if (e.target.matches('[data-x], .modal-back')) p.stop(); });
   return m;
+}
+
+// ---------------------------------------------------------------- étiquette colis : code-barres Code 128 (jeu B) en SVG
+const C128 = ['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232','2331112'];
+export function code128Svg(text, { height = 60, module = 2 } = {}) {
+  const codes = [104, ...[...String(text)].map((ch) => ch.charCodeAt(0) - 32)];
+  const check = codes.reduce((a, c, i) => a + c * (i || 1), 0) % 103;
+  const pattern = [...codes, check, 106].map((c) => C128[c]).join('');
+  let x = 10 * module, bars = '';
+  [...pattern].forEach((w, i) => { const wd = Number(w) * module; if (i % 2 === 0) bars += `<rect x="${x}" y="0" width="${wd}" height="${height}"/>`; x += wd; });
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${x + 10 * module}" height="${height}" viewBox="0 0 ${x + 10 * module} ${height}"><rect width="100%" height="100%" fill="#fff"/><g fill="#000">${bars}</g></svg>`;
+}
+export function printLabel(s) {
+  const w = window.open('', '_blank', 'width=420,height=600');
+  if (!w) return toast('Autorisez les fenêtres pour imprimer l\'étiquette', 'err');
+  w.document.write(`<!doctype html><meta charset="utf-8"><title>Étiquette ${esc(s.ref)}</title><style>body{font-family:system-ui,sans-serif;margin:16px}.l{border:2px solid #000;border-radius:10px;padding:12px;max-width:360px}.c{font-size:44px;font-weight:900;letter-spacing:8px;text-align:center}.s{font-size:13px;margin-top:6px}svg{width:100%;height:70px}</style>
+    <div class="l"><div style="display:flex;justify-content:space-between"><b>ALEFA</b><b>${esc(s.category || '')}${s.fragile ? ' · FRAGILE' : ''}</b></div>${code128Svg(s.ref)}<div class="c">${esc(s.ref.slice(-4))}</div>
+    <div class="s"><b>À :</b> ${esc(s.recipient.name || '')} · ${esc(phoneFmt(s.recipient.phone || ''))}<br>${esc(s.recipient.address)}${s.province ? `<br><b>${esc(s.province.city)}</b> · ${esc(s.province.coop)}` : ''}</div>
+    <div class="s"><b>De :</b> ${esc(s.sender.name || '')} · ${esc(s.sender.address)}</div><div class="s" style="text-align:center">${esc(s.ref)}</div></div><script>setTimeout(()=>print(),300)<\/script>`);
+  w.document.close();
 }

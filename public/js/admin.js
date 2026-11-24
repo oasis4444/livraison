@@ -10,9 +10,9 @@ const liveMk = {};
 let trackLayer = null, axeLayers = [];
 
 const NAV = [
-  ['dash', '📊', 'Tableau de bord'], ['ops', '🚦', 'Suivi des livraisons'], ['live', '🗺️', 'Carte en direct'], ['parcels', '📦', 'Colis (centre)'], ['cash', '💵', 'Caisse & vendeurs'], ['deliveries', '🛵', 'Courses express'], ['couriers', '🚲', 'Livreurs'], ['axes', '🧭', 'Axes & planning'],
-  ['clients', '👥', 'Clients'], ['payments', '💰', 'Paiements & soldes'], ['support', '💬', 'Service client'], ['complaints', '⚠️', 'Réclamations & SOS'], ['reports', '📈', 'Rapports'],
-  ['api', '🔌', 'Logiciels de vente'], ['settings', '⚙️', 'Paramètres'], ['audit', '🧾', 'Journal'],
+  ['dash', '', 'Tableau de bord'], ['ops', '', 'Suivi des livraisons'], ['live', '', 'Carte en direct'], ['parcels', '', 'Colis'], ['cash', '', 'Caisse & vendeurs'],
+  ['deliveries', '', 'Courses express'], ['couriers', '', 'Livreurs'], ['axes', '', 'Axes & planning'], ['clients', '', 'Clients'], ['payments', '', 'Paiements & soldes'],
+  ['support', '', 'Service client'], ['complaints', '', 'Réclamations & SOS'], ['reports', '', 'Rapports'], ['api', '', 'Logiciels de vente'], ['settings', '', 'Paramètres'], ['audit', '', 'Journal'],
 ];
 
 export async function mount(el) {
@@ -45,7 +45,7 @@ async function refreshCounts() {
   return s;
 }
 function renderNav() {
-  $('#nav').innerHTML = NAV.map(([k, ic, l]) => `<button data-act="nav" data-v="${k}" class="${view === k ? 'on' : ''}">${ic} ${l}${counts[k] ? `<span class="cnt">${counts[k]}</span>` : ''}</button>`).join('');
+  $('#nav').innerHTML = NAV.map(([k, ic, l]) => `<button data-act="nav" data-v="${k}" class="${view === k ? 'on' : ''}">${ic ? ic + ' ' : ''}${l}${counts[k] ? `<span class="cnt">${counts[k]}</span>` : ''}</button>`).join('');
 }
 function head(title, extra = '') {
   return `<div class="main-head"><div class="row"><button class="icon-btn mobile-nav" data-act="menu">☰</button><h1>${title}</h1></div><div class="row wrap no-print">${extra}<button class="icon-btn" data-act="notifs">🔔<span class="badge-dot hidden" data-unread></span></button></div></div>`;
@@ -81,6 +81,7 @@ const opsGroup = (p) => {
 };
 
 let supportOpen = null, supportPanel = null;
+const agoTxt = (t) => { const m = Math.max(0, Math.round((Date.now() - t) / 60e3)); return m < 60 ? `${m} min` : m < 2880 ? `${Math.floor(m / 60)} h` : `${Math.floor(m / 1440)} j`; };
 const VIEWS = {
   async support() {
     const r = await api('GET', '/api/admin/support');
@@ -133,7 +134,7 @@ const VIEWS = {
     const win = (w) => (w ? `${time(w[0])}–${time(w[1])}${new Date(w[0]).toDateString() !== new Date().toDateString() ? ` (${new Date(w[0]).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })})` : ''}` : '');
     const draw = () => {
       if (!data || !liveMap) return;
-      const ps = data.parcels.filter(match);
+      const ps = data.parcels.filter(match).sort((a, b) => (b.late ? 1 : 0) - (a.late ? 1 : 0)); // en retard : en rouge, en haut
       // compteurs par étape (avec les autres filtres)
       const save = opsF.step;
       for (const [k] of OPS_STEPS) { opsF.step = k; const n = data.parcels.filter(match).length; const el = $(`[data-cnt="${k}"]`); if (el) el.textContent = n || ''; }
@@ -174,8 +175,9 @@ const VIEWS = {
       // liste
       $('[data-ops-list]').innerHTML = ps.length ? ps.map((p) => {
         const g = opsGroup(p);
-        return `<div class="card" data-act="parcel" data-id="${p.id}" data-ref="${esc(p.ref)}" style="cursor:pointer;margin-bottom:6px">
-          <div class="row between small"><span class="muted">${dt(p.created_at)}</span><span class="pill ${g === 'done' ? '' : g === 'review' ? 'warn' : 'live'}">${esc(p.step_label)}</span></div>
+        return `<div class="card" data-act="parcel" data-id="${p.id}" data-ref="${esc(p.ref)}" style="cursor:pointer;margin-bottom:6px;${p.late ? 'border:2px solid var(--red);background:#fdf1f1' : ''}">
+          ${p.late ? `<div class="tiny" style="color:var(--red);font-weight:700">⏰ En retard : ${esc(p.late)}</div>` : ''}
+          <div class="row between small"><span class="muted">${p.category ? `<b>${esc(p.category)}</b> · ` : ''}${g !== 'done' && p.since ? `depuis ${agoTxt(p.since)}` : dt(p.created_at)}</span><span class="pill ${g === 'done' ? '' : g === 'review' ? 'warn' : 'live'}">${esc(p.step_label)}</span></div>
           <div class="tiny" style="line-height:1.45">🟢 <b>${esc(p.sender)}</b>${p.sender_phone ? ` · <a href="tel:${esc(p.sender_phone)}">📞 ${esc(phoneFmt(p.sender_phone))}</a>` : ''}<br><span class="muted">${esc(p.pickup_addr)}</span><br>
             🟠 <b>${esc(p.recipient)}</b>${p.recipient_phone ? ` · <a href="tel:${esc(p.recipient_phone)}">📞 ${esc(phoneFmt(p.recipient_phone))}</a>` : ''}<br><span class="muted">${esc(p.drop_addr)}</span>${p.province ? ` · 🚌 ${esc(p.province)}` : ''}</div>
           <div class="tiny muted">${p.courier ? `🚲 <b>${esc(p.courier)}</b>${p.courier_phone ? ` · <a href="tel:${esc(p.courier_phone)}">📞 ${esc(phoneFmt(p.courier_phone))}</a>` : ''}` : '<span style="color:var(--orange)">sans livreur</span>'}${['todo', 'pickup', 'review'].includes(g) && p.windows ? ` · 🕘 ${win(p.windows.pickup)}` : g !== 'done' && p.windows ? ` · 🏁 ${win(p.windows.delivery)}` : ''} · ${ar(p.value || 0)}${p.value_paid ? ' 📱' : ''} · frais ${ar(p.fee)}${p.review ? ` · ⚠️ ${esc(p.review)}` : ''}</div></div>`;
@@ -187,7 +189,7 @@ const VIEWS = {
         return `<tr><td>${vehIcon(c.vehicle)} <b>${esc(c.name)}</b> ${c.online ? '🟢' : '⚪'}${c.run ? `<div class="tiny muted">🚀 → ${esc(c.run.to)}</div>` : ''}</td>
           <td>${st.picked || 0}</td><td>${st.delivered || 0}</td><td>${ar(st.picked_value || 0)}</td><td>${ar(st.delivered_value || 0)}</td><td>${ar(st.fees || 0)}</td>
           <td>${ar(st.centre_share || 0)}</td><td>${ar(st.courier_share || 0)}</td><td>${st.unpaid ? `<b style="color:var(--orange)">${st.unpaid}</b>` : '✅ 0'}</td>
-          <td><b style="color:${c.due > 0 ? 'var(--orange)' : c.due < 0 ? 'var(--green)' : 'inherit'}">${ar(c.due)}</b></td>
+          <td><b style="color:${c.due > 0 ? 'var(--orange)' : c.due < 0 ? 'var(--green)' : 'inherit'}">${ar(c.due)}</b>${c.due > 0 && c.due_since ? `<div class="tiny" style="color:${c.blocked ? 'var(--red)' : 'var(--muted)'}">depuis ${agoTxt(c.due_since)}${c.blocked ? ' · bloqué' : ''}</div>` : ''}</td>
           <td style="white-space:nowrap"><button class="btn sm" data-act="opsc" data-id="${c.id}">🔎</button> <a class="btn sm" href="tel:${esc(c.phone)}">📞</a></td></tr>`;
       }).join('') || '<tr><td colspan="11" class="muted">Aucun livreur.</td></tr>';
     };
@@ -271,7 +273,7 @@ const VIEWS = {
         if (!c.available && !busy && stale) continue;
         pos[c.id] = [c.lat, c.lng];
         keep.add('c' + c.id);
-        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : busy ? 'busy' : '', c.name.split(' ')[0], c.vehicle), { refreshIcon: true, zIndexOffset: 1000 })
+        upsertMarker(liveMap, liveMk, 'c' + c.id, [c.lat, c.lng], icons.bike(stale ? 'stale' : busy ? 'busy' : '', c.name.split(' ')[0], c.vehicle, colorOf(c.id)), { refreshIcon: true, zIndexOffset: 1000 })
           ?.bindTooltip(`<b>${esc(c.name)}</b> · ${esc(phoneFmt(c.phone))}<br>${c.delivery_id ? `Course #${c.delivery_id}` : busy ? 'Colis en cours' : 'Disponible'}${c.axe ? ` · 🧭 ${esc(c.axe)}` : ''}<br>${stale ? '⚠ GPS perdu — ' : ''}Vu à ${time(c.last_seen)}`)
           .off('click').on('click', () => courierTrack(c));
         // chemin parcouru (mis à jour en continu)
@@ -297,7 +299,7 @@ const VIEWS = {
         const target = toPickup ? p.pickup : p.drop;
         if (!target) continue;
         keep.add('p' + p.id);
-        upsertMarker(liveMap, liveMk, 'p' + p.id, target, icons.dot(toPickup ? '#0b6e4f' : '#e8890c', p.ref), { refreshIcon: true })
+        upsertMarker(liveMap, liveMk, 'p' + p.id, target, icons.dot(p.courier_id ? colorOf(p.courier_id) : toPickup ? '#0b6e4f' : '#e8890c', `${toPickup ? '↑' : '↓'} ${(toPickup ? p.sender : p.recipient || '').split(' ')[0]}`), { refreshIcon: true })
           ?.bindTooltip(`<b>${esc(p.ref)}</b> · ${esc(p.step_label)}<br>${toPickup ? '🟢 Récupération' : '🟠 Livraison'} : ${esc(toPickup ? p.pickup_addr : p.drop_addr)}<br>${esc(p.sender)} → ${esc(p.recipient)} · ${ar(p.amount)}${p.courier ? `<br>🚲 ${esc(p.courier)}` : ''}`)
           .off('click').on('click', () => parcelDetail(p.id));
         if (p.courier_id && pos[p.courier_id] && p.step !== 'scheduled') {
@@ -321,9 +323,10 @@ const VIEWS = {
       const icon = (k) => (k === 'shipment' ? '📦' : /sos/.test(k) ? '🚨' : /delivery|offer/.test(k) ? '🛵' : /courier/.test(k) ? '🚲' : /cash|vendor/.test(k) ? '💵' : '👤');
       $('[data-live-list]').innerHTML = `${r.sos.length ? `<h3 style="color:var(--red)">🚨 SOS (${r.sos.length})</h3>${r.sos.map((s) => `<div class="small card" style="border-color:var(--red);margin-bottom:6px">${esc(s.body)}<div class="muted">${dt(s.at)}</div></div>`).join('')}` : ''}
         <h3>🚲 Livreurs en service (${out.length})</h3>
-        ${out.map((c) => { const mine = r.parcels.filter((p) => p.courier_id === c.id && p.step !== 'scheduled'); return `<div class="small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:5px 0;border-bottom:1px solid var(--line)">
-          <div class="row between"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorOf(c.id)}"></span> ${esc(c.name)}</b><span class="muted">${time(c.last_seen)}</span></div>
-          <div class="muted">${c.delivery_id ? `🛵 course #${c.delivery_id}` : ''}${mine.map((p) => `📦 ${esc(p.ref)} ${esc(p.step_label)}`).join(' · ') || (c.axe ? `🧭 ${esc(c.axe)}` : 'disponible')}</div></div>`; }).join('') || '<p class="muted small">Aucun livreur en service.</p>'}
+        ${out.map((c) => { const mine = r.parcels.filter((p) => p.courier_id === c.id); return `<div class="small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:6px 0 6px 8px;border-bottom:1px solid var(--line);border-left:4px solid ${colorOf(c.id)}">
+          <div class="row between"><b>${esc(c.name)}</b><span class="muted">${time(c.last_seen)} · ${mine.length} colis</span></div>
+          ${c.delivery_id ? `<div class="muted">course express #${c.delivery_id}</div>` : ''}
+          ${mine.map((p) => { const up = ['pending', 'scheduled', 'departed', 'at_pickup'].includes(p.step); return `<div class="tiny" style="margin-top:2px"><span style="color:${up ? '#0b6e4f' : '#e8890c'}">●</span> ${esc(p.step_label)} — ${esc((up ? p.pickup_addr : p.drop_addr || '').split(',')[0])} <span class="muted">(${esc(up ? p.sender : p.recipient)})</span></div>`; }).join('') || `<div class="muted tiny">${c.axe ? `axe ${esc(c.axe)}` : 'disponible'}</div>`}</div>`; }).join('') || '<p class="muted small">Aucun livreur en service.</p>'}
         ${(r.trips || []).length ? `<h3 style="margin-top:12px">🛣 Trajets prévus (${r.trips.length})</h3>${r.trips.map((t) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorOf(t.courier_id)}"></span> ${esc(t.courier)}</b> · ${time(t.depart_at)} <span class="muted">${esc(t.from.address.split(',')[0])} → ${esc(t.to.address.split(',')[0])} · ${t.load}/${t.capacity}</span></div>`).join('')}` : ''}
         <h3 style="margin-top:12px">⚡ Mouvements</h3>
         <div class="feed">${r.feed.slice(0, 40).map((f) => `<div><time>${time(f.at)}</time><span>${icon(f.kind)} <b>${esc(f.who)}</b>${f.role ? ` <span class="muted tiny">${{ client: 'client', courier: 'livreur', admin: 'centre' }[f.role] || ''}</span>` : ''} — ${esc(f.text)}</span></div>`).join('') || '<p class="muted small">—</p>'}</div>`;
@@ -430,10 +433,25 @@ const VIEWS = {
           <p class="tiny muted">Récupéré le matin → livré l'après-midi ; récupéré l'après-midi → livré le lendemain matin au plus tard. Le client peut demander un créneau plus tard.</p>
           <div class="row">${f('am_start', 'Matin : début', '', 'text')}${f('am_end', 'Matin : fin', '', 'text')}</div>
           <div class="row">${f('pm_start', 'Après-midi : début', '', 'text')}${f('pm_end', 'Après-midi : fin', '', 'text')}</div></div>
-        <div class="panel stack"><h3>⚖️ Valeur et poids</h3>
-          ${f('max_value', 'Valeur maximale sans validation (Ar)', 'Au-delà, le colis attend la validation de l\'admin')}
-          <div class="row">${f('bike_max_kg', 'Poids max vélo (kg)', 'Au-delà : moto seulement')}${f('moto_max_kg', 'Poids max moto (kg)', 'Au-delà : validation de l\'admin')}</div>
-          <div class="row">${f('weight_free_kg', 'Poids sans supplément (kg)')}${f('weight_step_kg', 'Par tranche de (kg)')}${f('weight_step_fee', 'Supplément par tranche (Ar)')}</div></div>
+        <div class="panel stack"><h3>Conditions de transport</h3>
+          <p class="tiny muted">Catégorie retenue : la plus élevée entre celle choisie par le client, le poids et la plus grande dimension. Le livreur peut la corriger à la récupération (l'expéditeur est prévenu du nouveau prix).</p>
+          ${['s', 'm', 'l'].map((k) => `<div class="row">${f(`cat_${k}_kg`, `${k.toUpperCase()} : jusqu'à (kg)`)}${f(`cat_${k}_cm`, 'jusqu\'à (cm)')}${f(`cat_${k}_fee`, 'supplément (Ar)')}</div>${f(`cat_${k}_ex`, `Exemples ${k.toUpperCase()}`, '', 'text')}`).join('')}
+          ${f('cat_xl_ex', 'XL (au-delà de L) : texte', 'Toujours sur devis (validation de l\'admin)', 'text')}
+          <div class="row">${f('bike_max_kg', 'Poids max vélo (kg)')}${f('moto_max_kg', 'Poids max moto (kg)', 'Au-delà : devis')}</div>
+          ${f('max_value', 'Valeur maximale sans validation (Ar)', 'Au-delà, le colis attend la validation de l\'admin')}</div>
+        <div class="panel stack"><h3>Options et suppléments</h3>
+          <div class="row">${f('opt_fragile', 'Fragile (Ar)')}${f('opt_express', 'Express (Ar)')}${f('opt_wait', 'Attente > 10 min (Ar)')}</div>
+          <div class="row">${f('pickup_fee_large', 'Récupération L / XL (Ar)', 'Gratuite pour S et M ; 0 si déposé au centre')}${f('return_fee_percent', 'Retour à l\'expéditeur (% des frais)')}</div>
+          <div class="row">${f('direct_km', 'Livraison directe : jusqu\'à (km)', 'Récupération et livraison proches : un seul livreur, sans le centre')}${f('direct_fee', 'Tarif direct (Ar)')}</div></div>
+        <div class="panel stack"><h3>Contrôles</h3>
+          <div class="row">${f('late_hours', 'Alerte « sans livreur » après (h)')}${f('cash_cap', 'Plafond d\'argent chez un livreur (Ar)', 'Au-delà : plus de nouvelles missions')}${f('cash_cap_hours', 'Argent gardé au plus (h)')}</div>
+          <label class="field"><span>Code du colis à chaque étape (dépôt au centre, reprise, livraison)</span><select class="input" data-s="scan_required"><option value="1" ${s.scan_required !== '0' ? 'selected' : ''}>Obligatoire (scan de l'étiquette ou 4 caractères)</option><option value="0" ${s.scan_required === '0' ? 'selected' : ''}>Facultatif</option></select></label></div>
+        <div class="panel stack"><h3>SMS automatiques au destinataire</h3>
+          <p class="tiny muted">Lien de suivi à la création, puis « récupéré », « en route » et « livré ». Il faut une passerelle SMS (ex. téléphone Android avec une application « SMS Gateway », ou un opérateur) qui accepte : POST JSON { to, message } avec le jeton en « Authorization: Bearer ».</p>
+          <label class="field"><span>SMS</span><select class="input" data-s="sms_enabled"><option value="0" ${s.sms_enabled !== '1' ? 'selected' : ''}>Désactivés</option><option value="1" ${s.sms_enabled === '1' ? 'selected' : ''}>Activés</option></select></label>
+          ${f('sms_gateway_url', 'Adresse de la passerelle (URL)', '', 'text')}${f('sms_gateway_token', 'Jeton (clé)', '', 'text')}
+          <div class="row">${f('sms_sender', 'Nom d\'expéditeur', '', 'text')}${f('public_url', 'Adresse de l\'application (liens)', '', 'text')}</div>
+          <div class="row"><button class="btn sm" data-act="smstest">Envoyer un SMS de test</button><button class="btn sm" data-act="smslog">Journal des SMS</button></div></div>
         <div class="panel stack"><h3>💵 Part du centre sur les frais</h3>
           <p class="tiny muted">Le reste revient au livreur qui livre ; la récupération est gratuite.</p>
           <div class="row">${f('share_t1_max', 'Frais jusqu\'à (Ar)')}${f('share_t1', '→ part du centre (Ar)')}</div>
@@ -487,7 +505,7 @@ const VIEWS = {
     };
     const person = (p, ic, w) => `<b>${esc(p.name)}</b>${p.phone ? `<div class="tiny"><a href="tel:${esc(p.phone)}" data-stop>📞 ${esc(phoneFmt(p.phone))}</a></div>` : ''}<div class="tiny muted">${ic} ${esc(p.address)}</div>${w ? `<div class="tiny">${w}</div>` : ''}`;
     const win = (w) => `${new Date(w[0]).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${time(w[0])}–${time(w[1])}`;
-    const rows = r.shipments;
+    const rows = [...r.shipments].sort((a, b) => (b.late ? 1 : 0) - (a.late ? 1 : 0)); // colis en retard en haut
     // totaux (utile avec le filtre livreur)
     const del = rows.filter((x) => x.status === 'delivered');
     const tot = { n: rows.length, value: del.reduce((a, x) => a + (x.value || 0), 0), fees: rows.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + x.fee, 0),
@@ -500,14 +518,14 @@ const VIEWS = {
         <input class="input" data-pf="q" placeholder="Réf, nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
       <div class="row wrap small" style="gap:16px;margin:6px 0 10px">${tot.n} colis · valeur livrée <b>${ar(tot.value)}</b> · frais <b>${ar(tot.fees)}</b>${cv && cv !== 'none' ? ` · part du livreur <b>${ar(tot.share)}</b>` : ''} · ${tot.unpaid ? `<span style="color:var(--orange)">❌ ${tot.unpaid} livraison(s) non payée(s)</span>` : '✅ livraisons payées'}</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur</th><th class="num">Frais</th><th>Payé ?</th><th>Statut</th></tr></thead><tbody>
-      ${rows.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}" data-ref="${esc(x.ref)}">
+      ${rows.map((x) => `<tr class="click" data-act="parcel" data-id="${x.id}" data-ref="${esc(x.ref)}" style="${x.late ? 'background:#fdf1f1;box-shadow:inset 4px 0 0 var(--red)' : ''}">
         <td class="small">${person(x.sender, '🟢', x.windows && ['pending', 'assigned'].includes(x.status) ? `🕘 ${win(x.windows.pickup)}` : '')}</td>
         <td class="small">${person(x.recipient, '🟠', x.windows && !['delivered', 'refused', 'cancelled'].includes(x.status) ? `🏁 ${win(x.windows.delivery)}` : '')}${x.province ? `<div class="tiny">🚌 ${esc(x.province.city)} · ${esc(x.province.coop)}</div>` : ''}</td>
         <td class="small">${x.pickup_courier || x.delivery_courier || x.courier
           ? `<div>🟢 Récup. : <b>${esc(x.pickup_courier?.name || x.courier?.name || '—')}</b></div><div>🟠 Livr. : <b>${esc(x.delivery_courier?.name || x.courier?.name || '—')}</b></div>${x.courier?.phone ? `<div class="tiny"><a href="tel:${esc(x.courier.phone)}" data-stop>📞 ${esc(phoneFmt(x.courier.phone))}</a></div>` : ''}`
           : '<span style="color:var(--orange)">Sans livreur</span>'}</td>
         <td class="num">${ar(x.value ?? x.declared_value)}${x.payment?.value_paid ? '<div class="tiny">📱 MM</div>' : ''}</td><td class="num">${ar(x.fee)}${x.collected ? `<div class="tiny muted">encaissé ${ar(x.collected)}</div>` : ''}</td>
-        <td>${money(x)}</td><td>${shipPill(x)}<div class="tiny muted">${dt(x.created_at)}</div>${x.review ? '<div class="tiny" style="color:var(--orange)">⚠️ à valider</div>' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
+        <td>${money(x)}</td><td>${shipPill(x)}<div class="tiny muted">${['pending', 'assigned', 'picked_up'].includes(x.status) && x.since ? `depuis ${agoTxt(x.since)}` : dt(x.created_at)}</div>${x.late ? `<div class="tiny" style="color:var(--red);font-weight:700">⏰ ${esc(x.late)}</div>` : ''}${x.category ? `<div class="tiny">${esc(x.category)}${x.fragile ? ' · fragile' : ''}${x.express ? ' · express' : ''}</div>` : ''}${x.review ? '<div class="tiny" style="color:var(--orange)">⚠️ à valider</div>' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aucun colis</td></tr>'}</tbody></table></div>`;
   },
 
   async cash() {
@@ -515,7 +533,7 @@ const VIEWS = {
     main.innerHTML = head('Caisse & vendeurs') + `
       <p class="small muted">1. Quand le livreur rentre au centre, encaissez l'argent qu'il a collecté. 2. Payez ensuite chaque expéditeur : valeur des colis livrés (argent déjà remis) moins les frais de retour des colis annulés après récupération.</p>
       <div class="grid2"><div class="panel"><h3>💵 Argent à récupérer auprès des livreurs</h3>
-        ${r.couriers.map((x) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.name)}</b><div class="tiny muted">${x.n} colis · ${esc(phoneFmt(x.phone))}</div></span><span><b>${ar(x.cash)}</b> <button class="btn sm primary" data-act="settle" data-id="${x.id}" data-amt="${x.cash}" data-name="${esc(x.name)}">Encaisser</button></span></div>`).join('') || '<p class="muted small">Aucun argent en attente.</p>'}
+        ${r.couriers.map((x) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.name)}</b><div class="tiny muted">${x.n} colis · ${esc(phoneFmt(x.phone))}${x.since && x.cash > 0 ? ` · <span style="color:${Date.now() - x.since > 48 * 3600e3 ? 'var(--red)' : 'inherit'}">argent gardé depuis ${agoTxt(x.since)}</span>` : ''}${x.cash < 0 ? ' · <span style="color:var(--green)">le centre lui doit sa part</span>' : ''}</div></span><span><b>${ar(x.cash)}</b> <button class="btn sm primary" data-act="settle" data-id="${x.id}" data-amt="${x.cash}" data-name="${esc(x.name)}">Encaisser</button></span></div>`).join('') || '<p class="muted small">Aucun argent en attente.</p>'}
         <h3 style="margin-top:16px">Dernières remises</h3>${r.settlements.slice(0, 15).map((x) => `<div class="row between small"><span>${esc(x.name)} · ${x.shipments} colis${x.note ? ` · <span style="color:var(--red)">${esc(x.note)}</span>` : ''}</span><span>${ar(x.amount)} <span class="muted tiny">${dt(x.at)}</span></span></div>`).join('') || '<p class="muted small">—</p>'}</div>
       <div class="panel"><h3>🏪 À payer aux expéditeurs</h3>
         ${r.vendors.map((v) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(v.company || v.name)}</b><div class="tiny muted">${esc(phoneFmt(v.phone))} · ventes ${ar(v.sales)}${v.return_fees ? ` · retours −${ar(v.return_fees)}` : ''}${v.waiting_cash ? ` · ${v.waiting_cash} colis encore chez le livreur` : ''}</div></span>
@@ -740,6 +758,8 @@ const actions = {
     $('[data-glout]').textContent = url; $('[data-gltest]').href = url;
   },
   parcel: (el) => parcelDetail(+el.dataset.id),
+  smstest: async () => { const to = await promptBox('SMS de test', { label: 'Numéro', type: 'tel', placeholder: '034 12 345 67' }); if (!to) return; const r = await api('POST', '/api/admin/sms-test', { to }); toast(r.ok ? 'SMS envoyé' : `Échec : ${r.error || r.status}`, r.ok ? 'ok' : 'err'); },
+  smslog: async () => { const r = await api('GET', '/api/admin/sms-log'); modal('Journal des SMS', `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>À</th><th>Message</th><th>État</th></tr></thead><tbody>${r.sms.map((x) => `<tr><td class="small">${dt(x.at)}</td><td class="small">${esc(phoneFmt(x.to_phone))}</td><td class="small">${esc(x.body)}</td><td class="small">${x.status === 'sent' ? '✅ envoyé' : x.status === 'failed' ? `❌ ${esc(x.error || '')}` : '— désactivé'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Aucun SMS</td></tr>'}</tbody></table></div>`, { wide: true }); },
   sthread: (el) => { supportOpen = +el.dataset.id; show(); },
   opsc: (el) => { opsF.courier = el.dataset.id; sessionStorage.setItem('ops_c', opsF.courier); const s2 = $('[data-oc]'); if (s2) s2.value = opsF.courier; show(); },
   settle: async (el) => {

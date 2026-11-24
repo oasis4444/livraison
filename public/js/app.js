@@ -49,23 +49,54 @@ async function trackView(token) {
   app.innerHTML = `<div style="display:flex;flex-direction:column;height:100dvh;width:100%">
     <div style="padding:12px 16px;display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--line);background:var(--card)"><img src="/icon.svg" alt="" style="width:34px"><div class="grow"><b>Alefa</b> <span class="muted small">${mg ? 'Fanarahana entana' : 'Suivi de colis'}</span><div class="small" data-h>…</div></div>${langSwitch()}</div>
     <div data-map style="flex:1;min-height:300px"></div>
-    <div style="padding:12px 16px;background:var(--card);border-top:1px solid var(--line)" data-info>…</div></div>`;
+    <div style="padding:12px 16px;background:var(--card);border-top:1px solid var(--line);max-height:60vh;overflow:auto" data-info>…</div></div>`;
   bind(app, { lang: (el) => { setLang(el.dataset.l); trackView(token); } });
   const map = core.makeMap(app.querySelector('[data-map]'), { zoom: 13, zoomControl: true });
-  const mk = {}; let fitted = false;
+  const mk = {}; let fitted = false, reschedOpen = false;
   const tick = async () => {
     let r; try { r = await api('GET', `/api/track/${token}`); } catch (e) { app.querySelector('[data-info]').textContent = e.message; return; }
     app.querySelector('[data-h]').innerHTML = `<b>${esc(r.ref)}</b>${r.external_ref ? ` · ${esc(r.external_ref)}` : ''}`;
     const eta = r.eta && !r.confirmed ? Math.max(1, Math.round((r.eta - Date.now()) / 60e3)) : null;
-    app.querySelector('[data-info]').innerHTML = `<div style="font-size:1.15rem"><b>${esc(r.step_label || r.step)}</b></div>
-      ${r.can_confirm ? `<button class="btn primary lg block" data-recv style="margin:8px 0">✅ ${mg ? 'Tonga ny entana — alefaso ny kaody amin\'ny livreur' : 'J\'ai reçu mon colis — envoyer le code au livreur'}</button>` : ''}
+    if (reschedOpen) return; // ne pas effacer le choix d'un nouveau créneau en cours
+    const fmt = (t) => `${new Date(t).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${core.time(t)}`;
+    const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
+    const TL = { received: mg ? 'Voaray ny baiko' : 'Commande reçue', picked: mg ? 'Nalaina tany amin\'ny mpandefa' : 'Récupéré chez l\'expéditeur', centre: mg ? 'Ao amin\'ny centre' : 'Au centre', delivery: mg ? 'Eny an-dalana ho aminao' : 'En livraison', delivered: mg ? 'Tonga' : 'Livré' };
+    const ICON = { received: '✅', picked: '✅', centre: '🏢', delivery: '🚲', delivered: '📦' };
+    const timeline = `<div class="tl" style="display:flex;gap:4px;margin:8px 0;overflow-x:auto">${(r.timeline || []).map((x, i, a) => {
+      const done = !!x.at, next = !done && (i === 0 || a[i - 1].at);
+      return `<div style="flex:1;min-width:64px;text-align:center;opacity:${done ? 1 : next ? .8 : .4}"><div style="font-size:1.3rem">${done ? ICON[x.k] : next ? '⏳' : '○'}</div>
+        <div class="tiny" style="font-weight:${done ? 700 : 400}">${esc(x.k === 'delivered' && x.label.startsWith('Refus') ? x.label : TL[x.k] || x.label)}</div><div class="tiny muted">${done ? fmt(x.at) : ''}</div></div>`;
+    }).join('<div style="align-self:center;color:var(--line)">→</div>')}</div>`;
+    const stale = r.position_at && Date.now() - r.position_at > 2 * 60e3;
+    app.querySelector('[data-info]').innerHTML = `<div style="font-size:1.15rem"><b>${esc(r.step_label || r.step)}</b></div>${timeline}
+      ${r.on_delivery && !r.done_at && !r.province ? `<div class="card" style="background:var(--sun-soft);border:0;text-align:center;margin:6px 0">
+          <div class="small">${mg ? 'Aloa amin\'ny livreur' : 'À payer au livreur'}</div><div style="font-size:2rem;font-weight:900">${core.ar(r.amount_to_pay)}</div>
+          ${r.amount_to_pay ? `<div class="tiny muted">${r.value ? `${mg ? 'entana' : 'marchandise'} ${core.ar(r.value)} + ` : ''}${mg ? 'frais' : 'frais'} ${core.ar(r.fee)}</div>` : `<div class="tiny muted">📱 ${mg ? 'efa voaloa daholo' : 'tout est déjà payé'}</div>`}
+          ${r.pin ? `<div class="small" style="margin-top:8px">${mg ? 'Kaody omena ny livreur' : 'Code à donner au livreur'}</div><div style="font-size:2.4rem;font-weight:900;letter-spacing:.35em">${esc(r.pin)}</div>` : ''}
+          ${r.courier_phone ? `<a class="btn primary lg block" href="tel:${esc(r.courier_phone)}" style="margin-top:8px">📞 ${mg ? 'Antsoy ny livreur' : 'Appeler le livreur'}</a>` : ''}</div>` : ''}
+      ${r.can_confirm ? `<button class="btn primary lg block" data-recv style="margin:8px 0;white-space:normal;line-height:1.3">✅ ${mg ? 'Tonga ny entana — alefaso ny kaody amin\'ny livreur' : 'J\'ai reçu mon colis — envoyer le code au livreur'}</button>` : ''}
       ${r.confirmed && !r.done_at ? `<div class="small" style="color:var(--green)"><b>✅ ${mg ? 'Voaray ny fanamarinanao, nalefa tany amin\'ny livreur ny kaody' : 'Merci ! Le code a été transmis au livreur'}</b></div>` : ''}
-      ${r.contents || r.size ? `<div class="small muted">📦 ${esc([r.contents, r.size].filter(Boolean).join(' · '))}</div>` : ''}
+      ${r.contents || r.size ? `<div class="small muted">📦 ${esc([r.contents, r.size].filter(Boolean).join(' · '))}${r.category ? ` · ${esc(r.category)}` : ''}${r.fragile ? ' · fragile' : ''}</div>` : ''}
       ${r.province ? `<div class="small">🚌 ${mg ? 'Alefa any' : 'Envoi vers'} <b>${esc(r.province.city)}</b> · ${esc(r.province.coop)}${r.province.plate ? `<br>🚐 ${mg ? 'Fiara' : 'Véhicule'} <b>${esc(r.province.plate)}</b>${r.province.driver_phone ? ` · 📞 <a href="tel:${esc(r.province.driver_phone)}">${esc(core.phoneFmt(r.province.driver_phone))}</a>` : ''} · ${mg ? 'saran-dalana' : 'transport'} <b>${core.ar(r.province.fee || 0)}</b> ${r.province.fee_status === 'pa' ? `<b>PA</b> (${mg ? 'aloa rehefa tonga' : 'à payer à l\'arrivée'})` : `✅ ${mg ? 'efa voaloa' : 'déjà payé'}`}` : ''}</div>`
-        : r.amount_to_pay != null && !r.done_at ? `<div class="small">💵 ${mg ? 'Aloa amin\'ny livreur' : 'À payer au livreur'} : <b>${core.ar(r.amount_to_pay)}</b>${r.value_paid ? ` <span class="muted">(📱 ${mg ? 'efa voaloa daholo' : 'tout est déjà payé'})</span>` : ''}</div>` : ''}
+        : !r.on_delivery && r.amount_to_pay != null && !r.done_at ? `<div class="small">💵 ${mg ? 'Aloa amin\'ny livreur' : 'À payer au livreur'} : <b>${core.ar(r.amount_to_pay)}</b>${r.value_paid ? ` <span class="muted">(📱 ${mg ? 'efa voaloa daholo' : 'tout est déjà payé'})</span>` : ''}</div>` : ''}
       ${r.windows && !r.done_at ? `<div class="small">🏁 ${mg ? 'Ho tonga' : 'Livraison prévue'} : <b>${new Date(r.windows.delivery[0]).toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: '2-digit' })} ${core.time(r.windows.delivery[0])}–${core.time(r.windows.delivery[1])}</b></div>` : ''}
+      ${r.reschedule?.length ? `<button class="btn block" data-resched style="margin-top:6px">🕘 ${mg ? 'Tsy eo aho / hanova ora' : 'Je ne suis pas disponible / changer l\'heure'}</button>` : ''}
       ${r.relay && ['to_centre', 'at_centre'].includes(r.step) ? `<div class="small muted">🏢 ${mg ? 'Mandalo ao amin\'ny centre Alefa ny colis-nao, avy eo livreur iray hafa no hitondra azy any aminao.' : 'Votre colis passe par le centre Alefa, puis un autre livreur vous l\'apporte.'}</div>` : ''}
-      <div class="small muted">${r.courier ? `${core.vehIcon(r.vehicle)} ${esc(r.courier)}` : ''}${eta ? ` · ${mg ? 'Tonga ao anatin\'ny' : 'Arrivée dans'} ~${eta} min` : ''}${!r.position && r.courier && !r.done_at ? ` · ${mg ? 'Mbola tsy hita ny toerany' : 'Position visible pendant la livraison'}` : ''}</div>`;
+      <div class="small muted">${r.courier ? `${core.vehIcon(r.vehicle)} ${esc(r.courier)}` : r.done_at ? '' : (mg ? 'Mbola miandry livreur' : 'Livreur bientôt attribué')}${eta ? ` · ${mg ? 'Tonga ao anatin\'ny' : 'Arrivée dans'} ~${eta} min` : ''}
+        ${r.position_at ? ` · ${mg ? 'toerana' : 'position'} ${mg ? 'tamin\'ny' : 'il y a'} ${ago(r.position_at)}${stale ? ` <span style="color:var(--orange)">(${mg ? 'mety tsy misy réseau ny livreur' : 'le livreur a peut-être perdu le réseau'})</span>` : ''}` : ''}</div>`;
+    const rs = app.querySelector('[data-resched]');
+    if (rs) rs.onclick = () => {
+      reschedOpen = true;
+      const box = document.createElement('div');
+      box.className = 'card stack'; box.style.marginTop = '6px';
+      box.innerHTML = `<b class="small">${mg ? 'Safidio ny ora mety aminao' : 'Choisissez un créneau qui vous convient'}</b>${r.reschedule.map((w) => `<button class="btn block" data-w="${w.from}">${new Date(w.from).toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' })} · ${core.time(w.from)}–${core.time(w.to)}</button>`).join('')}<button class="btn ghost block" data-wx>${mg ? 'Hiverina' : 'Annuler'}</button>`;
+      rs.replaceWith(box);
+      box.onclick = async (e) => {
+        if (e.target.closest('[data-wx]')) { reschedOpen = false; return tick(); }
+        const b = e.target.closest('[data-w]'); if (!b) return;
+        try { await api('POST', `/api/track/${token}/reschedule`, { deliver_at: Number(b.dataset.w) }); reschedOpen = false; await tick(); } catch (err) { box.insertAdjacentHTML('beforeend', `<div class="small" style="color:var(--red)">${esc(err.message)}</div>`); }
+      };
+    };
     const rb = app.querySelector('[data-recv]');
     if (rb) rb.onclick = async () => {
       rb.disabled = true;

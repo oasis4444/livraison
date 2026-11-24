@@ -133,7 +133,7 @@ async function cancelTrip(ctx, env) {
 
 // ---------------------------------------------------------------- suivi public (lien envoyé au destinataire / logiciel de vente)
 async function trackPublic(ctx, env) {
-  const s = await one(env, `SELECT s.*, u.name AS courier_name, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen, c.vehicle
+  const s = await one(env, `SELECT s.*, u.name AS courier_name, u.phone AS courier_phone, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen, c.vehicle
     FROM shipments s LEFT JOIN users u ON u.id = s.courier_id LEFT JOIN couriers c ON c.user_id = s.courier_id WHERE s.track_token = ?`, ctx.params.ref);
   if (!s) fail(404, 'not_found', 'Lien de suivi invalide');
   const { stepOf, STEP_LABELS } = await import('./shipments.js');
@@ -146,16 +146,55 @@ async function trackPublic(ctx, env) {
       : haversineKm(s.clat, s.clng, s.drop_lat, s.drop_lng)) * 1.3;
     eta = now() + Math.round((km / speedKmh(await settings(env), s.vehicle)) * 60 + (s.status === 'assigned' ? 5 : 0)) * 60e3;
   }
+  // Le livreur n'est montré qu'après sa confirmation ; son téléphone et le code quand il est en route vers le destinataire.
+  const confirmed = !!s.accepted_at || !!s.stage || ['picked_up', 'delivered', 'refused'].includes(s.status);
+  const onDelivery = s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at));
+  const ev = await all(env, "SELECT status, MIN(at) AS at FROM shipment_events WHERE shipment_id = ? AND status IN ('en_route','centre_out','nearby') GROUP BY status", s.id);
+  const evAt = (k) => ev.find((e) => e.status === k)?.at ?? null;
+  const timeline = [
+    { k: 'received', label: 'Commande reçue', at: s.created_at },
+    { k: 'picked', label: 'Récupéré chez l\'expéditeur', at: s.picked_at ?? null },
+    ...(s.relay ? [{ k: 'centre', label: 'Au centre', at: s.centre_in_at ?? null }] : []),
+    { k: 'delivery', label: 'En livraison', at: (s.relay ? s.centre_out_at : evAt('en_route') ?? evAt('nearby') ?? (s.picked_at && !s.relay ? s.picked_at : null)) ?? null },
+    { k: 'delivered', label: s.status === 'refused' ? 'Refusé — retour à l\'expéditeur' : 'Livré', at: ['delivered', 'refused'].includes(s.status) ? s.done_at : null },
+  ];
+  const st = await settings(env);
+  const { nextWindows } = await import('./rules.js');
+  const canResched = !['delivered', 'refused', 'cancelled'].includes(s.status) && !s.courier_confirmed_at && !s.express;
+  const opts = canResched ? nextWindows(st, Math.max(now(), s.pickup_to || 0), 6) : [];
   return json({ ref: s.ref, external_ref: s.external_ref, step, step_label: STEP_LABELS[step], recipient: s.recipient_name.split(' ')[0], drop: s.drop_lat != null ? [s.drop_lat, s.drop_lng] : null,
-    pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: s.courier_name ? s.courier_name.split(' ')[0] : null, vehicle: s.courier_name ? (s.vehicle || 'velo') : null,
+    pickup: s.pickup_lat != null ? [s.pickup_lat, s.pickup_lng] : null, courier: confirmed && s.courier_name ? s.courier_name.split(' ')[0] : null, vehicle: confirmed && s.courier_name ? (s.vehicle || 'velo') : null,
+    courier_phone: confirmed && onDelivery ? s.courier_phone : null, pin: onDelivery && !s.courier_confirmed_at ? s.pin : null, on_delivery: onDelivery, timeline,
+    reschedule: opts.map((w) => ({ from: w.from, to: w.to, part: w.part })), category: s.category, fragile: !!s.fragile, express: !!s.express,
     position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at,
     can_confirm: s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at)) && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at,
     relay: !!s.relay, contents: s.description || null, size: s.dim_l ? `${s.dim_l}×${s.dim_w}×${s.dim_h} cm` : null,
     // à payer au livreur : marchandise (sauf si déjà payée par Mobile Money) + frais ; rien pour un envoi en province
-    amount_to_pay: s.province || s.value_paid ? 0 : (s.value ?? s.declared_value) + s.fee, value_paid: !!s.value_paid,
+    amount_to_pay: s.province ? 0 : s.value_paid ? s.wait_fee || 0 : (s.value ?? s.declared_value) + s.fee, value_paid: !!s.value_paid,
+    value: s.province || s.value_paid ? 0 : s.value ?? s.declared_value, fee: s.province || s.value_paid ? s.wait_fee || 0 : s.fee,
     windows: s.deliver_from ? { pickup: [s.pickup_from, s.pickup_to], delivery: [s.deliver_from, s.deliver_to] } : null,
     province: s.province ? { city: s.dest_city, coop: s.coop_name, plate: s.status === 'delivered' || s.courier_confirmed_at ? s.coop_plate : null,
       driver_phone: s.courier_confirmed_at ? s.coop_driver_phone : null, fee: s.courier_confirmed_at ? s.coop_fee : null, fee_status: s.courier_confirmed_at ? s.coop_fee_status : null } : null });
+}
+
+// « Je ne suis pas disponible / changer l'heure » : le destinataire choisit un autre créneau de livraison.
+async function trackReschedule(ctx, env) {
+  const s = await one(env, 'SELECT * FROM shipments WHERE track_token = ?', ctx.params.ref);
+  if (!s) fail(404, 'not_found', 'Lien de suivi invalide');
+  if (['delivered', 'refused', 'cancelled'].includes(s.status) || s.courier_confirmed_at) fail(409, 'too_late', 'Le colis est déjà remis');
+  await rateLimit(env, 'resched' + s.id);
+  const st = await settings(env);
+  const { nextWindows } = await import('./rules.js');
+  const w = nextWindows(st, Math.max(now(), s.pickup_to || 0), 6).find((x) => x.from === Number(ctx.body.deliver_at));
+  if (!w) fail(400, 'invalid', 'Créneau indisponible');
+  await run(env, 'UPDATE shipments SET deliver_from = ?, deliver_to = ? WHERE id = ?', w.from, w.to, s.id);
+  const hm = (t) => new Date(t + 3 * 3600e3).toISOString().slice(11, 16), day = new Date(w.from + 3 * 3600e3).toISOString().slice(5, 10).split('-').reverse().join('/');
+  const note = `Le destinataire n'est pas disponible : nouvelle livraison le ${day} ${hm(w.from)}–${hm(w.to)}`;
+  await run(env, 'INSERT INTO shipment_events (shipment_id, status, note, at) VALUES (?,?,?,?)', s.id, 'rescheduled', note, now());
+  const admins = await all(env, "SELECT id FROM users WHERE role = 'admin' AND status = 'active'");
+  const { notify } = await import('./worker.js');
+  await notify(env, [...admins.map((a) => a.id), s.courier_id, s.sender_id].filter(Boolean), 'shipment', `🕘 ${s.ref} : nouvelle heure de livraison`, note);
+  return json({ ok: true, delivery: [w.from, w.to] });
 }
 
 // « Suivre mon colis » : numéro du colis (ALxxxx) ou de la commande du logiciel de vente (L-00004, C-A0001)
@@ -219,4 +258,5 @@ export function registerTripRoutes(route) {
   route('GET', '/api/track-find', null, trackFind);
   route('GET', '/api/track/:ref', null, trackPublic);
   route('POST', '/api/track/:ref/confirm', null, trackConfirm);
+  route('POST', '/api/track/:ref/reschedule', null, trackReschedule);
 }

@@ -9,6 +9,8 @@ import { hashPassword } from '../src/lib.js';
 
 const env = { DB: createD1(fileURLToPath(new URL('../migrations', import.meta.url))), PBKDF2_ITER: '1000' };
 env.DB.raw.prepare("UPDATE settings SET value = 'auto' WHERE key = 'dispatch_mode'").run(); // ces tests utilisent l'attribution automatique
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'direct_km'").run(); // et le tarif normal (pas de tarif direct)
+env.DB.raw.prepare("UPDATE settings SET value = '0' WHERE key = 'scan_required'").run(); // code colis non exigé (testé à part)
 const fs = { // « Firestore » de Tsena
   d1: { no: 'L-00001', status: 'attente', clientName: 'Hotely Mamy', phone: '033 45 678 90', address: 'Andravoahangy', driver: 'Fidy', fee: 3000, amount: 45000, note: 'Livrer avant 11h' },
   d2: { no: 'L-00002', status: 'cours', clientName: 'Rasoa Hanta', phone: '034 12 345 67', address: 'Ampandrana', fee: 2000, amount: 0 },
