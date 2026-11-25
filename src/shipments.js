@@ -6,6 +6,7 @@ import { q, one, all, run, settings, audit, notify, alertAdmins, inAxe, SLOT_SQL
 import { matchTrip, logSync, nearest, simplify, rateLimit } from './trips.js';
 import { planWindows, nextWindows, centreShare, categoryOf, priceOf, catTable, zoneFee, tooBig } from './rules.js';
 import { smsStep } from './sms.js';
+import { PAYOUT_METHODS, payoutOf, payoutAccounts, savePayoutDetails, payoutDetails } from './payouts.js';
 
 const OPEN = ['pending', 'assigned', 'picked_up'];
 const atCentre = (s) => s.status === 'picked_up' && !!s.relay && !!s.centre_in_at && !s.centre_out_at;
@@ -782,6 +783,83 @@ async function adminCourierStats(ctx, env) {
   const days = int(ctx.url.searchParams.get('days') || 1, { min: 1, max: 366 });
   return json({ days, couriers: await courierStats(env, days) });
 }
+
+// ---------------------------------------------------------------- rapport livreurs (par jour, heure de Madagascar)
+// Pour chaque livreur et chaque jour : colis récupérés, remis (livrés), refusés, argent encaissé, part du centre,
+// part du livreur et ce qu'il doit remettre au centre (déjà remis / reste). Sert à contrôler la caisse du soir.
+const DAY_SQL = (col) => `CAST((${col} + ${H3}) / 86400000 AS INTEGER)`;
+const dayKey = (d) => new Date(d * 864e5).toISOString().slice(0, 10);
+const dayStart = (v, name) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v || ''))) fail(400, 'invalid', `${name} : date invalide (AAAA-MM-JJ)`);
+  return Date.parse(`${v}T00:00:00Z`) - H3;
+};
+const DONE_AT = 'COALESCE(s.courier_confirmed_at, s.done_at)';
+const DONE_ANY = "(s.status IN ('delivered','refused') OR (s.status = 'picked_up' AND s.courier_confirmed_at IS NOT NULL))";
+export async function courierReport(env, { from, to, courierId = null }) {
+  const cf = (col) => (courierId ? ` AND ${col} = ?` : ''), extra = courierId ? [courierId] : [];
+  const picked = await all(env, `SELECT e.user_id AS cid, ${DAY_SQL('e.at')} AS d, COUNT(DISTINCT e.shipment_id) AS n, COALESCE(SUM(COALESCE(s.value, s.declared_value, 0)), 0) AS value
+    FROM shipment_events e JOIN shipments s ON s.id = e.shipment_id
+    WHERE e.status = 'picked_up' AND e.user_id IS NOT NULL AND e.at >= ? AND e.at < ?${cf('e.user_id')} GROUP BY cid, d`, from, to, ...extra);
+  const done = await all(env, `SELECT s.courier_id AS cid, ${DAY_SQL(DONE_AT)} AS d,
+      SUM(CASE WHEN s.status = 'refused' THEN 0 ELSE 1 END) AS delivered, SUM(CASE WHEN s.status = 'refused' THEN 1 ELSE 0 END) AS refused,
+      COALESCE(SUM(CASE WHEN s.status = 'refused' THEN 0 ELSE COALESCE(s.value, s.declared_value, 0) END), 0) AS delivered_value,
+      COALESCE(SUM(s.fee), 0) AS fees, COALESCE(SUM(s.collected), 0) AS collected,
+      COALESCE(SUM(s.centre_share), 0) AS centre_share, COALESCE(SUM(s.courier_share), 0) AS courier_share,
+      COALESCE(SUM(CASE WHEN s.cash_settled_at IS NOT NULL THEN s.collected - COALESCE(s.courier_share, 0) END), 0) AS remitted,
+      COALESCE(SUM(CASE WHEN s.cash_settled_at IS NULL THEN s.collected - COALESCE(s.courier_share, 0) END), 0) AS remaining
+    FROM shipments s WHERE ${DONE_ANY} AND s.courier_id IS NOT NULL AND ${DONE_AT} >= ? AND ${DONE_AT} < ?${cf('s.courier_id')} GROUP BY cid, d`, from, to, ...extra);
+  // frais encaissés à la récupération (marchandise déjà payée par Mobile Money) : à remettre aussi
+  const pfees = await all(env, `SELECT s.pickup_fee_by AS cid, ${DAY_SQL('s.picked_at')} AS d, COALESCE(SUM(s.pickup_fee), 0) AS total,
+      COALESCE(SUM(CASE WHEN s.pickup_fee_settled_at IS NULL THEN s.pickup_fee END), 0) AS remaining
+    FROM shipments s WHERE s.pickup_fee IS NOT NULL AND s.pickup_fee_by IS NOT NULL AND s.picked_at >= ? AND s.picked_at < ?${cf('s.pickup_fee_by')} GROUP BY cid, d`, from, to, ...extra);
+  const ids = [...new Set([...picked, ...done, ...pfees].map((r) => r.cid))].filter(Boolean);
+  const users = ids.length ? await all(env, `SELECT id, name FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const name = (id) => users.find((u) => u.id === id)?.name || `#${id}`;
+  const rows = new Map();
+  const row = (cid, d) => {
+    const k = `${d}:${cid}`;
+    if (!rows.has(k)) rows.set(k, { day: dayKey(d), courier_id: cid, name: name(cid), picked: 0, picked_value: 0, delivered: 0, refused: 0, delivered_value: 0, fees: 0,
+      collected: 0, pickup_fees: 0, centre_share: 0, courier_share: 0, due: 0, remitted: 0, remaining: 0 });
+    return rows.get(k);
+  };
+  for (const r of picked) Object.assign(row(r.cid, r.d), { picked: r.n, picked_value: r.value });
+  for (const r of done) {
+    const x = row(r.cid, r.d);
+    Object.assign(x, { delivered: r.delivered, refused: r.refused, delivered_value: r.delivered_value, fees: r.fees, collected: r.collected, centre_share: r.centre_share, courier_share: r.courier_share });
+    x.remitted += r.remitted; x.remaining += r.remaining;
+  }
+  for (const r of pfees) { const x = row(r.cid, r.d); x.pickup_fees = r.total; x.remitted += r.total - r.remaining; x.remaining += r.remaining; }
+  const list = [...rows.values()].map((x) => ({ ...x, due: x.remitted + x.remaining }))
+    .sort((a, b) => (a.day === b.day ? a.name.localeCompare(b.name, 'fr') : a.day < b.day ? 1 : -1));
+  const KEYS = ['picked', 'picked_value', 'delivered', 'refused', 'delivered_value', 'fees', 'collected', 'pickup_fees', 'centre_share', 'courier_share', 'due', 'remitted', 'remaining'];
+  const totals = Object.fromEntries(KEYS.map((k) => [k, list.reduce((a, x) => a + (x[k] || 0), 0)]));
+  // Vue d'ensemble de la période (tous livreurs) : colis créés, récupérés, livrés, refusés, annulés, encore en cours.
+  const g = await one(env, `SELECT
+      (SELECT COUNT(*) FROM shipments WHERE created_at >= ? AND created_at < ?) AS created,
+      (SELECT COUNT(*) FROM shipments WHERE status = 'cancelled' AND done_at >= ? AND done_at < ?) AS cancelled,
+      (SELECT COUNT(*) FROM shipments WHERE status IN ('pending','assigned','picked_up')) AS open`, from, to, from, to);
+  const open = await all(env, `SELECT courier_id AS cid, COUNT(*) AS n FROM shipments WHERE status IN ('assigned','picked_up') AND courier_id IS NOT NULL${courierId ? ' AND courier_id = ?' : ''} GROUP BY courier_id`, ...extra);
+  return { rows: list, totals, overview: { created: g.created, cancelled: g.cancelled, open: courierId ? (open[0]?.n || 0) : g.open }, open: Object.fromEntries(open.map((r) => [r.cid, r.n])) };
+}
+async function adminCourierReport(ctx, env) {
+  const p = ctx.url.searchParams;
+  const today = new Date(now() + H3).toISOString().slice(0, 10);
+  const fromS = p.get('from') || today, toS = p.get('to') || fromS;
+  const from = dayStart(fromS, 'Du'), to = dayStart(toS, 'Au') + 864e5;
+  if (to <= from) fail(400, 'invalid', 'La date de fin doit être après la date de début');
+  if (to - from > 400 * 864e5) fail(400, 'invalid', 'Période trop longue (400 jours maximum)');
+  const courierId = p.get('courier') ? int(p.get('courier'), { min: 1, name: 'Livreur' }) : null;
+  const r = await courierReport(env, { from, to, courierId });
+  if (p.get('format') === 'csv') {
+    const cols = [['day', 'Jour'], ['name', 'Livreur'], ['picked', 'Récupérés'], ['picked_value', 'Valeur récupérée (Ar)'], ['delivered', 'Livrés'], ['refused', 'Refusés'],
+      ['delivered_value', 'Valeur livrée (Ar)'], ['fees', 'Frais (Ar)'], ['collected', 'Encaissé à la livraison (Ar)'], ['pickup_fees', 'Frais encaissés à la récupération (Ar)'],
+      ['centre_share', 'Part centre (Ar)'], ['courier_share', 'Part livreur (Ar)'], ['due', 'À remettre (Ar)'], ['remitted', 'Déjà remis (Ar)'], ['remaining', 'Reste à remettre (Ar)']].map(([key, label]) => ({ key, label }));
+    const body = csv([...r.rows, { day: 'Total', name: '', ...r.totals }], cols);
+    return new Response('﻿' + body, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="alefa-livreurs-${fromS}_${toS}.csv"` } });
+  }
+  const couriers = await all(env, "SELECT id, name FROM users WHERE role = 'courier' AND status IN ('active','suspended') ORDER BY name");
+  return json({ from: fromS, to: toS, courier: courierId, couriers, ...r });
+}
 async function myStats(ctx, env) {
   return json({ today: (await courierStats(env, 1, ctx.user.id))[0], week: (await courierStats(env, 7, ctx.user.id))[0] });
 }
@@ -1090,7 +1168,9 @@ async function cashOverview(ctx, env) {
     GROUP BY u.id ORDER BY sales DESC`);
   const payouts = await all(env, `SELECT p.*, u.name FROM vendor_payouts p JOIN users u ON u.id = p.user_id ORDER BY p.at DESC LIMIT 50`);
   const settlements = await all(env, `SELECT c.*, u.name FROM cash_settlements c JOIN users u ON u.id = c.courier_id ORDER BY c.at DESC LIMIT 50`);
-  return json({ couriers, vendors: vendors.map((v) => ({ ...v, due: v.sales - v.return_fees - v.province_fees })), payouts, settlements });
+  const accounts = await payoutAccounts(env, vendors.map((v) => v.id)), details = await payoutDetails(env, payouts.map((p) => p.id));
+  return json({ couriers, vendors: vendors.map((v) => ({ ...v, due: v.sales - v.return_fees - v.province_fees, payout: accounts[v.id] || null })),
+    payouts: payouts.map((p) => ({ ...p, detail: details[p.id] || null })), settlements, methods: PAYOUT_METHODS });
 }
 
 // Argent à remettre par chaque livreur : encaissé à la livraison − sa part sur les frais + frais encaissés à la récupération (pas à lui).
@@ -1192,15 +1272,21 @@ async function payVendor(ctx, env) {
     AND ((status = 'delivered' AND cash_settled_at IS NOT NULL) OR (status IN ('cancelled','refused') AND picked_at IS NOT NULL AND return_fee > 0))`, vid);
   if (!rows.length) fail(409, 'nothing', 'Rien à payer pour cet expéditeur');
   const amount = rows.reduce((a, r) => a + (r.status === 'delivered' ? (r.value_paid || r.province ? 0 : r.value || 0) - (r.province ? r.fee : 0) : -(r.return_fee || 0)), 0);
+  // Moyen du versement (MVola, Orange Money, Airtel Money avec la référence de la transaction, ou espèces au centre).
+  // Ancien appel sans moyen (note libre seulement) : accepté tel quel.
+  const pay = ctx.body.method ? payoutOf(ctx.body, { requireRef: amount > 0 }) : null;
+  const local = (ph) => `0${ph.slice(4)}`.replace(/^(\d{3})(\d{2})(\d{3})(\d{2})$/, '$1 $2 $3 $4');
+  const how = pay ? `${PAYOUT_METHODS[pay.method]}${pay.phone ? ` ${local(pay.phone)}` : ''}${pay.reference ? ` · réf. ${pay.reference}` : ''}` : '';
+  const note = [how, str(ctx.body.note, { max: 200 }), `${rows.length} colis`].filter(Boolean).join(' · ');
   const t = now();
-  await env.DB.batch([
+  const res = await env.DB.batch([
+    q(env, 'INSERT INTO vendor_payouts (user_id, amount, note, created_by, at) VALUES (?,?,?,?,?)', vid, amount, note, ctx.user.id, t),
     q(env, `UPDATE shipments SET vendor_paid_at = ? WHERE id IN (${rows.map(() => '?').join(',')})`, t, ...rows.map((r) => r.id)),
-    q(env, 'INSERT INTO vendor_payouts (user_id, amount, note, created_by, at) VALUES (?,?,?,?,?)', vid, amount,
-      str(ctx.body.note, { max: 200 }) || `${rows.length} colis`, ctx.user.id, t),
   ]);
-  await notify(env, [vid], 'payout', '💰 Paiement du centre', `${amount.toLocaleString('fr-FR')} Ar pour ${rows.length} colis`);
-  await audit(env, ctx, 'vendor_pay', { vendor: vid, amount, n: rows.length });
-  return json({ ok: true, amount, shipments: rows.length });
+  if (pay) await savePayoutDetails(env, res[0].meta.last_row_id, pay);
+  await notify(env, [vid], 'payout', '💰 Paiement du centre', `${amount.toLocaleString('fr-FR')} Ar pour ${rows.length} colis${how ? ` · ${how}` : ''}`);
+  await audit(env, ctx, 'vendor_pay', { vendor: vid, amount, n: rows.length, method: pay?.method || null, reference: pay?.reference || null });
+  return json({ ok: true, amount, shipments: rows.length, method: pay?.method || null });
 }
 
 async function myBalance(ctx, env) {
@@ -1572,6 +1658,7 @@ export function registerShipmentRoutes(route) {
   route('POST', '/api/admin/shipments/:id/plan', ['admin'], planLegs);
   route('GET', '/api/admin/shipments/:id/suggest', ['admin'], suggestCouriers);
   route('GET', '/api/admin/courier-stats', ['admin'], adminCourierStats);
+  route('GET', '/api/admin/courier-stats/report', ['admin'], adminCourierReport);
   route('GET', '/api/courier/stats', ['courier'], myStats);
   route('GET', '/api/shipments/:id/delivery-photo', ['admin', 'client', 'courier'], deliveryPhoto);
   route('POST', '/api/shipments/:id/accept', ['courier'], acceptMission);

@@ -113,3 +113,26 @@ test('appel dans la plateforme : sonnerie, réponse, échange réseau, fin', asy
   const cfg = (await call('GET', '/api/calls/config', null, client)).data;
   assert.ok(cfg.iceServers[0].urls.some((u) => u.startsWith('stun:')));
 });
+
+test('profil : changer son nom et son numéro (mot de passe exigé), numéro de paiement de l\'expéditeur', async () => {
+  // l'admin change son numéro : mot de passe obligatoire et numéro libre
+  assert.equal((await call('PATCH', '/api/me', { phone: '0349990000' }, admin)).status, 400, 'mot de passe actuel manquant');
+  assert.equal((await call('PATCH', '/api/me', { phone: '0349990000', password: 'faux' }, admin)).status, 403);
+  assert.equal((await call('PATCH', '/api/me', { phone: '0340000001', password: 'admin123' }, admin)).status, 409, 'numéro déjà pris');
+  assert.equal((await call('PATCH', '/api/me', { name: 'Tsidy Admin', phone: '034 99 900 00', password: 'admin123' }, admin)).status, 200);
+  const me = (await call('GET', '/api/me', null, admin)).data.user;
+  assert.equal(me.name, 'Tsidy Admin'); assert.equal(me.phone, '+261349990000');
+  assert.ok(await login('0349990000', 'admin123'), 'connexion avec le nouveau numéro');
+  assert.equal((await call('POST', '/api/auth/login', { phone: '0340000000', password: 'admin123' })).status, 401, 'l\'ancien numéro ne marche plus');
+  // même numéro renvoyé avec le nom : pas de mot de passe demandé
+  assert.equal((await call('PATCH', '/api/me', { name: 'Tsidy', phone: '0349990000' }, admin)).status, 200);
+  // un livreur ne change pas lui-même son numéro
+  assert.equal((await call('PATCH', '/api/me', { phone: '0341000099', password: 'velo1234' }, velo)).status, 403);
+  // expéditeur : où il veut être payé
+  assert.equal((await call('PATCH', '/api/me', { payout: { method: 'orange_money', phone: '032 11 222 33', holder: 'Boutique Soa' } }, client)).status, 200);
+  const p = (await call('GET', '/api/me', null, client)).data.payout;
+  assert.equal(p.method, 'orange_money'); assert.equal(p.phone, '+261321122233'); assert.equal(p.holder, 'Boutique Soa');
+  assert.equal((await call('PATCH', '/api/me', { payout: { method: 'mvola', phone: 'abc' } }, client)).status, 400);
+  assert.equal((await call('PATCH', '/api/me', { payout: { method: 'cash' } }, client)).status, 200);
+  assert.equal((await call('GET', '/api/me', null, client)).data.payout.method, 'cash');
+});

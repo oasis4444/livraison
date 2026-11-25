@@ -25,7 +25,7 @@ const SV = {
 const aic = (k) => `<svg class="ad-ic" viewBox="0 0 24 24" aria-hidden="true">${SV[k] || ''}</svg>`;
 const NAV = [
   ['Pilotage'], ['dash', 'home', 'Tableau de bord'], ['ops', 'route', 'Suivi des livraisons'], ['live', 'map', 'Carte en direct'],
-  ['Colis et argent'], ['parcels', 'box', 'Colis'], ['cash', 'cash', 'Caisse & vendeurs'], ['payments', 'wallet', 'Paiements & soldes'], ['deliveries', 'bolt', 'Courses express'],
+  ['Colis et argent'], ['parcels', 'box', 'Colis'], ['cash', 'cash', 'Caisse & vendeurs'], ['creport', 'chart', 'Rapport livreurs'],['payments', 'wallet', 'Paiements & soldes'], ['deliveries', 'bolt', 'Courses express'],
   ['Équipe et clients'], ['couriers', 'bike', 'Livreurs'], ['axes', 'cal', 'Axes & planning'], ['clients', 'users', 'Clients'],
   ['Relation client'], ['support', 'chat', 'Service client'], ['complaints', 'alert', 'Réclamations & SOS'],
   ['Système'], ['reports', 'chart', 'Rapports'], ['staff', 'users', 'Équipe et rôles'], ['api', 'plug', 'Logiciels de vente'], ['settings', 'gear', 'Paramètres'], ['audit', 'list', 'Journal'],
@@ -112,6 +112,19 @@ function bars(series, key, fmt = (v) => v) {
   return `<div class="bars">${series.map((s) => `<div class="b" style="height:${((s[key] || 0) / max) * 100}%" title="${esc(s.label)} : ${fmt(s[key] || 0)}"><span>${s[key] ? fmt(s[key]) : ''}</span></div>`).join('')}</div>
     <div class="bar-labels">${series.map((s) => `<span>${esc(String(s.label).slice(-5))}</span>`).join('')}</div>`;
 }
+
+// Rapport livreurs : période (jours de Madagascar, AAAA-MM-JJ) et livreur choisis, gardés pendant la session.
+const mgDay = (offset = 0) => new Date(Date.now() + 3 * 3600e3 + offset * 864e5).toISOString().slice(0, 10);
+const dayLabel = (d) => { if (d === mgDay()) return "aujourd'hui"; if (d === mgDay(-1)) return 'hier'; const [y, m, j] = d.split('-'); return `${j}/${m}/${y}`; };
+const crRange = (k) => {
+  if (k === 'yesterday') return [mgDay(-1), mgDay(-1)];
+  if (k === '7') return [mgDay(-6), mgDay()];
+  if (k === '30') return [mgDay(-29), mgDay()];
+  if (k === 'month') return [mgDay().slice(0, 8) + '01', mgDay()];
+  return [mgDay(), mgDay()];
+};
+const crF = (() => { try { const s = JSON.parse(sessionStorage.getItem('adm_cr') || 'null'); if (s?.from) return s; } catch {} const [from, to] = crRange('today'); return { from, to, courier: '', quick: 'today' }; })();
+const crSave = () => sessionStorage.setItem('adm_cr', JSON.stringify(crF));
 
 // Filtres du tableau des livraisons (gardés pendant la session).
 const opsF = { step: sessionStorage.getItem('ops_step') || 'active', courier: sessionStorage.getItem('ops_c') || '', kind: '', days: sessionStorage.getItem('ops_days') || '1', q: '' };
@@ -403,7 +416,7 @@ const VIEWS = {
     const box = document.createElement('div'); box.className = 'panel'; box.style.marginBottom = '16px';
     const days = Number(sessionStorage.getItem('alefa_stat_days') || 1);
     const r = await api('GET', `/api/admin/courier-stats?days=${days}`);
-    box.innerHTML = `<div class="row between wrap"><h3>📦 Colis par livreur</h3><div class="row" style="gap:6px">${[[1, "Aujourd'hui"], [7, '7 jours'], [30, '30 jours']].map(([d, l]) => `<button class="btn sm ${d === days ? 'primary' : ''}" data-days="${d}">${l}</button>`).join('')}</div></div>
+    box.innerHTML = `<div class="row between wrap"><h3>📦 Colis par livreur</h3><div class="row" style="gap:6px"><a class="btn sm ghost" href="#creport">Rapport détaillé et argent →</a>${[[1, "Aujourd'hui"], [7, '7 jours'], [30, '30 jours']].map(([d, l]) => `<button class="btn sm ${d === days ? 'primary' : ''}" data-days="${d}">${l}</button>`).join('')}</div></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Livreur</th><th>Récupérés</th><th>Déposés au centre</th><th>Repris au centre</th><th>Livrés</th><th>Refusés</th><th>En cours</th><th>Encaissé</th></tr></thead><tbody>
       ${r.couriers.map((c) => `<tr><td><b>${esc(c.name)}</b></td><td>${c.picked}</td><td>${c.to_centre}</td><td>${c.from_centre}</td><td><b>${c.delivered}</b></td><td>${c.refused}</td><td>${c.open}</td><td>${ar(c.collected)}</td></tr>`).join('')}
       <tr style="font-weight:800"><td>Total</td>${['picked', 'to_centre', 'from_centre', 'delivered', 'refused', 'open'].map((k) => `<td>${r.couriers.reduce((a, c) => a + c[k], 0)}</td>`).join('')}<td>${ar(r.couriers.reduce((a, c) => a + c.collected, 0))}</td></tr></tbody></table></div>`;
@@ -417,7 +430,7 @@ const VIEWS = {
   async staff() {
     const r = await api('GET', '/api/admin/staff');
     const lbl = (k) => r.roles[k]?.label || k;
-    const NAMES = { ops: 'Suivi', live: 'Carte', parcels: 'Colis', deliveries: 'Courses express', couriers: 'Livreurs', axes: 'Axes', clients: 'Clients', support: 'Service client', complaints: 'Réclamations', reports: 'Rapports', cash: 'Caisse', payments: 'Paiements' };
+    const NAMES = { creport: 'Rapport livreurs', ops: 'Suivi', live: 'Carte', parcels: 'Colis', deliveries: 'Courses express', couriers: 'Livreurs', axes: 'Axes', clients: 'Clients', support: 'Service client', complaints: 'Réclamations', reports: 'Rapports', cash: 'Caisse', payments: 'Paiements' };
     main.innerHTML = head('Équipe et rôles', '<button class="btn sm primary" data-act="newstaff">＋ Ajouter une personne</button>') + `
       <p class="small muted" style="max-width:760px">Chaque personne de l'équipe se connecte avec son propre numéro et son mot de passe. Toutes ses actions sont enregistrées à son nom dans le Journal. Son rôle décide des rubriques qu'elle voit.</p>
       <div class="grid2"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Personne</th><th>Rôle</th><th>Dernière action</th><th></th></tr></thead><tbody>
@@ -618,6 +631,34 @@ const VIEWS = {
       </tbody></table></div>`;
   },
 
+  // Rapport livreurs : par jour et par livreur, colis récupérés / livrés / refusés, argent encaissé, parts et reste à remettre.
+  async creport() {
+    const qs = new URLSearchParams({ from: crF.from, to: crF.to, ...(crF.courier ? { courier: crF.courier } : {}) });
+    const r = await api('GET', `/api/admin/courier-stats/report?${qs}`);
+    const T = r.totals, one = r.courier ? r.couriers.find((c) => c.id === r.courier) : null;
+    const quick = [['today', "Aujourd'hui"], ['yesterday', 'Hier'], ['7', '7 jours'], ['month', 'Ce mois'], ['30', '30 jours']];
+    const period = crF.from === crF.to ? dayLabel(crF.from) : `du ${dayLabel(crF.from)} au ${dayLabel(crF.to)}`;
+    const td = (v, money = true) => `<td class="num">${v ? (money ? ar(v) : v) : '<span class="muted">—</span>'}</td>`;
+    main.innerHTML = head('Rapport livreurs', `<button class="btn sm" data-act="crcsv">⬇ Excel (CSV)</button>`) + `
+      <div class="panel" style="margin-bottom:16px"><div class="row wrap" style="gap:10px;align-items:flex-end">
+        <label class="field" style="margin:0"><span>Du</span><input class="input" type="date" data-cr="from" value="${esc(crF.from)}"></label>
+        <label class="field" style="margin:0"><span>Au</span><input class="input" type="date" data-cr="to" value="${esc(crF.to)}"></label>
+        <label class="field" style="margin:0;min-width:200px"><span>Livreur</span><select class="input" data-cr="courier"><option value="">Tous les livreurs</option>${r.couriers.map((c) => `<option value="${c.id}" ${c.id === r.courier ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+        <button class="btn primary" data-act="crgo">Afficher</button></div>
+        <div class="row wrap" style="gap:6px;margin-top:10px">${quick.map(([k, l]) => `<button class="btn sm ${crF.quick === k ? 'primary' : ''}" data-act="crquick" data-q="${k}">${l}</button>`).join('')}</div></div>
+      <p class="small muted" style="margin:-4px 0 12px">${esc(one ? one.name : 'Tous les livreurs')} · ${esc(period)}</p>
+      <div class="kpis k6">${kpi('Colis récupérés', T.picked)}${kpi('Colis livrés', T.delivered)}${kpi('Refusés', T.refused)}${kpi('Annulés', r.overview.cancelled)}${kpi('Nouveaux colis', r.overview.created)}${kpi('En cours maintenant', r.overview.open)}</div>
+      <div class="kpis k6">${kpi('Valeur livrée', ar(T.delivered_value))}${kpi('Frais de livraison', ar(T.fees))}${kpi('Argent encaissé', ar(T.collected + T.pickup_fees))}${kpi('Part du centre', ar(T.centre_share))}${kpi('Part des livreurs', ar(T.courier_share))}${kpi('Reste à remettre', ar(T.remaining), T.remaining > 0 ? 'alert' : '')}</div>
+      ${one && T.remaining > 0 ? `<div class="panel row between wrap" style="margin-bottom:16px;border:2px solid var(--red)"><div><b>${esc(one.name)} doit encore remettre ${ar(T.remaining)}</b><div class="small muted">Sur ${ar(T.due)} à remettre pour cette période, ${ar(T.remitted)} ont déjà été encaissés au centre.</div></div><a class="btn primary" href="#cash">Encaisser à la caisse →</a></div>` : ''}
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Jour</th><th>Livreur</th><th class="num">Récupérés</th><th class="num">Livrés</th><th class="num">Refusés</th><th class="num">Valeur livrée</th><th class="num">Encaissé</th><th class="num">Part centre</th><th class="num">Part livreur</th><th class="num">À remettre</th><th class="num">Reste</th></tr></thead><tbody>
+      ${r.rows.map((x) => `<tr><td class="small">${esc(dayLabel(x.day))}</td><td><b>${esc(x.name)}</b>${r.open[x.courier_id] && x.day === r.to ? `<div class="tiny muted">${r.open[x.courier_id]} colis en cours</div>` : ''}</td>
+        ${td(x.picked, false)}${td(x.delivered, false)}${td(x.refused, false)}${td(x.delivered_value)}${td(x.collected + x.pickup_fees)}${td(x.centre_share)}${td(x.courier_share)}${td(x.due)}
+        <td class="num">${x.remaining ? `<b style="color:var(--red)">${ar(x.remaining)}</b>` : x.due ? '<span style="color:var(--green)">✓ réglé</span>' : '<span class="muted">—</span>'}</td></tr>`).join('') || '<tr><td colspan="11" class="muted" style="padding:24px;text-align:center">Aucune activité sur cette période.</td></tr>'}
+      ${r.rows.length > 1 ? `<tr style="font-weight:800"><td colspan="2">Total</td>${td(T.picked, false)}${td(T.delivered, false)}${td(T.refused, false)}${td(T.delivered_value)}${td(T.collected + T.pickup_fees)}${td(T.centre_share)}${td(T.courier_share)}${td(T.due)}<td class="num">${T.remaining ? `<span style="color:var(--red)">${ar(T.remaining)}</span>` : '—'}</td></tr>` : ''}
+      </tbody></table></div>
+      <p class="tiny muted" style="margin-top:10px">À remettre = argent encaissé (livraison + frais pris à la récupération) − part du livreur. « Reste à remettre » = ce qui n'a pas encore été encaissé au centre avec le bouton Encaisser de la Caisse ; « ✓ réglé » = tout est remis. Un colis compte le jour où le livreur l'a remis au destinataire.</p>`;
+  },
+
   async cash() {
     const r = await api('GET', '/api/admin/cash');
     main.innerHTML = head('Caisse & vendeurs') + `
@@ -626,8 +667,9 @@ const VIEWS = {
         ${r.couriers.map((x) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(x.name)}</b><div class="tiny muted">${x.n} colis · ${esc(phoneFmt(x.phone))}${x.since && x.cash > 0 ? ` · <span style="color:${Date.now() - x.since > 48 * 3600e3 ? 'var(--red)' : 'inherit'}">argent gardé depuis ${agoTxt(x.since)}</span>` : ''}${x.cash < 0 ? ' · <span style="color:var(--green)">le centre lui doit sa part</span>' : ''}</div></span><span><b>${ar(x.cash)}</b> <button class="btn sm primary" data-act="settle" data-id="${x.id}" data-amt="${x.cash}" data-name="${esc(x.name)}">Encaisser</button></span></div>`).join('') || '<p class="muted small">Aucun argent en attente.</p>'}
         <h3 style="margin-top:16px">Dernières remises</h3>${r.settlements.slice(0, 15).map((x) => `<div class="row between small"><span>${esc(x.name)} · ${x.shipments} colis${x.note ? ` · <span style="color:var(--red)">${esc(x.note)}</span>` : ''}</span><span>${ar(x.amount)} <span class="muted tiny">${dt(x.at)}</span></span></div>`).join('') || '<p class="muted small">—</p>'}</div>
       <div class="panel"><h3>🏪 À payer aux expéditeurs</h3>
-        ${r.vendors.map((v) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(v.company || v.name)}</b><div class="tiny muted">${esc(phoneFmt(v.phone))} · ventes ${ar(v.sales)}${v.return_fees ? ` · retours −${ar(v.return_fees)}` : ''}${v.waiting_cash ? ` · ${v.waiting_cash} colis encore chez le livreur` : ''}</div></span>
-          <span><b style="color:${v.due < 0 ? 'var(--red)' : 'var(--green)'}">${ar(v.due)}</b> ${v.sales || v.return_fees ? `<button class="btn sm primary" data-act="payvendor" data-id="${v.id}" data-amt="${v.due}" data-name="${esc(v.company || v.name)}">Payer</button>` : ''}</span></div>`).join('') || '<p class="muted small">Rien à payer.</p>'}
+        ${r.vendors.map((v) => `<div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)"><span><b>${esc(v.company || v.name)}</b><div class="tiny muted">${esc(phoneFmt(v.phone))} · ventes ${ar(v.sales)}${v.return_fees ? ` · retours −${ar(v.return_fees)}` : ''}${v.waiting_cash ? ` · ${v.waiting_cash} colis encore chez le livreur` : ''}</div>
+          <div class="tiny">${v.payout ? `💳 ${esc(r.methods?.[v.payout.method] || v.payout.method)}${v.payout.phone ? ` ${esc(phoneFmt(v.payout.phone))}` : ''}${v.payout.holder ? ` · ${esc(v.payout.holder)}` : ''}` : '<span class="muted">Pas de numéro de paiement enregistré (MVola par défaut au numéro du compte)</span>'}</div></span>
+          <span><b style="color:${v.due < 0 ? 'var(--red)' : 'var(--green)'}">${ar(v.due)}</b> ${v.sales || v.return_fees ? `<button class="btn sm primary" data-act="payvendor" data-id="${v.id}" data-amt="${v.due}" data-name="${esc(v.company || v.name)}" data-pay="${esc(JSON.stringify(v.payout || { method: 'mvola', phone: v.phone, holder: v.name }))}">Payer</button>` : ''}</span></div>`).join('') || '<p class="muted small">Rien à payer.</p>'}
         <h3 style="margin-top:16px">Derniers paiements</h3>${r.payouts.slice(0, 15).map((x) => `<div class="row between small"><span>${esc(x.name)} · ${esc(x.note || '')}</span><span>${ar(x.amount)} <span class="muted tiny">${dt(x.at)}</span></span></div>`).join('') || '<p class="muted small">—</p>'}</div></div>`;
   },
 
@@ -704,6 +746,30 @@ async function usersView(role) {
         ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" data-veh="${u.vehicle || 'velo'}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button>` : ''}
         <button class="btn sm ghost" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}" title="Nouveau mot de passe">🔑</button></td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
     </tbody></table></div>`;
+}
+
+// Versement à un expéditeur : Mobile Money (numéro + référence de la transaction obligatoire) ou espèces au centre.
+const PAY_METHODS = { mvola: 'MVola', orange_money: 'Orange Money', airtel_money: 'Airtel Money', cash: 'Espèces au centre' };
+function payVendorForm(el) {
+  const amt = Number(el.dataset.amt), acc = (() => { try { return JSON.parse(el.dataset.pay); } catch { return { method: 'mvola' }; } })();
+  const m = modal(`Payer ${el.dataset.name}`, `<form class="stack" data-f>
+    <div class="card" style="text-align:center;background:var(--green-soft);border:0"><div class="small">Montant à verser</div><div style="font-size:1.8rem;font-weight:900">${ar(amt)}</div></div>
+    <label class="field"><span>Moyen</span><select class="input" name="method">${Object.entries(PAY_METHODS).map(([k, l]) => `<option value="${k}" ${acc.method === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="field" data-mm><span>Numéro du destinataire</span><input class="input" name="phone" type="tel" value="${esc(acc.phone ? phoneFmt(acc.phone) : '')}"></label>
+    <label class="field" data-mm><span>Nom du titulaire</span><input class="input" name="holder" value="${esc(acc.holder || '')}"></label>
+    <label class="field" data-mm><span>Référence de la transaction</span><input class="input" name="reference" placeholder="Ex : 1234567890 (reçue par SMS après l'envoi)" ${amt > 0 ? 'required' : ''}></label>
+    <p class="tiny muted" data-mm style="margin:0">Faites d'abord le transfert depuis le téléphone du centre, puis recopiez ici la référence reçue par SMS : elle prouve le paiement.</p>
+    <p class="tiny muted hidden" data-cashinfo style="margin:0">L'expéditeur vient chercher son argent au centre. Faites-lui signer le reçu.</p>
+    <label class="field"><span>Note (facultatif)</span><input class="input" name="note" maxlength="200"></label>
+    <button class="btn primary block lg">Enregistrer le paiement de ${ar(amt)}</button></form>`);
+  const f = m.el.querySelector('[data-f]'), sel = f.elements.method;
+  const sync = () => { const cash = sel.value === 'cash'; f.querySelectorAll('[data-mm]').forEach((x) => x.classList.toggle('hidden', cash)); f.querySelector('[data-cashinfo]').classList.toggle('hidden', !cash); f.elements.reference.required = !cash && amt > 0; };
+  sel.onchange = sync; sync();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const b = Object.fromEntries(new FormData(f));
+    try { const r = await api('POST', `/api/admin/vendors/${el.dataset.id}/pay`, b); m.close(); toast(`${ar(r.amount)} payés (${r.shipments} colis)`, 'ok'); show(); } catch (err) { toastErr(err); }
+  };
 }
 
 // ---------------------------------------------------------------- détails
@@ -805,6 +871,18 @@ const actions = {
   period: (el) => { sessionStorage.setItem('adm_period', el.dataset.v); show(); },
   print: () => window.print(),
   export: (el) => downloadCsv(el.dataset.type, el.dataset.from),
+  crgo: () => {
+    const v = (k) => $(`[data-cr=${k}]`).value;
+    if (!v('from') || !v('to')) return toast('Choisissez les deux dates', 'err');
+    Object.assign(crF, { from: v('from'), to: v('to') < v('from') ? v('from') : v('to'), courier: v('courier'), quick: '' }); crSave(); show();
+  },
+  crquick: (el) => { const [from, to] = crRange(el.dataset.q); Object.assign(crF, { from, to, quick: el.dataset.q, courier: $('[data-cr=courier]')?.value || crF.courier }); crSave(); show(); },
+  crcsv: async () => {
+    const qs = new URLSearchParams({ from: crF.from, to: crF.to, format: 'csv', ...(crF.courier ? { courier: crF.courier } : {}) });
+    const res = await fetch(`/api/admin/courier-stats/report?${qs}`, { headers: { authorization: `Bearer ${state.token}` } });
+    if (!res.ok) return toast('Export impossible', 'err');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = `alefa-livreurs-${crF.from}_${crF.to}.csv`; a.click();
+  },
   savesettings: async () => {
     const settings = {}; $$('[data-s]').forEach((i) => (settings[i.dataset.s] = i.value));
     await api('PUT', '/api/admin/settings', { settings }); toast('Paramètres enregistrés', 'ok');
@@ -860,12 +938,7 @@ const actions = {
     const r = await api('POST', `/api/admin/couriers/${el.dataset.id}/settle`, { amount: Number(v) });
     toast(`${ar(r.received)} encaissés (${r.shipments} colis)`, r.received === r.total ? 'ok' : 'err'); show();
   },
-  payvendor: async (el) => {
-    if (!(await confirmBox(`Payer ${ar(Number(el.dataset.amt))} à ${el.dataset.name} ?`, 'Payer'))) return;
-    const note = await promptBox('Référence du paiement', { label: 'Ex : MVola réf. 12345, espèces…' });
-    const r = await api('POST', `/api/admin/vendors/${el.dataset.id}/pay`, { note: note || '' });
-    toast(`${ar(r.amount)} payés (${r.shipments} colis)`, 'ok'); show();
-  },
+  payvendor: (el) => payVendorForm(el),
   newmerchant: () => merchantForm(),
   tsenaconnect: () => tsenaForm(),
   tsenashop: (el) => {

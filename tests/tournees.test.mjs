@@ -162,8 +162,38 @@ test('caisse : marchandise payée par Mobile Money et frais Alefa de la province
   const v = (await call('GET', '/api/admin/cash', null, admin)).data.vendors.find((x) => x.id === sender);
   assert.equal(v.sales, 0, 'T-2 déjà payée à la boutique par Mobile Money');
   assert.equal(v.province_fees, 3000); assert.equal(v.due, -3000);
-  const p = await call('POST', `/api/admin/vendors/${sender}/pay`, {}, admin);
-  assert.equal(p.data.amount, -3000);
+  assert.equal((await call('POST', `/api/admin/vendors/${sender}/pay`, { method: 'paypal' }, admin)).status, 400, 'moyen inconnu');
+  assert.equal((await call('POST', `/api/admin/vendors/${sender}/pay`, { method: 'mvola', phone: '12' }, admin)).status, 400, 'numéro MVola invalide');
+  const p = await call('POST', `/api/admin/vendors/${sender}/pay`, { method: 'mvola', phone: '0341234567', holder: 'Boutique', reference: 'MV-778899' }, admin);
+  assert.equal(p.data.amount, -3000); assert.equal(p.data.method, 'mvola');
+  const last = (await call('GET', '/api/admin/cash', null, admin)).data.payouts[0];
+  assert.match(last.note, /MVola 034 12 345 67 · réf\. MV-778899/); assert.equal(last.detail.reference, 'MV-778899');
+});
+
+test('rapport livreurs : par jour et par livreur, argent encaissé, parts et reste à remettre', async () => {
+  const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+  const r = (await call('GET', `/api/admin/courier-stats/report?from=${today}&to=${today}`, null, admin)).data;
+  const naina = r.rows.find((x) => x.name === 'Naina Rabe'), hery = r.rows.find((x) => x.name === 'Hery Rakoto');
+  assert.ok(naina && hery, 'une ligne par livreur actif aujourd\'hui');
+  assert.equal(naina.day, today);
+  assert.equal(naina.pickup_fees, 3000, 'frais pris à la récupération');
+  assert.equal(naina.due, naina.collected + naina.pickup_fees - naina.courier_share);
+  assert.equal(naina.remaining, 0, 'déjà encaissé à la caisse'); assert.equal(naina.remitted, naina.due);
+  assert.equal(hery.due, -2000, 'le centre doit sa part à Hery');
+  assert.equal(r.totals.delivered, r.rows.reduce((a, x) => a + x.delivered, 0));
+  assert.ok(r.couriers.length >= 3);
+  // filtre par livreur
+  const one = (await call('GET', `/api/admin/courier-stats/report?from=${today}&to=${today}&courier=${naina.courier_id}`, null, admin)).data;
+  assert.deepEqual(one.rows.map((x) => x.name), ['Naina Rabe']); assert.equal(one.courier, naina.courier_id);
+  // export Excel
+  const res = await handleApi(new Request(`https://alefa.test/api/admin/courier-stats/report?from=${today}&to=${today}&format=csv`, { headers: { authorization: `Bearer ${admin}` } }), env);
+  const text = await res.text();
+  assert.match(text, /Reste à remettre/); assert.match(text, /Naina Rabe/); assert.match(text, /^\uFEFF?Jour;/);
+  // dates invalides
+  assert.equal((await call('GET', '/api/admin/courier-stats/report?from=hier', null, admin)).status, 400);
+  assert.equal((await call('GET', `/api/admin/courier-stats/report?from=${today}&to=2020-01-01`, null, admin)).status, 400);
+  // un livreur n'y a pas accès
+  assert.equal((await call('GET', `/api/admin/courier-stats/report`, null, c1)).status, 403);
 });
 
 test('fin de tournée : plus d\'offres', async () => {

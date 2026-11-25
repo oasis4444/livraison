@@ -473,10 +473,24 @@ export async function complaintForm(deliveryId) {
   };
 }
 
-export function profileForm() {
-  const u = state.user;
+const PAY_M = { mvola: 'MVola', orange_money: 'Orange Money', airtel_money: 'Airtel Money', cash: 'Espèces au centre' };
+export async function profileForm() {
+  const u = state.user, mg = state.lang === 'mg';
+  const editable = u.role !== 'courier'; // le numéro d'un livreur est changé par l'administration
+  const pay = u.role === 'client' ? (await api('GET', '/api/me').catch(() => ({}))).payout || null : null;
   const m = modal(t('profile'), `<div class="stack">
-    <div class="row"><div class="avatar">${esc(initials(u.name))}</div><div><b>${esc(u.name)}</b><div class="muted small">${esc(phoneFmt(u.phone))}</div></div></div>
+    <div class="row"><div class="avatar">${esc(initials(u.name))}</div><div><b data-pname>${esc(u.name)}</b><div class="muted small" data-pphone>${esc(phoneFmt(u.phone))}</div></div></div>
+    ${editable ? `<h3 style="margin-top:6px">${mg ? 'Ny mombamomba ahy' : 'Mes informations'}</h3>
+    <label class="field"><span>${t('name')}</span><input class="input" data-name value="${esc(u.name)}" autocomplete="name"></label>
+    <label class="field"><span>${t('phone')}</span><input class="input" data-phone type="tel" value="${esc(phoneFmt(u.phone))}" autocomplete="tel"><small class="tiny muted">${mg ? 'Io no laharana iditra. Ilaina ny tenimiafina raha ovaina.' : 'C\'est aussi votre identifiant de connexion. Le mot de passe actuel est demandé pour le changer.'}</small></label>
+    <input class="input hidden" type="password" placeholder="${t('current_password')}" data-infopw autocomplete="current-password">
+    <button class="btn primary block" data-info>${t('save')}</button>` : ''}
+    ${u.role === 'client' ? `<h3 style="margin-top:18px">${mg ? 'Handraisako ny volako' : 'Recevoir mes paiements'}</h3>
+    <p class="tiny muted" style="margin:0">${mg ? 'Alefan\'i Alefa amin\'ity laharana ity ny vidin\'ny entana nolafosina.' : 'Alefa vous verse ici la valeur des colis livrés (une fois l\'argent rapporté par le livreur).'}</p>
+    <label class="field"><span>${mg ? 'Fomba' : 'Moyen'}</span><select class="input" data-pm>${Object.entries(PAY_M).map(([k, l]) => `<option value="${k}" ${(pay?.method || 'mvola') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="field" data-pmphone><span>${mg ? 'Laharana Mobile Money' : 'Numéro Mobile Money'}</span><input class="input" type="tel" data-pp value="${esc(pay?.phone ? phoneFmt(pay.phone) : phoneFmt(u.phone))}"></label>
+    <label class="field" data-pmphone><span>${mg ? 'Anaran\'ny tompon\'ny kaonty' : 'Nom du titulaire du compte'}</span><input class="input" data-ph value="${esc(pay?.holder || u.name)}"></label>
+    <button class="btn block" data-paysave>${t('save')}</button>` : ''}
     <label class="field"><span>${t('language')}</span><div class="seg"><button data-l="fr" class="${state.lang === 'fr' ? 'on' : ''}">Français</button><button data-l="mg" class="${state.lang === 'mg' ? 'on' : ''}">Malagasy</button></div></label>
     <button class="btn block" data-terms>${state.lang === 'mg' ? 'Fepetra sy saran\'ny fanaterana' : 'Conditions et tarifs'}</button>
     <h3 style="margin-top:18px">${t('change_password')}</h3>
@@ -491,6 +505,31 @@ export function profileForm() {
   };
   m.el.querySelector('[data-out]').onclick = () => logout();
   m.el.querySelector('[data-terms]').onclick = () => import('./terms.js').then((x) => x.showConditions());
+  // Nom et numéro : le mot de passe actuel n'est demandé que si le numéro change.
+  const ph = m.el.querySelector('[data-phone]'), ipw = m.el.querySelector('[data-infopw]');
+  const digits = (v) => String(v || '').replace(/\D/g, '').replace(/^261/, '0');
+  if (ph) ph.oninput = () => ipw.classList.toggle('hidden', digits(ph.value) === digits(u.phone));
+  const ib = m.el.querySelector('[data-info]');
+  if (ib) ib.onclick = async () => {
+    const name = m.el.querySelector('[data-name]').value.trim(), changed = digits(ph.value) !== digits(u.phone);
+    if (changed && !ipw.value) { ipw.classList.remove('hidden'); ipw.focus(); return toast(t('current_password'), 'err'); }
+    try {
+      await api('PATCH', '/api/me', { name, ...(changed ? { phone: ph.value, password: ipw.value } : {}) });
+      const r = await api('GET', '/api/me'); state.user = r.user;
+      m.el.querySelector('[data-pname]').textContent = r.user.name; m.el.querySelector('[data-pphone]').textContent = phoneFmt(r.user.phone);
+      ipw.value = ''; ipw.classList.add('hidden');
+      toast(changed ? (state.lang === 'mg' ? 'Voatahiry. Ampiasao ny laharana vaovao rehefa hiditra.' : 'Enregistré. Utilisez le nouveau numéro pour vous connecter.') : 'OK', 'ok');
+    } catch (e) { toastErr(e); }
+  };
+  // Moyen de paiement de l'expéditeur : le numéro n'est utile que pour le Mobile Money.
+  const pm = m.el.querySelector('[data-pm]');
+  if (pm) {
+    const sync = () => m.el.querySelectorAll('[data-pmphone]').forEach((x) => x.classList.toggle('hidden', pm.value === 'cash'));
+    pm.onchange = sync; sync();
+    m.el.querySelector('[data-paysave]').onclick = async () => {
+      try { await api('PATCH', '/api/me', { payout: { method: pm.value, phone: m.el.querySelector('[data-pp]').value, holder: m.el.querySelector('[data-ph]').value } }); toast('OK', 'ok'); } catch (e) { toastErr(e); }
+    };
+  }
 }
 
 export function chatHtml(msgs, myId) {

@@ -10,6 +10,7 @@ import { validHHMM } from './rules.js';
 import { registerSupportRoutes } from './support.js';
 import { registerSmsRoutes } from './sms.js';
 import { registerTalkRoutes } from './talk.js';
+import { setPayoutAccount, getPayoutAccount } from './payouts.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
 
 const SESSION_DAYS = 30;
@@ -68,8 +69,8 @@ const publicUser = (u) => ({ id: u.id, phone: u.phone, name: u.name, role: u.rol
 // ---------------------------------------------------------------- équipe de l'administration : rôles
 // perms vide = administrateur complet. Sinon, un rôle donne accès à certaines rubriques ; le serveur le vérifie à chaque demande.
 export const STAFF_ROLES = {
-  operateur: { label: 'Opérateur', perms: ['ops', 'live', 'parcels', 'deliveries', 'couriers', 'axes', 'clients', 'support', 'complaints', 'reports'] },
-  caisse: { label: 'Caisse', perms: ['ops', 'parcels', 'cash', 'payments', 'reports'] },
+  operateur: { label: 'Opérateur', perms: ['ops', 'live', 'parcels', 'deliveries', 'couriers', 'axes', 'clients', 'support', 'complaints', 'reports', 'creport'] },
+  caisse: { label: 'Caisse', perms: ['ops', 'parcels', 'cash', 'creport', 'payments', 'reports'] },
   service: { label: 'Service client', perms: ['ops', 'live', 'parcels', 'clients', 'support', 'complaints'] },
 };
 export const staffPerms = (u) => (u.role !== 'admin' ? [] : STAFF_ROLES[u.perms]?.perms || null); // null = tout
@@ -155,6 +156,7 @@ async function me(ctx, env) {
   if (u.role === 'courier') { out.courier = await courierProfile(env, u.id); out.axe = await courierAxeState(env, u.id); }
   // Nouvelle version des conditions : le client doit les accepter à nouveau.
   if (u.role === 'client') { const v = (await settings(env)).terms_version || null; out.terms = { version: v, accepted: !v || u.terms_version === v, accepted_at: u.terms_at ?? null }; }
+  if (u.role === 'client') out.payout = await getPayoutAccount(env, u.id); // où l'expéditeur veut être payé
   return json(out);
 }
 async function acceptTerms(ctx, env) {
@@ -174,6 +176,20 @@ async function updateMe(ctx, env) {
   const b = ctx.body, u = ctx.user;
   if (b.lang) await run(env, 'UPDATE users SET lang = ? WHERE id = ?', b.lang === 'mg' ? 'mg' : 'fr', u.id);
   if (b.name) await run(env, 'UPDATE users SET name = ? WHERE id = ?', str(b.name, { min: 2, max: 80, name: 'Nom' }), u.id);
+  // Changer son numéro (c'est aussi l'identifiant de connexion) : mot de passe actuel exigé, numéro libre.
+  // Les livreurs passent par l'administration (leur numéro est vérifié à la création du compte).
+  if (b.phone != null && b.phone !== '') {
+    const phone = normalizePhone(b.phone);
+    if (phone !== u.phone) {
+      if (u.role === 'courier') fail(403, 'forbidden', 'Demandez à l\'administration Alefa de changer votre numéro');
+      const cur = await hashPassword(str(b.password, { min: 1, name: 'Mot de passe actuel' }), u.pass_salt, iterations(env));
+      if (!safeEqual(cur, u.pass_hash)) fail(403, 'bad_credentials', 'Mot de passe actuel incorrect');
+      if (await one(env, 'SELECT id FROM users WHERE phone = ? AND id != ?', phone, u.id)) fail(409, 'phone_taken', 'Ce numéro est déjà utilisé par un autre compte');
+      await run(env, 'UPDATE users SET phone = ? WHERE id = ?', phone, u.id);
+      await audit(env, ctx, 'phone_change', { from: u.phone, to: phone });
+    }
+  }
+  if (b.payout && u.role === 'client') await setPayoutAccount(env, u.id, b.payout);
   if (b.new_password) {
     const cur = await hashPassword(str(b.password, { min: 1, name: 'Mot de passe actuel' }), u.pass_salt, iterations(env));
     if (!safeEqual(cur, u.pass_hash)) fail(403, 'bad_credentials', 'Mot de passe actuel incorrect');
