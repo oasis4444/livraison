@@ -60,15 +60,48 @@ async function trackView(token) {
     if (reschedOpen) return; // ne pas effacer le choix d'un nouveau créneau en cours
     const fmt = (t) => `${new Date(t).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${core.time(t)}`;
     const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
-    const TL = { received: mg ? 'Voaray ny baiko' : 'Commande reçue', picked: mg ? 'Nalaina tany amin\'ny mpandefa' : 'Récupéré chez l\'expéditeur', centre: mg ? 'Ao amin\'ny centre' : 'Au centre', delivery: mg ? 'Eny an-dalana ho aminao' : 'En livraison', delivered: mg ? 'Tonga' : 'Livré' };
-    const ICON = { received: '✅', picked: '✅', centre: '🏢', delivery: '🚲', delivered: '📦' };
-    const timeline = `<div class="tl" style="display:flex;gap:4px;margin:8px 0;overflow-x:auto">${(r.timeline || []).map((x, i, a) => {
-      const done = !!x.at, next = !done && (i === 0 || a[i - 1].at);
-      return `<div style="flex:1;min-width:64px;text-align:center;opacity:${done ? 1 : next ? .8 : .4}"><div style="font-size:1.3rem">${done ? ICON[x.k] : next ? '⏳' : '○'}</div>
-        <div class="tiny" style="font-weight:${done ? 700 : 400}">${esc(x.k === 'delivered' && x.label.startsWith('Refus') ? x.label : TL[x.k] || x.label)}</div><div class="tiny muted">${done ? fmt(x.at) : ''}</div></div>`;
-    }).join('<div style="align-self:center;color:var(--line)">→</div>')}</div>`;
+    // Titre écrit pour le client : « Parti du centre » (le livreur va chercher le colis) ne doit pas faire croire que le colis arrive.
+    const STEP_TXT = {
+      pending: ['Commande reçue — un livreur va être attribué', 'Voaray ny baiko — hisy livreur voatendry tsy ho ela'],
+      scheduled: ['Récupération programmée', 'Voalahatra ny fakana ny entana'],
+      departed: ['Le livreur part récupérer le colis', 'Handeha haka ny entana ny livreur'],
+      at_pickup: ['Le livreur est chez l\'expéditeur', 'Eo amin\'ny mpandefa ny livreur'],
+      to_centre: ['Colis récupéré — en route vers le centre Alefa', 'Voaray ny entana — mankany amin\'ny centre Alefa'],
+      at_centre: ['Au centre Alefa — bientôt en livraison', 'Ao amin\'ny centre Alefa — ho aterina tsy ho ela'],
+      picked_up: ['Colis récupéré — bientôt en route vers vous', 'Voaray ny entana — ho entina aminao tsy ho ela'],
+      en_route: ['En route vers vous', 'Eny an-dalana ho aminao'],
+      nearby: ['Le livreur arrive !', 'Efa akaiky ny livreur !'],
+      awaiting_recipient: ['Colis remis — confirmation en cours', 'Natolotra ny entana — eo am-panamarinana'],
+      awaiting_courier: ['Colis remis — confirmation en cours', 'Natolotra ny entana — eo am-panamarinana'],
+      delivered: ['Livré — merci d\'avoir choisi Alefa', 'Tonga — misaotra nisafidy an\'i Alefa'],
+      refused: ['Refusé par le destinataire', 'Nolavin\'ny mpandray'],
+      returning: ['Retour vers l\'expéditeur', 'Haverina amin\'ny mpandefa'],
+      returned: ['Rendu à l\'expéditeur', 'Naverina tamin\'ny mpandefa'],
+      cancelled: ['Envoi annulé', 'Nofoanana ny fandefasana'],
+    };
+    const KO = ['refused', 'returning', 'returned', 'cancelled'];
+    const ko = KO.includes(r.step), over = ko || r.step === 'delivered';
+    const title = STEP_TXT[r.step]?.[mg ? 1 : 0] || r.step_label || r.step;
+    const TL = { received: mg ? 'Voaray ny baiko' : 'Commande reçue', picked: mg ? 'Nalaina' : 'Récupéré', centre: mg ? 'Ao amin\'ny centre' : 'Au centre', delivery: mg ? 'Ho aminao' : 'En livraison', delivered: mg ? 'Tonga' : 'Livré' };
+    // Heure lisible : « 14:32 » aujourd'hui, « hier 09:10 », sinon « 23/11 16:26 ».
+    const when = (t) => {
+      const d = new Date(t), today = new Date(), y = new Date(Date.now() - 864e5);
+      if (d.toDateString() === today.toDateString()) return core.time(t);
+      if (d.toDateString() === y.toDateString()) return `${mg ? 'omaly' : 'hier'} ${core.time(t)}`;
+      return fmt(t);
+    };
+    const tl = r.timeline || [];
+    const cur = over ? -1 : tl.findIndex((x) => !x.at); // étape en cours = la première pas encore faite
+    const timeline = `<div class="trk">${tl.map((x, i) => {
+      const last = i === tl.length - 1, isKo = last && ko;
+      const cls = isKo ? 'ko' : x.at ? 'done' : i === cur ? 'cur' : '';
+      const label = isKo ? (mg ? 'Tsy tonga' : r.step === 'cancelled' ? 'Annulé' : 'Retour') : TL[x.k] || x.label;
+      // Sous l'étape à venir : l'heure d'arrivée estimée si on la connaît, sinon « en cours » (jamais une heure passée).
+      const sub = x.at ? when(x.at) : i !== cur ? '' : r.eta && x.k === 'delivered' ? `${mg ? 'tokony' : 'vers'} ${core.time(r.eta)}` : (mg ? 'mandeha' : 'en cours');
+      return `<div class="trk-s ${cls}"><div class="trk-d">${x.at && !isKo ? '✓' : isKo ? '✕' : ''}</div><div class="trk-l">${esc(label)}</div><div class="trk-t">${sub}</div></div>`;
+    }).join('')}</div>`;
     const stale = r.position_at && Date.now() - r.position_at > 2 * 60e3;
-    app.querySelector('[data-info]').innerHTML = `<div style="font-size:1.15rem"><b>${esc(r.step_label || r.step)}</b></div>${timeline}
+    app.querySelector('[data-info]').innerHTML = `<div class="trk-title ${ko ? 'ko' : r.step === 'delivered' ? 'ok' : ''}">${esc(title)}</div>${timeline}
       ${r.on_delivery && !r.done_at && !r.province ? `<div class="card" style="background:var(--sun-soft);border:0;text-align:center;margin:6px 0">
           <div class="small">${mg ? 'Aloa amin\'ny livreur' : 'À payer au livreur'}</div><div style="font-size:2rem;font-weight:900">${core.ar(r.amount_to_pay)}</div>
           ${r.amount_to_pay ? `<div class="tiny muted">${r.value ? `${mg ? 'entana' : 'marchandise'} ${core.ar(r.value)} + ` : ''}${mg ? 'frais' : 'frais'} ${core.ar(r.fee)}</div>` : `<div class="tiny muted">📱 ${mg ? 'efa voaloa daholo' : 'tout est déjà payé'}</div>`}

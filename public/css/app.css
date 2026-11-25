@@ -142,6 +142,27 @@ textarea.input { resize: vertical; min-height: 70px; }
 .timeline .tl i { display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--line); margin: 0 auto 4px; border: 3px solid #fff; }
 .timeline .tl.done i { background: var(--green); }
 .timeline .tl.done { color: var(--ink); font-weight: 600; }
+/* Frise du lien de suivi public (/suivi/…) : étapes reliées par une ligne, étape en cours mise en avant. */
+.trk { display: flex; margin: 12px 0 8px; }
+.trk-s { flex: 1; min-width: 0; position: relative; text-align: center; padding: 0 2px; color: var(--ink-3); }
+.trk-s::before { content: ""; position: absolute; top: 11px; left: -50%; right: 50%; height: 3px; background: var(--line); }
+.trk-s:first-child::before { display: none; }
+.trk-s.done::before, .trk-s.cur::before { background: var(--green); }
+.trk-d { position: relative; z-index: 1; width: 24px; height: 24px; margin: 0 auto 5px; border-radius: 50%; background: var(--card); border: 3px solid var(--line); display: grid; place-items: center; color: #fff; font-size: .72rem; font-weight: 900; }
+.trk-s.done .trk-d { background: var(--green); border-color: var(--green); }
+.trk-s.cur .trk-d { border-color: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
+.trk-s.cur .trk-d::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.4s infinite; }
+.trk-s.ko .trk-d { background: var(--red); border-color: var(--red); }
+.trk-l { font-size: .72rem; line-height: 1.25; }
+.trk-s.done .trk-l { color: var(--ink); font-weight: 600; }
+.trk-s.cur .trk-l { color: var(--green); font-weight: 800; }
+.trk-s.ko .trk-l { color: var(--red); font-weight: 800; }
+.trk-t { font-size: .68rem; color: var(--ink-3); margin-top: 1px; }
+.trk-s.cur .trk-t { color: var(--green); }
+.trk-title { font-size: 1.15rem; font-weight: 800; line-height: 1.25; }
+.trk-title.ko { color: var(--red); }
+.trk-title.ok { color: var(--green); }
+@media (max-width: 380px) { .trk-l { font-size: .66rem; } .trk-t { font-size: .62rem; } }
 .searching { display: flex; align-items: center; gap: 12px; }
 .radar { width: 42px; height: 42px; border-radius: 50%; background: var(--green); position: relative; flex: none; }
 .radar::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 3px solid var(--green); animation: radar 1.6s ease-out infinite; }
