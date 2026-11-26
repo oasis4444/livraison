@@ -196,6 +196,24 @@ test('rapport livreurs : par jour et par livreur, argent encaissé, parts et res
   assert.equal((await call('GET', `/api/admin/courier-stats/report`, null, c1)).status, 403);
 });
 
+test('tableau de bord du livreur : mêmes chiffres que le rapport de l\'administration', async () => {
+  const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+  const rep = (await call('GET', `/api/admin/courier-stats/report?from=${today}&to=${today}`, null, admin)).data.rows;
+  const naina = rep.find((x) => x.name === 'Naina Rabe');
+  const r = await call('GET', '/api/courier/dashboard', null, c2);
+  assert.equal(r.status, 200);
+  const d = r.data;
+  assert.equal(d.today.delivered, naina.delivered); assert.equal(d.today.picked, naina.picked);
+  assert.equal(d.today.earned, naina.courier_share); assert.equal(d.earnings.today, naina.courier_share);
+  assert.equal(d.cash.to_remit, 0, 'tout a été encaissé à la caisse');
+  assert.ok(d.remitted.month >= naina.due && d.remitted.last.length >= 1, 'la remise du jour apparaît');
+  assert.equal(d.last7.length, 7); assert.equal(d.last7[6].day, today); assert.equal(d.last7[6].earned, naina.courier_share);
+  for (const k of ['to_pickup', 'to_deliver', 'to_collect', 'in_progress']) assert.equal(typeof d.now[k], 'number');
+  // Hery : le centre lui doit sa part (montant négatif)
+  assert.equal((await call('GET', '/api/courier/dashboard', null, c1)).data.cash.to_remit, rep.find((x) => x.name === 'Hery Rakoto').remaining);
+  assert.equal((await call('GET', '/api/courier/dashboard', null, admin)).status, 403);
+});
+
 test('fin de tournée : plus d\'offres', async () => {
   assert.equal((await call('POST', '/api/courier/run/end', {}, c1)).data.ended, 1);
   assert.equal((await call('GET', '/api/courier/run', null, c1)).data.run, null);

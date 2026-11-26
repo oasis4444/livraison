@@ -8,10 +8,12 @@ import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, sch
 
 let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null, myRun = null, runLayer = null, toLeaveN = 0;
 const mk = {};
-let axeLayer = null, axe = null, routeLayer = null, tab = 'colis', shipTimer = null, requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
+let axeLayer = null, axe = null, routeLayer = null, tab = 'home', shipTimer = null, requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
 
 // Icônes du menu (mêmes traits que l'espace client).
 const SV = {
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>', back: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  home: '<path d="M3 10.5L12 3l9 7.5V21h-6v-6H9v6H3z"/>',
   box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>', bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   cal: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
   hist: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v4l3 2"/>', chat: '<path d="M4 5h16v11H9l-5 4z"/>', bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
@@ -20,14 +22,14 @@ const SV = {
 };
 const ic = (k) => `<svg class="sp-ic" viewBox="0 0 24 24" aria-hidden="true">${SV[k]}</svg>`;
 const L2 = (fr, mg) => (state.lang === 'mg' ? mg : fr);
-const NOMAP = ['wallet', 'hist']; // pages sans carte : la place va au contenu
+const NOMAP = ['home', 'wallet', 'hist']; // pages sans carte : la place va au contenu
 
 export async function mount(el) {
   root = el;
   available = !!state.courier?.available;
   if (!document.querySelector('link[data-space-css]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/css/space.css'; l.dataset.spaceCss = '1'; document.head.append(l); }
   const u = state.user;
-  const navs = [['colis', 'box', c('colis')], ['req', 'bolt', 'Express'], ['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')]];
+  const navs = [['home', 'home', L2('Tableau de bord', 'Tabilao')], ['colis', 'box', c('colis')], ['req', 'bolt', 'Express'], ['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')]];
   root.className = 'sp cv';
   root.innerHTML = `<aside class="sp-side">
       <a class="sp-logo" href="/livreur"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa</span></a>
@@ -49,7 +51,7 @@ export async function mount(el) {
         <div class="cv-body" id="sheet"><div class="sheet-body" id="sheet-body"></div></div>
       </main>
     </div>
-    <nav class="sp-tab">${[...navs.slice(0, 4), ['menu', 'more', L2('Plus', 'Hafa')]].map(([k, i, l]) => `<button ${k === 'menu' ? 'data-act="menu"' : `data-act="tab" data-t="${k}"`}>${ic(i)}<span>${k === 'plan' ? L2('Départs', 'Fiaingana') : l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}</nav>`;
+    <nav class="sp-tab">${[...navs.slice(0, 4), ['menu', 'more', L2('Plus', 'Hafa')]].map(([k, i, l]) => `<button ${k === 'menu' ? 'data-act="menu"' : `data-act="tab" data-t="${k}"`}>${ic(i)}<span>${k === 'home' ? L2('Accueil', 'Fandraisana') : k === 'plan' ? L2('Départs', 'Fiaingana') : l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}</nav>`;
   sheet = $('#sheet');
   map = makeMap($('#map'), { zoom: 15 });
   bind(root, actions);
@@ -179,7 +181,7 @@ function axeLine() {
 }
 function header() {
   return `<button class="switch ${available ? 'on' : 'off'}" data-act="toggle"><span class="knob"></span><span class="grow" style="text-align:left">${available ? t('available') : t('unavailable')}</span><span class="small">${available ? '🟢 GPS' : ''}</span></button>${axeLine()}
-    <h2 class="cv-h">${{ colis: c('colis'), req: L2('Courses express', 'Dia haingana'), plan: c('my_schedule'), wallet: t('wallet'), hist: t('history') }[tab] || ''}</h2>`;
+    <h2 class="cv-h">${{ home: L2('Tableau de bord', 'Tabilao'), colis: c('colis'), req: L2('Courses express', 'Dia haingana'), plan: c('my_schedule'), wallet: t('wallet'), hist: t('history') }[tab] || ''}</h2>`;
 }
 // Menu, carte et compteurs suivent la page affichée.
 function syncNav() {
@@ -206,6 +208,7 @@ function render() {
   if (active) return renderActive();
   window.scrollTo(0, 0);
   const body = $('#sheet-body');
+  if (tab === 'home') { body.innerHTML = header() + '<div data-dash><div class="sp-skel"></div></div>'; return loadDash(); }
   if (tab === 'wallet') { body.innerHTML = header() + '<div data-wallet>…</div>'; return loadWallet(); }
   if (tab === 'colis') { body.innerHTML = header() + '<div data-colis>…</div>'; return loadMissions(); }
   if (tab === 'plan') {
@@ -333,6 +336,52 @@ function renderActive() {
 }
 
 // ---------------------------------------------------------------- revenus / historique
+// ---------------------------------------------------------------- tableau de bord du livreur
+async function loadDash() {
+  const d = await api('GET', '/api/courier/dashboard').catch((e) => { toastErr(e); return null; });
+  const el = $('[data-dash]'); if (!el || !d) return;
+  const mg = state.lang === 'mg', N = d.now, C = d.cash;
+  const ago = (ms) => { const h = Math.round((Date.now() - ms) / 3600e3); return h < 1 ? L2("moins d'une heure", 'latsaky ny adiny iray') : h < 24 ? `${h} h` : `${Math.round(h / 24)} ${L2('jour(s)', 'andro')}`; };
+  const kpi = (icon, label, v, sub = '', cls = '') => `<div class="sp-kpi ${cls}"><span>${ic(icon)}</span><small>${label}</small><b>${v}</b>${sub ? `<em>${sub}</em>` : ''}</div>`;
+  const max = Math.max(1, ...d.last7.map((x) => x.earned));
+  const wd = (k) => new Date(`${k}T12:00:00Z`).toLocaleDateString(mg ? 'fr-FR' : 'fr-FR', { weekday: 'short' }).replace('.', '');
+  el.innerHTML = `
+    <div class="cv-hero ${C.to_remit > 0 ? 'due' : ''}">
+      <small>${L2('À remettre au centre', 'Atolotra ny centre')}</small>
+      <b>${ar(C.to_remit)}</b>
+      <em>${C.to_remit > 0 ? `${C.parcels} ${L2('colis', 'colis')} · ${L2('encaissé', 'voaray')} ${ar(C.collected)} − ${L2('votre part', 'anjaranao')} ${ar(C.my_share)}${C.since ? ` · ${L2('depuis', 'nanomboka')} ${ago(C.since)}` : ''}` : L2('Tout est remis. Merci !', 'Voatolotra daholo. Misaotra !')}</em>
+      <div class="cv-hero-row"><span>${L2('Déjà remis ce mois', 'Efa natolotra tamin\'ity volana ity')} <b>${ar(d.remitted.month)}</b></span>${d.remitted.last[0] ? `<span>${L2('Dernière remise', 'Farany')} : ${ar(d.remitted.last[0].amount)} · ${dt(d.remitted.last[0].at)}</span>` : ''}</div>
+    </div>
+    <h3 class="cv-sub">${L2('Maintenant', 'Izao')}</h3>
+    <div class="sp-kpis cv-kpis">
+      ${kpi('box', L2('À récupérer', 'Halaina'), N.to_pickup, N.to_collect_later ? `${ar(N.to_collect_later)} ${L2('à encaisser ensuite', 'horaisina avy eo')}` : '', 'sun')}
+      ${kpi('bolt', L2('À livrer', 'Haterina'), N.to_deliver, '')}
+      ${kpi('cash', L2('À encaisser', 'Horaisina'), ar(N.to_collect), L2('sur les colis à livrer', 'amin\'ny colis haterina'), N.to_collect ? 'sun' : '')}
+      ${kpi('hist', L2('Frais des colis en cours', 'Saran\'ny colis mandeha'), ar(N.fees_in_progress), `${N.in_progress} ${L2('colis', 'colis')}`)}
+    </div>
+    ${N.in_progress ? `<button class="btn primary block lg" style="margin-top:12px" data-act="tab" data-t="colis">${L2('Voir ma tournée', 'Hijery ny fihodinako')} →</button>` : ''}
+    <h3 class="cv-sub">${L2("Aujourd'hui", 'Androany')}</h3>
+    <div class="sp-kpis cv-kpis">
+      ${kpi('box', L2('Récupérés', 'Nalaina'), d.today.picked)}
+      ${kpi('check', L2('Livrés', 'Tonga'), d.today.delivered)}
+      ${kpi('back', L2('Refusés', 'Nolavina'), d.today.refused)}
+      ${kpi('cash', L2('Encaissé', 'Voaray'), ar(d.today.collected))}
+    </div>
+    <h3 class="cv-sub">${L2('Mes gains (colis)', 'Ny karamako (colis)')}</h3>
+    <div class="sp-card cv-gains">
+      <div class="cv-gains-row"><div><small>${L2("Aujourd'hui", 'Androany')}</small><b>${ar(d.earnings.today)}</b></div><div><small>${L2('7 jours', '7 andro')}</small><b>${ar(d.earnings.week)}</b></div><div><small>${L2('Ce mois', 'Ity volana')}</small><b>${ar(d.earnings.month)}</b></div></div>
+      <div class="cv-bars">${d.last7.map((x) => `<div title="${esc(x.day)} · ${ar(x.earned)} · ${x.delivered} ${L2('livrés', 'tonga')}"><i style="height:${Math.max(4, Math.round((x.earned / max) * 100))}%"></i><span>${esc(wd(x.day))}</span></div>`).join('')}</div>
+      <p class="tiny muted" style="margin:8px 0 0">${L2('Votre part sur les frais des colis livrés. Les courses express sont dans « Revenus ».', 'Ny anjaranao amin\'ny saran\'ny colis tonga. Ao amin\'ny « Revenus » ny dia haingana.')}</p>
+    </div>
+    <div class="sp-card cv-month">
+      <div><small>${L2('Ce mois', 'Ity volana')}</small><b>${d.month.delivered}</b><em>${L2('livrés', 'tonga')}</em></div>
+      <div><b>${d.month.picked}</b><em>${L2('récupérés', 'nalaina')}</em></div>
+      <div><b>${d.month.refused}</b><em>${L2('refusés', 'nolavina')}</em></div>
+      <div><b>${d.rating ? `${Number(d.rating).toFixed(1)} ★` : '—'}</b><em>${d.rating_count} ${L2('avis', 'hevitra')}</em></div>
+    </div>
+    ${d.remitted.last.length ? `<h3 class="cv-sub">${L2('Mes dernières remises au centre', 'Ny vola natolotro farany')}</h3><div class="sp-card" style="padding:6px 16px">${d.remitted.last.map((x) => `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--hl)"><span class="small">${dt(x.at)} · ${x.shipments} ${L2('colis', 'colis')}</span><b>${ar(x.amount)}</b></div>`).join('')}</div>` : ''}`;
+}
+
 async function loadWallet() {
   const w = await api('GET', '/api/courier/wallet');
   const el = $('[data-wallet]'); if (!el) return;
@@ -390,7 +439,7 @@ async function departForm() {
 }
 
 async function loadMissions() {
-  const [{ shipments }, st, rn] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/courier/stats').catch(() => null), api('GET', '/api/courier/run').catch(() => ({ run: null, offers: [] }))]);
+  const [{ shipments }, st, rn, db] = await Promise.all([api('GET', '/api/shipments'), api('GET', '/api/courier/stats').catch(() => null), api('GET', '/api/courier/run').catch(() => ({ run: null, offers: [] })), api('GET', '/api/courier/dashboard').catch(() => null)]);
   const el = $('[data-colis]'); if (!el) return;
   const me = state.user?.id, mg = state.lang === 'mg';
   const mine = (x) => x.courier?.id === me;
@@ -419,7 +468,8 @@ async function loadMissions() {
     [c('to_return'), shipments.filter((x) => x.to_return)],
     [c('done_today'), shipments.filter((x) => ['delivered', 'refused', 'cancelled'].includes(x.status) && !x.to_return)],
   ];
-  const cash = shipments.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + (x.collected || 0), 0);
+  // à remettre au centre = argent encaissé (tous jours non encore remis) − ma part ; même calcul que l'administration
+  const cash = db ? db.cash.to_remit : shipments.filter((x) => ['delivered', 'refused'].includes(x.status)).reduce((a, x) => a + (x.collected || 0), 0);
   const toLeave = shipments.filter((x) => x.step === 'scheduled' && mine(x)).length;
   const stats = st?.today ? `<div class="row" style="gap:8px;margin-bottom:10px">${[[mg ? 'Nalaina' : 'Récupérés', st.today.picked + st.today.from_centre], [mg ? 'Natolotra' : 'Livrés', st.today.delivered], [mg ? 'Mandeha' : 'En cours', st.today.open]].map(([k, v]) => `<div class="card grow" style="text-align:center;padding:8px"><div style="font-size:1.3rem;font-weight:850">${v}</div><div class="tiny muted">${k} ${mg ? 'androany' : "aujourd'hui"}</div></div>`).join('')}</div>` : '';
   myRun = rn.run; toLeaveN = toLeave;
@@ -436,7 +486,7 @@ async function loadMissions() {
         : `<div class="row" style="margin-top:6px"><button class="btn primary grow" data-act="take" data-id="${o.id}">✋ ${mg ? 'Raisiko' : 'Je le prends'}</button><button class="btn" data-act="skip" data-id="${o.id}">✕</button></div>`}</div>`;
   const offersBox = rn.offers.length ? `<h3>📦 ${mg ? 'Colis eny an-dalanao' : 'Colis sur ton chemin'} (${rn.offers.filter((o) => o.status === 'open').length})</h3>
     <p class="tiny muted">${mg ? 'Izay manamarina voalohany no maka azy.' : 'Le premier qui confirme le prend.'}</p><div class="list">${rn.offers.map(offerCard).join('')}</div>` : '';
-  el.innerHTML = stats + runBox + offersBox + tourBox + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola eny aminao (atolotra ny centre)' : 'Argent en main (à remettre au centre)'} : <b>${ar(cash)}</b></div>` : '')
+  el.innerHTML = stats + runBox + offersBox + tourBox + (cash ? `<div class="card" style="background:var(--sun-soft);border:0;margin-bottom:10px">💵 ${state.lang === 'mg' ? 'Vola atolotra ny centre (efa nesorina ny anjaranao)' : 'À remettre au centre (votre part déjà déduite)'} : <b>${ar(cash)}</b></div>` : '')
     + grp.filter(([, l]) => l.length).map(([title, l]) => `<h3>${esc(title)} (${l.length})</h3><div class="list">${l.map((x) => shipCard(x)).join('')}</div>`).join('')
     || `<p class="muted" style="text-align:center;padding:16px">${c('empty')}</p>`;
   // repères sur la carte (+ colis proposés et chemin de la tournée)
@@ -464,11 +514,11 @@ const actions = {
   menu: () => {
     const back = document.createElement('div');
     back.className = 'sp-sheet-back';
-    back.innerHTML = `<div class="sp-sheet">${[['hist', 'hist', t('history')], ['support', 'chat', L2('Service client', 'Sampana mpanjifa')], ['notifs', 'bell', 'Notifications'], ['profile', 'user', L2('Profil et langue', 'Mombamomba sy fiteny')]]
+    back.innerHTML = `<div class="sp-sheet">${[['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')], ['support', 'chat', L2('Service client', 'Sampana mpanjifa')], ['notifs', 'bell', 'Notifications'], ['profile', 'user', L2('Profil et langue', 'Mombamomba sy fiteny')]]
       .map(([k, i, l]) => `<button data-k="${k}">${ic(i)}<span>${l}</span></button>`).join('')}<button data-k="out" class="danger">${ic('out')}<span>${L2('Déconnexion', 'Hivoaka')}</span></button></div>`;
     back.addEventListener('click', (e) => {
       const k = e.target.closest('[data-k]')?.dataset.k; back.remove();
-      if (k === 'hist') { tab = 'hist'; lastSig = ''; render(); } else if (k === 'out') logout(); else if (k) actions[k]();
+      if (['plan', 'wallet', 'hist'].includes(k)) { tab = k; lastSig = ''; render(); } else if (k === 'out') logout(); else if (k) actions[k]();
     });
     document.body.append(back);
   },

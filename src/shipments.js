@@ -864,6 +864,50 @@ async function myStats(ctx, env) {
   return json({ today: (await courierStats(env, 1, ctx.user.id))[0], week: (await courierStats(env, 7, ctx.user.id))[0] });
 }
 
+// Tableau de bord du livreur : ses colis en cours et l'argent à encaisser, ce qu'il doit remettre au centre
+// (tous jours confondus), ce qu'il a déjà remis, ses gains (aujourd'hui / 7 jours / ce mois) et ses 7 derniers jours.
+// Mêmes calculs que le « Rapport livreurs » de l'administration : les deux affichent les mêmes chiffres.
+export async function courierDashboard(env, me) {
+  const t = now(), day0 = mgMidnight(0), dayKeyOf = (ms) => new Date(ms + H3).toISOString().slice(0, 10);
+  const month0 = Date.parse(`${dayKeyOf(t).slice(0, 8)}01T00:00:00Z`) - H3;
+  const open = await all(env, `SELECT s.id, s.status, s.picked_at, s.courier_id, s.pickup_courier_id, s.delivery_courier_id, s.relay, s.province, s.value_paid, s.wait_fee,
+      COALESCE(s.value, s.declared_value, 0) AS value, s.fee, s.courier_confirmed_at
+    FROM shipments s WHERE s.status IN ('assigned','picked_up') AND (s.courier_id = ? OR (s.relay = 1 AND s.delivery_courier_id = ?))`, me, me);
+  const toPay = (s) => (s.province ? 0 : s.value_paid ? s.wait_fee || 0 : s.value + s.fee);
+  const pick = open.filter((s) => s.status === 'assigned' && !s.picked_at && s.courier_id === me);
+  const deliver = open.filter((s) => s.status === 'picked_up' && !s.courier_confirmed_at);
+  const [today, week, month] = await Promise.all([
+    courierReport(env, { from: day0, to: day0 + 864e5, courierId: me }),
+    courierReport(env, { from: day0 - 6 * 864e5, to: day0 + 864e5, courierId: me }),
+    courierReport(env, { from: Math.min(month0, day0 - 6 * 864e5), to: day0 + 864e5, courierId: me }),
+  ]);
+  const monthRows = month.rows.filter((r) => Date.parse(`${r.day}T00:00:00Z`) - H3 >= month0);
+  const sum = (rows, k) => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  const dues = (await courierDues(env, me))[0] || { cash: 0, n: 0, since: null, collected: 0, share: 0, pickup_fees: 0 };
+  const settled = await all(env, 'SELECT amount, shipments, note, at FROM cash_settlements WHERE courier_id = ? ORDER BY at DESC LIMIT 5', me);
+  const remittedMonth = (await one(env, 'SELECT COALESCE(SUM(amount), 0) AS v FROM cash_settlements WHERE courier_id = ? AND at >= ?', me, month0)).v;
+  const c = await one(env, 'SELECT rating_sum, rating_count FROM couriers WHERE user_id = ?', me);
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const d = dayKeyOf(day0 - (6 - i) * 864e5), r = week.rows.find((x) => x.day === d);
+    return { day: d, delivered: r?.delivered || 0, earned: r?.courier_share || 0 };
+  });
+  const T = today.totals;
+  return {
+    now: {
+      to_pickup: pick.length, to_deliver: deliver.length, in_progress: open.length,
+      to_collect: deliver.reduce((a, s) => a + toPay(s), 0), to_collect_later: pick.reduce((a, s) => a + toPay(s), 0),
+      fees_in_progress: open.reduce((a, s) => a + (s.fee || 0), 0),
+    },
+    today: { picked: T.picked, delivered: T.delivered, refused: T.refused, collected: T.collected + T.pickup_fees, earned: T.courier_share, due: T.due },
+    cash: { to_remit: dues.cash, parcels: dues.n, since: dues.since, collected: dues.collected + dues.pickup_fees, my_share: dues.share },
+    remitted: { month: remittedMonth, last: settled },
+    earnings: { today: T.courier_share, week: week.totals.courier_share, month: sum(monthRows, 'courier_share') },
+    month: { delivered: sum(monthRows, 'delivered'), refused: sum(monthRows, 'refused'), picked: sum(monthRows, 'picked') },
+    last7, rating: c?.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null, rating_count: c?.rating_count || 0,
+  };
+}
+async function myDashboard(ctx, env) { return json(await courierDashboard(env, ctx.user.id)); }
+
 async function courierGuardShip(ctx, env, statuses) {
   const s = await loadShipment(env, ctx.params.id);
   if (s.courier_id !== ctx.user.id) fail(403, 'forbidden', 'Ce colis ne vous est pas attribué');
@@ -1660,6 +1704,7 @@ export function registerShipmentRoutes(route) {
   route('GET', '/api/admin/courier-stats', ['admin'], adminCourierStats);
   route('GET', '/api/admin/courier-stats/report', ['admin'], adminCourierReport);
   route('GET', '/api/courier/stats', ['courier'], myStats);
+  route('GET', '/api/courier/dashboard', ['courier'], myDashboard);
   route('GET', '/api/shipments/:id/delivery-photo', ['admin', 'client', 'courier'], deliveryPhoto);
   route('POST', '/api/shipments/:id/accept', ['courier'], acceptMission);
   route('POST', '/api/shipments/:id/decline', ['courier'], declineMission);
