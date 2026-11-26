@@ -2,7 +2,7 @@
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, supportChat, profileForm,
-  sendSOS, complaintForm, chatHtml, haversine, beep,
+  sendSOS, complaintForm, chatHtml, haversine, beep, logout,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel, nextAction } from './colis.js';
 
@@ -10,21 +10,46 @@ let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTime
 const mk = {};
 let axeLayer = null, axe = null, routeLayer = null, tab = 'colis', shipTimer = null, requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
 
+// Icônes du menu (mêmes traits que l'espace client).
+const SV = {
+  box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>', bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  cal: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
+  hist: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v4l3 2"/>', chat: '<path d="M4 5h16v11H9l-5 4z"/>', bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>', out: '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/>', more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+};
+const ic = (k) => `<svg class="sp-ic" viewBox="0 0 24 24" aria-hidden="true">${SV[k]}</svg>`;
+const L2 = (fr, mg) => (state.lang === 'mg' ? mg : fr);
+const NOMAP = ['wallet', 'hist']; // pages sans carte : la place va au contenu
+
 export async function mount(el) {
   root = el;
   available = !!state.courier?.available;
-  root.innerHTML = `<div class="mapapp">
-    <div class="map" id="map"></div>
-    <div class="topbar">
-      <div class="brand-pill"><img src="/icon.svg" alt=""><span>Alefa <span class="muted small">${t('courier')}</span></span></div>
-      <div class="grow"></div>
-      <button class="icon-btn" data-act="support" title="Service client">💬</button>
-      <button class="icon-btn" data-act="notifs">🔔<span class="badge-dot hidden" data-unread></span></button>
-      <button class="icon-btn" data-act="profile">👤</button>
+  if (!document.querySelector('link[data-space-css]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/css/space.css'; l.dataset.spaceCss = '1'; document.head.append(l); }
+  const u = state.user;
+  const navs = [['colis', 'box', c('colis')], ['req', 'bolt', 'Express'], ['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')]];
+  root.className = 'sp cv';
+  root.innerHTML = `<aside class="sp-side">
+      <a class="sp-logo" href="/livreur"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa</span></a>
+      <div class="sp-label">${L2('Espace livreur', 'Toeran\'ny livreur')}</div>
+      <nav>${navs.map(([k, i, l]) => `<button data-act="tab" data-t="${k}">${ic(i)}<span>${l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}<hr>
+        <button data-act="support">${ic('chat')}<span>${L2('Service client', 'Sampana mpanjifa')}</span></button>
+        <button data-act="notifs">${ic('bell')}<span>Notifications</span></button>
+        <button data-act="profile">${ic('user')}<span>${L2('Profil', 'Mombamomba')}</span></button></nav>
+      <div class="sp-me"><span class="sp-av">${esc(initials(u.name))}</span><div><b>${esc(u.name)}</b><small>${esc(phoneFmt(u.phone))}</small></div><button data-act="out" title="${L2('Déconnexion', 'Hivoaka')}">${ic('out')}</button></div>
+    </aside>
+    <div class="sp-main">
+      <header class="sp-top"><a class="sp-logo m" href="/livreur"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa</span></a>
+        <span class="cv-state ${available ? 'on' : ''}" data-state>${available ? t('available') : t('unavailable')}</span><div class="grow"></div>
+        <button class="sp-bell" data-act="notifs" aria-label="Notifications">${ic('bell')}<span class="sp-dot hidden" data-unread></span></button>
+        <button class="sp-chip" data-act="profile"><span class="sp-av">${esc(initials(u.name))}</span><span>${esc(u.name.split(' ')[0])}</span></button></header>
+      <main class="cv-main" data-cvmain>
+        <div class="cv-map"><div class="map" id="map"></div>
+          <div class="cv-fab"><button class="icon-btn" data-act="center" title="${L2('Ma position', 'Ny toerako')}">${ic('target')}</button><button class="icon-btn sos-btn" data-act="sos">SOS</button></div></div>
+        <div class="cv-body" id="sheet"><div class="sheet-body" id="sheet-body"></div></div>
+      </main>
     </div>
-    <div class="sheet" id="sheet"><div class="grip" data-act="grip"></div><div class="sheet-body" id="sheet-body"></div></div>
-    <div class="fab-col"><button class="icon-btn" data-act="center">◎</button><button class="icon-btn sos-btn" data-act="sos">SOS</button></div>
-  </div>`;
+    <nav class="sp-tab">${[...navs.slice(0, 4), ['menu', 'more', L2('Plus', 'Hafa')]].map(([k, i, l]) => `<button ${k === 'menu' ? 'data-act="menu"' : `data-act="tab" data-t="${k}"`}>${ic(i)}<span>${k === 'plan' ? L2('Départs', 'Fiaingana') : l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}</nav>`;
   sheet = $('#sheet');
   map = makeMap($('#map'), { zoom: 15 });
   bind(root, actions);
@@ -88,7 +113,7 @@ function showGate(kind) {
   if (gateKind === kind) return;
   gateKind = kind;
   let g = $('#gps-gate');
-  if (!g) { g = document.createElement('div'); g.id = 'gps-gate'; g.className = 'gps-gate'; root.querySelector('.mapapp').append(g); }
+  if (!g) { g = document.createElement('div'); g.id = 'gps-gate'; g.className = 'gps-gate'; document.body.append(g); }
   const searching = kind === 'searching';
   g.innerHTML = `<div class="gps-card">
     ${searching ? '<div class="radar" style="margin:6px auto 18px"></div>' : '<div style="font-size:54px;line-height:1">📍</div>'}
@@ -135,6 +160,7 @@ async function loadRequests() {
   }
   for (const k of Object.keys(mk)) if (k.startsWith('r') && !keep.has(k)) { mk[k].remove(); delete mk[k]; }
   const sig = JSON.stringify(requests.map((x) => [x.id, x.proposed_price, x.my_price, x.my_status]));
+  syncNav();
   if (sig !== lastSig && tab === 'req') { lastSig = sig; render(); }
 }
 
@@ -153,7 +179,16 @@ function axeLine() {
 }
 function header() {
   return `<button class="switch ${available ? 'on' : 'off'}" data-act="toggle"><span class="knob"></span><span class="grow" style="text-align:left">${available ? t('available') : t('unavailable')}</span><span class="small">${available ? '🟢 GPS' : ''}</span></button>${axeLine()}
-    <div class="tabs" style="margin-top:10px"><button data-act="tab" data-t="colis" class="${tab === 'colis' ? 'on' : ''}">${c('colis')}</button><button data-act="tab" data-t="plan" class="${tab === 'plan' ? 'on' : ''}">${c('my_schedule')}</button><button data-act="tab" data-t="req" class="${tab === 'req' ? 'on' : ''}">Express${requests.length ? ` (${requests.length})` : ''}</button><button data-act="tab" data-t="wallet" class="${tab === 'wallet' ? 'on' : ''}">${t('wallet')}</button><button data-act="tab" data-t="hist" class="${tab === 'hist' ? 'on' : ''}">${t('history')}</button></div>`;
+    <h2 class="cv-h">${{ colis: c('colis'), req: L2('Courses express', 'Dia haingana'), plan: c('my_schedule'), wallet: t('wallet'), hist: t('history') }[tab] || ''}</h2>`;
+}
+// Menu, carte et compteurs suivent la page affichée.
+function syncNav() {
+  root.querySelectorAll('[data-act=tab]').forEach((b) => b.classList.toggle('on', b.dataset.t === tab));
+  const st = root.querySelector('[data-state]');
+  if (st) { st.textContent = available ? t('available') : t('unavailable'); st.classList.toggle('on', available); }
+  root.querySelectorAll('[data-count=req]').forEach((e) => { e.textContent = requests.length || ''; });
+  const m = root.querySelector('[data-cvmain]'), hide = !active && NOMAP.includes(tab);
+  if (m && m.classList.contains('nomap') !== hide) { m.classList.toggle('nomap', hide); if (!hide) setTimeout(() => map?.invalidateSize(), 50); }
 }
 
 function reqCard(q) {
@@ -167,8 +202,9 @@ function reqCard(q) {
 }
 
 function render() {
+  syncNav();
   if (active) return renderActive();
-  sheet.classList.remove('collapsed');
+  window.scrollTo(0, 0);
   const body = $('#sheet-body');
   if (tab === 'wallet') { body.innerHTML = header() + '<div data-wallet>…</div>'; return loadWallet(); }
   if (tab === 'colis') { body.innerHTML = header() + '<div data-colis>…</div>'; return loadMissions(); }
@@ -218,7 +254,7 @@ function drawRoute(r, fit) {
   if (!map) return;
   routeLayer?.remove();
   routeLayer = L.layerGroup([L.polyline(r.coords, { color: '#0b6e4f', weight: 9, opacity: .18 }), L.polyline(r.coords, { color: '#0b6e4f', weight: 4.5, dashArray: r.approx ? '8 8' : null })]).addTo(map);
-  if (fit) map.fitBounds(L.latLngBounds(r.coords).pad(.3), { paddingBottomRight: [0, window.innerWidth < 900 ? 280 : 0], paddingTopLeft: [window.innerWidth >= 900 ? 430 : 0, 60] });
+  if (fit) map.fitBounds(L.latLngBounds(r.coords).pad(.2), { padding: [30, 30] });
 }
 function clearRoute() { routeLayer?.remove(); routeLayer = null; for (const k of ['A', 'B']) if (mk[k]) { mk[k].remove(); delete mk[k]; } lastRouteKey = ''; }
 
@@ -263,6 +299,7 @@ async function refreshActive() {
 }
 
 function renderActive() {
+  syncNav();
   const d = active;
   if (!d?.status) return;
   sheet.classList.remove('collapsed');
@@ -424,7 +461,18 @@ async function loadHistory() {
 
 // ---------------------------------------------------------------- actions
 const actions = {
-  grip: () => sheet.classList.toggle('collapsed'),
+  menu: () => {
+    const back = document.createElement('div');
+    back.className = 'sp-sheet-back';
+    back.innerHTML = `<div class="sp-sheet">${[['hist', 'hist', t('history')], ['support', 'chat', L2('Service client', 'Sampana mpanjifa')], ['notifs', 'bell', 'Notifications'], ['profile', 'user', L2('Profil et langue', 'Mombamomba sy fiteny')]]
+      .map(([k, i, l]) => `<button data-k="${k}">${ic(i)}<span>${l}</span></button>`).join('')}<button data-k="out" class="danger">${ic('out')}<span>${L2('Déconnexion', 'Hivoaka')}</span></button></div>`;
+    back.addEventListener('click', (e) => {
+      const k = e.target.closest('[data-k]')?.dataset.k; back.remove();
+      if (k === 'hist') { tab = 'hist'; lastSig = ''; render(); } else if (k === 'out') logout(); else if (k) actions[k]();
+    });
+    document.body.append(back);
+  },
+  out: () => logout(),
   notifs: () => showNotifications(),
   support: () => supportChat(),
   profile: () => profileForm(),

@@ -296,3 +296,36 @@ i.g { background: var(--hg2); } i.o { background: #f08a24; } i.c { background: v
 .wz-sug button b { display: block; font-weight: 600; }
 .wz-sug button small { display: block; font-size: .76rem; color: var(--hk2); margin-top: 1px; }
 .wz-maphint { position: absolute; top: 12px; left: 12px; right: 60px; z-index: 500; background: rgba(255, 255, 255, .94); border-radius: 10px; padding: 7px 11px; font-size: .78rem; color: var(--hk2); box-shadow: 0 4px 14px -6px rgba(0, 0, 0, .3); }
+
+/* Espace livreur : même habillage que l'espace client. Carte à droite (ordinateur) ou en haut (téléphone), contenu en cartes. */
+.cv-main { display: grid; grid-template-columns: minmax(360px, 480px) 1fr; flex: 1; min-height: 0; }
+.cv-body { order: 1; padding: 22px 24px 40px; min-width: 0; }
+.cv-body .sheet-body { padding: 0; overflow: visible; }
+.cv-map { order: 2; position: sticky; top: 63px; height: calc(100dvh - 63px); border-left: 1px solid var(--hl); }
+.cv-map .map { position: absolute; inset: 0; z-index: 0; background: #e8eee9; }
+.cv-main.nomap { grid-template-columns: 1fr; }
+.cv-main.nomap .cv-map { display: none; }
+.cv-main.nomap .cv-body { max-width: 760px; width: 100%; margin: 0 auto; }
+.cv-fab { position: absolute; right: 14px; bottom: 18px; z-index: 550; display: flex; flex-direction: column; gap: 10px; }
+.cv-fab .sp-ic { width: 22px; height: 22px; }
+.cv-h { font-size: 1.35rem; margin: 18px 0 12px !important; }
+.cv-body .card { border-radius: 18px; border: 0; box-shadow: 0 0 0 1px var(--hl); background: #fff; }
+.cv-body .card.hl { box-shadow: 0 0 0 2px var(--hg); }
+.cv-body .switch { border-radius: 18px; padding: 14px 16px; }
+.cv-body .switch.off { background: #fff; box-shadow: 0 0 0 1px var(--hl); }
+.cv-body .switch.on { background: var(--hg); }
+.cv-state { font-size: .78rem; font-weight: 800; padding: 5px 11px; border-radius: 999px; background: #eee9dd; color: var(--hk2); margin-left: 6px; }
+.cv-state.on { background: #e3f1ea; color: var(--hg); }
+.cv-state.on::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #18a36f; margin-right: 6px; vertical-align: 1px; animation: pulse 1.4s infinite; }
+.cv-count:empty { display: none; }
+.cv-count { font-style: normal; margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--hs); color: #2b2000; font-size: .72rem; font-weight: 900; display: inline-grid; place-items: center; }
+.sp-tab .cv-count { position: absolute; margin: -4px 0 0 18px; }
+.sp-tab button { position: relative; }
+@media (max-width: 860px) {
+  .cv-main { grid-template-columns: 1fr; }
+  .cv-map { order: 0; position: relative; top: 0; height: 36vh; min-height: 220px; border-left: 0; border-bottom: 1px solid var(--hl); }
+  .cv-body { padding: 16px 16px calc(96px + env(safe-area-inset-bottom)); }
+  .cv-main.nomap .cv-body { padding-top: 20px; }
+  .cv-fab { bottom: 12px; right: 12px; }
+}
+.cv-map { isolation: isolate; }
