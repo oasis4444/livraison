@@ -4,6 +4,13 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
+
+// Onglets de l'espace livreur : menu latéral (ordinateur) ou barre du bas (téléphone) ; sinon via « Plus ».
+async function ctab(p, k) {
+  const sel = `[data-act=tab][data-t=${k}] >> visible=true`;
+  if (await p.locator(sel).count()) return p.click(sel);
+  await p.click('[data-act=menu] >> visible=true'); await p.click(`.sp-sheet [data-k=${k}]`);
+}
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
@@ -70,6 +77,7 @@ try {
   await step('livreur : « Je pars du centre » vers Ivandry (tournée)', async () => {
     await courier.goto(BASE + '/livreur');
     await courier.fill('[name=phone]', '034 11 111 11'); await courier.fill('[name=password]', 'velo1234'); await courier.click('[type=submit]');
+    await courier.waitForSelector('[data-t=colis] >> visible=true'); await ctab(courier, 'colis');
     await courier.waitForSelector('[data-act=depart]');
     await courier.click('[data-act=depart]'); await courier.waitForSelector('.modal [data-dest]');
     await courier.fill('.modal [data-dest]', 'Ivandry'); await courier.click('.modal [data-sg] [data-i="0"]');
@@ -114,7 +122,7 @@ try {
     await client.waitForSelector('.sp-kv >> text=Fianarantsoa'); await client.waitForSelector('.sp-kv >> text=Livraison');
   });
   await step('livreur : le colis sur son chemin lui est proposé, il le prend en premier', async () => {
-    await courier.click('[data-t=colis]'); await courier.waitForSelector('text=Colis sur ton chemin', { timeout: 15000 });
+    await ctab(courier, 'colis'); await courier.waitForSelector('text=Colis sur ton chemin', { timeout: 15000 });
     await courier.waitForSelector(`[data-act=take]`);
     await courier.screenshot({ path: 'tests/screens/42-livreur-offre.png' });
     await courier.click('[data-act=take]'); await courier.waitForSelector('text=colis à toi');

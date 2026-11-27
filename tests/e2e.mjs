@@ -4,6 +4,13 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
+
+// Onglets de l'espace livreur : menu latéral (ordinateur) ou barre du bas (téléphone) ; sinon via « Plus ».
+async function ctab(p, k) {
+  const sel = `[data-act=tab][data-t=${k}] >> visible=true`;
+  if (await p.locator(sel).count()) return p.click(sel);
+  await p.click('[data-act=menu] >> visible=true'); await p.click(`.sp-sheet [data-k=${k}]`);
+}
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
@@ -122,7 +129,7 @@ try {
     await courier.waitForSelector('[data-act=toggle]');
     await courier.click('[data-act=toggle]');
     await courier.waitForSelector('.switch.on');
-    await courier.click('[data-t=req]');
+    await ctab(courier, 'req');
     await courier.waitForTimeout(800);
   });
   await step('client : demande Analakely → Ankorondrano à 8 000 Ar', async () => {
@@ -182,7 +189,7 @@ try {
   });
   await step('livreur : revenus', async () => {
     await courier.keyboard.press('Escape'); await courier.click('.modal-back', { position: { x: 5, y: 5 } }).catch(() => {});
-    await courier.click('[data-act=tab][data-t=wallet]');
+    await ctab(courier, 'wallet');
     await courier.waitForSelector('text=Opérations');
     await courier.screenshot({ path: 'tests/screens/07-livreur-revenus.png' });
   });
