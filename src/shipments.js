@@ -68,13 +68,82 @@ export const STEP_LABELS = STEP_FR;
 const toPay = (s) => (s.province ? 0 : s.value_paid ? s.wait_fee || 0 : (s.value ?? s.declared_value) + s.fee);
 
 // Retards : départ passé et toujours « Programmé », plus de 24 h sans livreur, ou heure de livraison dépassée.
-export function lateReason(s, t = now(), lateHours = 24) {
+export function lateReason(s, t = now(), lateHours = 24, holdHours = 3) {
   if (s.status === 'pending' && !s.review && t - s.created_at > lateHours * 3600e3) return `sans livreur depuis ${Math.floor((t - s.created_at) / 3600e3)} h`;
+  const held = heldSince(s);
+  if (held && holdHours > 0 && t - held > holdHours * 3600e3) return `chez le livreur depuis ${Math.floor((t - held) / 3600e3)} h, pas encore livré`;
   if (s.status === 'assigned' && !s.stage && ((s.departure_at && s.departure_at < t - 15 * 60e3) || (s.pickup_to && s.pickup_to < t))) return 'récupération en retard (toujours « Programmé »)';
   if (s.status === 'picked_up' && s.centre_in_at && !s.centre_out_at && t - s.centre_in_at > 7 * 864e5) return `au centre depuis ${Math.floor((t - s.centre_in_at) / 864e5)} j (contacter l'expéditeur)`;
   if (['assigned', 'picked_up'].includes(s.status) && s.deliver_to && s.deliver_to < t - 30 * 60e3) return 'livraison en retard sur l\'heure prévue';
   return null;
 }
+// Colis dans les mains d'un livreur (récupéré, pas déposé au centre, ou repris au centre) et pas encore remis :
+// depuis quand il l'a. null s'il dort au centre ou s'il est déjà livré.
+export function heldSince(s) {
+  if (s.status !== 'picked_up' || s.courier_confirmed_at) return null;
+  if (s.centre_in_at && !s.centre_out_at) return null;
+  return s.centre_out_at || s.picked_at || null;
+}
+const holder = (s) => (s.centre_out_at && s.delivery_courier_id ? s.delivery_courier_id : s.courier_id);
+// Colis chez les livreurs depuis plus de `hours` heures (le plus ancien d'abord).
+export async function heldParcels(env, hours, courierId = null) {
+  const t = now();
+  const rows = await all(env, `SELECT s.id, s.ref, s.status, s.picked_at, s.centre_in_at, s.centre_out_at, s.courier_confirmed_at, s.courier_id, s.delivery_courier_id,
+      s.recipient_name, s.recipient_phone, s.drop_addr, s.fee, COALESCE(s.value, s.declared_value, 0) AS value, s.value_paid, s.province, s.wait_fee
+    FROM shipments s WHERE s.status = 'picked_up' AND s.courier_confirmed_at IS NULL AND (s.centre_in_at IS NULL OR s.centre_out_at IS NOT NULL)`);
+  const list = rows.map((s) => ({ ...s, since: heldSince(s), holder: holder(s) }))
+    .filter((s) => s.holder && s.since && t - s.since > hours * 3600e3 && (!courierId || s.holder === courierId))
+    .sort((a, b) => a.since - b.since);
+  const ids = [...new Set(list.map((s) => s.holder))].filter(Boolean);
+  const users = ids.length ? await all(env, `SELECT id, name, phone FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  return list.map((s) => ({ id: s.id, ref: s.ref, since: s.since, hours: Math.floor((t - s.since) / 3600e3), drop_addr: s.drop_addr, recipient_name: s.recipient_name,
+    recipient_phone: s.recipient_phone, to_pay: toPay(s), courier_id: s.holder, courier: users.find((u) => u.id === s.holder)?.name || null, courier_phone: users.find((u) => u.id === s.holder)?.phone || null }));
+}
+
+// Alertes « ça traîne » (toutes les minutes avec la tâche planifiée, une seule fois par seuil) :
+// - colis chez le livreur depuis hold_hours (3 h) : rappel au livreur ; depuis 2 × hold_hours : alerte à l'administration aussi ;
+// - argent gardé par un livreur depuis cash_alert_hours (12 h) sans être remis au centre : livreur + administration, une fois par jour.
+let alertsOk = false;
+async function sendOnce(env, key) {
+  if (!alertsOk) { await run(env, 'CREATE TABLE IF NOT EXISTS alerts_sent (k TEXT PRIMARY KEY, at INTEGER NOT NULL)'); alertsOk = true; }
+  const r = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (k, at) VALUES (?, ?)').bind(key, now()).run();
+  return (r.meta?.changes ?? 0) > 0;
+}
+let holdSettingsOk = false;
+export async function ensureHoldSettings(env) {
+  if (holdSettingsOk) return;
+  await run(env, "INSERT OR IGNORE INTO settings (key, value) VALUES ('hold_hours', '3'), ('cash_alert_hours', '12')");
+  holdSettingsOk = true;
+}
+export async function alertHolds(env) {
+  await ensureHoldSettings(env);
+  const st = await settings(env), H = Number(st.hold_hours ?? 3), C = Number(st.cash_alert_hours ?? 12);
+  let n = 0;
+  if (H > 0) {
+    for (const p of await heldParcels(env, H)) {
+      if (!p.courier_id) continue;
+      if (await sendOnce(env, `hold:${p.id}:1`)) {
+        await notify(env, [p.courier_id], 'hold', `⏰ Colis ${p.ref} à livrer`, `Il est chez vous depuis ${p.hours} h. Livrez-le à ${p.recipient_name} ou rapportez-le au centre.`); n += 1;
+      }
+      if (p.hours >= 2 * H && await sendOnce(env, `hold:${p.id}:2`)) {
+        await notify(env, [p.courier_id], 'hold', `⏰ Colis ${p.ref} toujours chez vous`, `Depuis ${p.hours} h. L'administration est prévenue : livrez-le ou rapportez-le au centre.`);
+        await alertAdmins(env, 'alert', `⏰ Colis ${p.ref} chez ${p.courier || 'le livreur'} depuis ${p.hours} h, pas encore livré · → ${p.drop_addr}`, null, p.courier_id); n += 1;
+      }
+    }
+  }
+  if (C > 0) {
+    const day = new Date(now() + H3).toISOString().slice(0, 10);
+    for (const d of await courierDues(env)) {
+      if (d.cash <= 0 || !d.since || now() - d.since < C * 3600e3) continue;
+      if (!(await sendOnce(env, `cash:${d.id}:${day}`))) continue;
+      const h = Math.floor((now() - d.since) / 3600e3);
+      await notify(env, [d.id], 'cash', '💵 Argent à remettre au centre', `${d.cash.toLocaleString('fr-FR')} Ar depuis ${h} h. Passez à la caisse du centre.`);
+      await alertAdmins(env, 'alert', `💵 ${d.name} garde ${d.cash.toLocaleString('fr-FR')} Ar depuis ${h} h sans les remettre au centre`, null, d.id); n += 1;
+    }
+  }
+  return n;
+}
+
 // Depuis quand le colis est à cette étape (« au centre depuis 5 h »).
 export function stepSince(s) {
   if (s.status === 'pending') return s.created_at;
@@ -246,7 +315,7 @@ export async function alertLate(env) {
   const rows = await all(env, `SELECT * FROM shipments WHERE status IN ('pending','assigned','picked_up') AND late_alerted_at IS NULL AND created_at > ?`, now() - 14 * 864e5);
   let n = 0;
   for (const s of rows) {
-    const why = lateReason(s, now(), Number(st.late_hours || 24));
+    const why = lateReason(s, now(), Number(st.late_hours || 24), Number(st.hold_hours ?? 3));
     if (!why) continue;
     await run(env, 'UPDATE shipments SET late_alerted_at = ? WHERE id = ?', now(), s.id);
     await alertAdmins(env, 'alert', `⏰ Colis ${s.ref} en retard : ${why} · ${s.pickup_addr} → ${s.drop_addr}`, null, s.courier_id);
@@ -841,6 +910,15 @@ export async function courierReport(env, { from, to, courierId = null }) {
   const open = await all(env, `SELECT courier_id AS cid, COUNT(*) AS n FROM shipments WHERE status IN ('assigned','picked_up') AND courier_id IS NOT NULL${courierId ? ' AND courier_id = ?' : ''} GROUP BY courier_id`, ...extra);
   return { rows: list, totals, overview: { created: g.created, cancelled: g.cancelled, open: courierId ? (open[0]?.n || 0) : g.open }, open: Object.fromEntries(open.map((r) => [r.cid, r.n])) };
 }
+// Ce qui traîne chez les livreurs : colis gardés trop longtemps, argent pas encore remis (tableau de bord admin).
+async function adminHolds(ctx, env) {
+  await ensureHoldSettings(env);
+  const st = await settings(env), H = Number(st.hold_hours ?? 3) || 3, C = Number(st.cash_alert_hours ?? 12) || 12;
+  const cash = (await courierDues(env)).filter((d) => d.cash > 0 && d.since && now() - d.since > C * 3600e3)
+    .map((d) => ({ courier_id: d.id, name: d.name, phone: d.phone, cash: d.cash, parcels: d.n, since: d.since, hours: Math.floor((now() - d.since) / 3600e3) }))
+    .sort((a, b) => a.since - b.since);
+  return json({ hold_hours: H, cash_alert_hours: C, parcels: await heldParcels(env, H), cash });
+}
 async function adminCourierReport(ctx, env) {
   const p = ctx.url.searchParams;
   const today = new Date(now() + H3).toISOString().slice(0, 10);
@@ -891,8 +969,12 @@ export async function courierDashboard(env, me) {
     const d = dayKeyOf(day0 - (6 - i) * 864e5), r = week.rows.find((x) => x.day === d);
     return { day: d, delivered: r?.delivered || 0, earned: r?.courier_share || 0 };
   });
+  await ensureHoldSettings(env);
+  const st = await settings(env), H = Number(st.hold_hours ?? 3) || 3, C = Number(st.cash_alert_hours ?? 12) || 12;
+  const held = (await heldParcels(env, H, me)).map((p) => ({ id: p.id, ref: p.ref, hours: p.hours, recipient_name: p.recipient_name, drop_addr: p.drop_addr, to_pay: p.to_pay }));
   const T = today.totals;
   return {
+    alerts: { held, hold_hours: H, cash_old: dues.cash > 0 && dues.since && t - dues.since > C * 3600e3 ? Math.floor((t - dues.since) / 3600e3) : 0 },
     now: {
       to_pickup: pick.length, to_deliver: deliver.length, in_progress: open.length,
       to_collect: deliver.reduce((a, s) => a + toPay(s), 0), to_collect_later: pick.reduce((a, s) => a + toPay(s), 0),
@@ -1703,6 +1785,7 @@ export function registerShipmentRoutes(route) {
   route('GET', '/api/admin/shipments/:id/suggest', ['admin'], suggestCouriers);
   route('GET', '/api/admin/courier-stats', ['admin'], adminCourierStats);
   route('GET', '/api/admin/courier-stats/report', ['admin'], adminCourierReport);
+  route('GET', '/api/admin/courier-stats/holds', ['admin'], adminHolds);
   route('GET', '/api/courier/stats', ['courier'], myStats);
   route('GET', '/api/courier/dashboard', ['courier'], myDashboard);
   route('GET', '/api/shipments/:id/delivery-photo', ['admin', 'client', 'courier'], deliveryPhoto);

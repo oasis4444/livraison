@@ -143,3 +143,9 @@
 .ad .st-cancelled::before, .ad .st-expired::before, .ad .st-suspended::before, .ad .st-rejected::before { background: #d64545; }
 .ad .tbl tr.click:hover td { background: #f5f9fc; }
 .pc-tbl td:nth-child(4) { min-width: 150px; } .pc-tbl td:nth-child(5) { min-width: 120px; }
+/* « Ça traîne chez les livreurs » */
+.ad .ad-hold { border: 2px solid #f3b4b4; background: #fff8f8; margin: 0 0 18px; }
+.ad .ad-hold-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #f6dada; }
+.ad .ad-hold-row.click { cursor: pointer; }
+.ad .ad-hold-h { min-width: 52px; text-align: center; font-weight: 900; color: #fff; background: #e5484d; border-radius: 10px; padding: 6px 8px; }
+.ad .ad-hold-h.cash { background: #c27c00; }

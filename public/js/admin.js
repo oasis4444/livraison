@@ -2,6 +2,7 @@
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, every, hm, startNotifications, showNotifications, profileForm, chatHtml, TANA, bikeRoute, vehIcon, geocode, setNotifOpener, chatPanel, logout,
+  chatBubble,
 } from './core.js';
 import { c, shipPill, sendForm, shipDetail, importForm, templateCsv, courierTripsEditor } from './colis.js';
 
@@ -59,6 +60,7 @@ export async function mount(el) {
   root.addEventListener('change', (e) => { if (e.target.matches(`${F} select, ${F} input[type=date]`)) runFilter(e.target, 0); });
   root.addEventListener('input', (e) => { if (e.target.matches(`${F} input:not([type=date])`)) runFilter(e.target, 500); });
   root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches(`${F} input`)) { e.preventDefault(); runFilter(e.target, 0); } });
+  admBubble = chatBubble('admin', { cls: 'adm-bub', onOpen: () => { location.hash = 'support'; } });
   startNotifications(() => { refreshCounts(); if (['dash', 'complaints', 'support'].includes(view)) show(); });
   // clic sur une notification : fiche du colis, course, réclamations, colis à répartir, paiements
   setNotifOpener((tg) => {
@@ -76,7 +78,7 @@ export async function mount(el) {
 
 // Assistant Central IA (bouton 🤖) : questions sur l'activité en français ou en malgache, décisions, contrôle anti-triche,
 // suivi des livreurs. Administrateur complet seulement ; les données viennent du serveur (/api/admin/centralia).
-let ciaCache = null;
+let ciaCache = null, admBubble = null;
 const ciaLoad = () => {
   if (!ciaCache || Date.now() - ciaCache.t > 60e3) ciaCache = { t: Date.now(), p: api('GET', '/api/admin/centralia') };
   return ciaCache.p;
@@ -103,6 +105,7 @@ function startCentralIA() {
 async function refreshCounts() {
   const [s, su] = await Promise.all([api('GET', '/api/admin/stats'), api('GET', '/api/admin/support/unread').catch(() => ({ unread_threads: 0 }))]);
   counts = { couriers: s.users.pending || 0, complaints: s.complaints.open || 0, live: s.complaints.sos || 0, support: su.unread_threads || 0, ops: s.parcels?.pending || 0 };
+  admBubble?.setCount(counts.support);
   renderNav();
   return s;
 }
@@ -295,13 +298,18 @@ const VIEWS = {
   },
 
   async dash() {
-    const [s, rep, comp, ops] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`).catch(() => ({ series: [], topCouriers: [] })), api('GET', '/api/admin/complaints').catch(() => ({ complaints: [] })), api('GET', '/api/admin/ops?days=1').catch(() => null)]);
+    const [s, rep, comp, ops, holds] = await Promise.all([refreshCounts(), api('GET', `/api/admin/reports?period=day&from=${Date.now() - 14 * 864e5}`).catch(() => ({ series: [], topCouriers: [] })), api('GET', '/api/admin/complaints').catch(() => ({ complaints: [] })), api('GET', '/api/admin/ops?days=1').catch(() => null), api('GET', '/api/admin/courier-stats/holds').catch(() => null)]);
     const og = (k) => (ops?.parcels || []).filter((p) => opsGroup(p) === k).length;
     const hr = Number(new Date().toLocaleString('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Indian/Antananarivo' }));
     main.innerHTML = head('Tableau de bord') + `
       <div class="ad-hello"><div><h2>${hr < 18 ? 'Bonjour' : 'Bonsoir'} ${esc(state.user.name.split(' ')[0])}</h2><p>${new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })} · voici l'activité du centre.</p></div>
         <div class="ad-quick"><button class="ad-q sun" data-act="newparcel">${aic('plus')}<span>Nouveau colis</span></button><a class="ad-q" href="#ops">${aic('route')}<span>Suivi</span></a><a class="ad-q" href="#live">${aic('map')}<span>Carte</span></a><a class="ad-q" href="#cash">${aic('cash')}<span>Caisse</span></a></div></div>
       ${(s.parcels.pending || s.complaints.sos || s.users.pending) ? `<div class="ad-alerts">${s.parcels.pending ? `<a href="#ops" class="ad-al">📥 <b>${s.parcels.pending}</b> colis à programmer ${aic('arrow')}</a>` : ''}${s.complaints.sos ? `<a href="#complaints" class="ad-al bad">🚨 <b>${s.complaints.sos}</b> SOS ${aic('arrow')}</a>` : ''}${s.users.pending ? `<a href="#couriers" class="ad-al">🚲 <b>${s.users.pending}</b> livreur(s) à valider ${aic('arrow')}</a>` : ''}</div>` : ''}
+      ${holds && (holds.parcels.length || holds.cash.length) ? `<div class="panel ad-hold"><div class="row between wrap"><h3>⏰ Ça traîne chez les livreurs</h3><a class="btn sm" href="#settings">Seuils : ${holds.hold_hours} h / ${holds.cash_alert_hours} h</a></div>
+        ${holds.parcels.map((p) => `<div class="ad-hold-row click" data-act="parcel" data-id="${p.id}" data-ref="${esc(p.ref)}"><span class="ad-hold-h">${p.hours} h</span><div class="grow"><b>${esc(p.ref)}</b> chez <b>${esc(p.courier || '—')}</b> · pas encore livré
+          <div class="tiny muted">→ ${esc(p.recipient_name || '')} · ${esc(p.drop_addr || '')}${p.to_pay ? ` · à encaisser ${ar(p.to_pay)}` : ''}</div></div>${p.courier_phone ? `<a class="btn sm" href="tel:${esc(p.courier_phone)}" onclick="event.stopPropagation()">📞 Appeler</a>` : ''}</div>`).join('')}
+        ${holds.cash.map((c) => `<div class="ad-hold-row"><span class="ad-hold-h cash">${c.hours} h</span><div class="grow"><b>${esc(c.name)}</b> garde <b>${ar(c.cash)}</b> sans les remettre<div class="tiny muted">${c.parcels} colis · depuis ${dt(c.since)}</div></div>
+          <a class="btn sm primary" href="#cash">Encaisser</a>${c.phone ? `<a class="btn sm" href="tel:${esc(c.phone)}">📞</a>` : ''}</div>`).join('')}</div>` : ''}
       <h3>📦 Colis du centre</h3><div class="kpis">
         ${kpi('Colis livrés aujourd\'hui', s.parcels.delivered_today || 0)}${kpi('Frais encaissés aujourd\'hui', ar(s.parcels.fees_today))}
         ${kpi('En cours', s.parcels.open || 0)}${kpi('À programmer', s.parcels.pending || 0, s.parcels.pending ? 'alert' : '')}
@@ -569,7 +577,7 @@ const VIEWS = {
           <div class="row">${f('pickup_fee_large', 'Récupération L / XL (Ar)', 'Gratuite pour S et M ; 0 si déposé au centre')}${f('return_fee_percent', 'Retour à l\'expéditeur (% des frais)')}</div>
           <div class="row">${f('direct_km', 'Livraison directe : jusqu\'à (km)', 'Récupération et livraison proches : un seul livreur, sans le centre')}${f('direct_fee', 'Tarif direct (Ar)')}</div></div>
         <div class="panel stack"><h3>Contrôles</h3>
-          <div class="row">${f('late_hours', 'Alerte « sans livreur » après (h)')}${f('cash_cap', 'Plafond d\'argent chez un livreur (Ar)', 'Au-delà : plus de nouvelles missions')}${f('cash_cap_hours', 'Argent gardé au plus (h)')}</div>
+          <div class="row">${f('late_hours', 'Alerte « sans livreur » après (h)')}${f('hold_hours', 'Alerte « colis chez le livreur » après (h)', 'Rappel au livreur ; au double, alerte à l\'administration. 0 = désactivé')}${f('cash_alert_hours', 'Alerte « argent pas remis » après (h)', 'Une fois par jour, livreur et administration. 0 = désactivé')}${f('cash_cap', 'Plafond d\'argent chez un livreur (Ar)', 'Au-delà : plus de nouvelles missions')}${f('cash_cap_hours', 'Argent gardé au plus (h)')}</div>
           <label class="field"><span>Code du colis à chaque étape (dépôt au centre, reprise, livraison)</span><select class="input" data-s="scan_required"><option value="1" ${s.scan_required !== '0' ? 'selected' : ''}>Obligatoire (scan de l'étiquette ou 4 caractères)</option><option value="0" ${s.scan_required === '0' ? 'selected' : ''}>Facultatif</option></select></label></div>
         <div class="panel stack"><h3>SMS automatiques au destinataire</h3>
           <p class="tiny muted">Lien de suivi à la création, puis « récupéré », « en route » et « livré ». Il faut une passerelle SMS (ex. téléphone Android avec une application « SMS Gateway », ou un opérateur) qui accepte : POST JSON { to, message } avec le jeton en « Authorization: Bearer ».</p>
@@ -772,7 +780,7 @@ async function usersView(role) {
         ${u.status === 'pending' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="rejected">Refuser</button>` : ''}
         ${u.status === 'active' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="suspended">Suspendre</button>` : ''}
         ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" data-veh="${u.vehicle || 'velo'}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button>` : ''}
-        <button class="btn sm ghost" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}" title="Nouveau mot de passe">🔑</button></td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
+        <button class="btn sm ghost" data-act="uedit" data-id="${u.id}" data-name="${esc(u.name)}" data-phone="${esc(u.phone)}" title="Modifier le nom ou le téléphone">✏️</button><button class="btn sm ghost" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}" title="Nouveau mot de passe">🔑</button></td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
     </tbody></table></div>`;
 }
 
@@ -989,6 +997,17 @@ const actions = {
   mactive: async (el) => { await api('POST', `/api/admin/merchants/${el.dataset.id}`, { active: el.dataset.v === '1' }); show(); },
   planning: (el) => planningForm(+el.dataset.id, el.dataset.name, el.dataset.veh),
   veh: async (el) => { await api('POST', `/api/admin/users/${el.dataset.id}/vehicle`, { vehicle: el.dataset.v }); toast(el.dataset.v === 'moto' ? 'Livreur passé à moto 🏍️' : 'Livreur passé à vélo 🚲', 'ok'); show(); },
+  uedit: (el) => {
+    const m = modal(`Modifier — ${el.dataset.name}`, `<form class="stack" data-f>
+      <label class="field"><span>Nom complet</span><input class="input" name="name" value="${esc(el.dataset.name)}" required minlength="2"></label>
+      <label class="field"><span>Téléphone (identifiant de connexion)</span><input class="input" name="phone" type="tel" value="${esc(phoneFmt(el.dataset.phone))}" required></label>
+      <p class="tiny muted" style="margin:0">Si le numéro change, la personne est déconnectée et se reconnecte avec le nouveau numéro (même mot de passe).</p>
+      <button class="btn primary block">Enregistrer</button></form>`);
+    m.el.querySelector('[data-f]').onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api('POST', `/api/admin/users/${el.dataset.id}/profile`, Object.fromEntries(new FormData(e.target))); m.close(); toast('Enregistré', 'ok'); show(); } catch (err) { toastErr(err); }
+    };
+  },
   pwreset: async (el) => {
     const pw = await promptBox(`Nouveau mot de passe — ${el.dataset.name}`, { label: 'Mot de passe provisoire (6 caractères min.)', value: Math.random().toString(36).slice(2, 10) });
     if (!pw) return;

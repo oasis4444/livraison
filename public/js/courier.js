@@ -2,7 +2,7 @@
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, supportChat, profileForm,
-  sendSOS, complaintForm, chatHtml, haversine, beep, logout,
+  sendSOS, complaintForm, chatHtml, haversine, beep, logout, chatBubble,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel, nextAction } from './colis.js';
 
@@ -53,6 +53,7 @@ export async function mount(el) {
     </div>
     <nav class="sp-tab">${[...navs.slice(0, 4), ['menu', 'more', L2('Plus', 'Hafa')]].map(([k, i, l]) => `<button ${k === 'menu' ? 'data-act="menu"' : `data-act="tab" data-t="${k}"`}>${ic(i)}<span>${k === 'home' ? L2('Accueil', 'Fandraisana') : k === 'plan' ? L2('Départs', 'Fiaingana') : l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}</nav>`;
   sheet = $('#sheet');
+  const bub = chatBubble('user', { cls: 'sp-bub', poll: async () => (await api('GET', '/api/support/unread')).unread, onOpen: () => { bub.setCount(0); supportChat(); } });
   map = makeMap($('#map'), { zoom: 15 });
   bind(root, actions);
   if (state.user.status !== 'active') return renderPending();
@@ -345,7 +346,13 @@ async function loadDash() {
   const kpi = (icon, label, v, sub = '', cls = '') => `<div class="sp-kpi ${cls}"><span>${ic(icon)}</span><small>${label}</small><b>${v}</b>${sub ? `<em>${sub}</em>` : ''}</div>`;
   const max = Math.max(1, ...d.last7.map((x) => x.earned));
   const wd = (k) => new Date(`${k}T12:00:00Z`).toLocaleDateString(mg ? 'fr-FR' : 'fr-FR', { weekday: 'short' }).replace('.', '');
-  el.innerHTML = `
+  const A = d.alerts || { held: [], cash_old: 0 };
+  const alerts = A.held.length || A.cash_old ? `<div class="cv-alert">
+      <b>⏰ ${L2('À régler vite', 'Vahao haingana')}</b>
+      ${A.held.map((p) => `<button class="cv-alert-row" data-act="tab" data-t="colis"><span class="cv-alert-h">${p.hours} h</span><span class="grow"><b>${esc(p.ref)}</b> ${L2('chez vous, pas encore livré', 'mbola eo aminao, tsy mbola tonga')}<small>→ ${esc(p.recipient_name || '')} · ${esc(p.drop_addr || '')}</small></span></button>`).join('')}
+      ${A.cash_old ? `<div class="cv-alert-row"><span class="cv-alert-h cash">${A.cash_old} h</span><span class="grow">${L2(`Vous gardez ${ar(C.to_remit)} depuis ${A.cash_old} h : passez à la caisse du centre.`, `Manana ${ar(C.to_remit)} ianao nanomboka ${A.cash_old} ora : mandalova eo amin'ny caisse.`)}</span></div>` : ''}
+      <small class="cv-alert-help">${L2(`Un colis ne doit pas rester chez vous plus de ${A.hold_hours} h : livrez-le ou rapportez-le au centre. Au-delà du double, l'administration est prévenue.`, `Tsy tokony hijanona eo aminao mihoatra ny ${A.hold_hours} ora ny colis : atero na avereno any amin'ny centre.`)}</small></div>` : '';
+  el.innerHTML = alerts + `
     <div class="cv-hero ${C.to_remit > 0 ? 'due' : ''}">
       <small>${L2('À remettre au centre', 'Atolotra ny centre')}</small>
       <b>${ar(C.to_remit)}</b>

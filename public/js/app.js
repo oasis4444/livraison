@@ -52,6 +52,7 @@ async function trackView(token) {
     <div style="padding:12px 16px;background:var(--card);border-top:1px solid var(--line);max-height:60vh;overflow:auto" data-info>…</div></div>`;
   bind(app, { lang: (el) => { setLang(el.dataset.l); trackView(token); } });
   const map = core.makeMap(app.querySelector('[data-map]'), { zoom: 13, zoomControl: true });
+  core.chatBubble('guest', { cls: 'trk-bub' });
   const mk = {}; let fitted = false, reschedOpen = false;
   const tick = async () => {
     let r; try { r = await api('GET', `/api/track/${token}`); } catch (e) { app.querySelector('[data-info]').textContent = e.message; return; }

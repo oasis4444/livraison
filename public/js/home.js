@@ -1,6 +1,6 @@
 // Page d'accueil publique (visiteur non connecté) : présentation, tarifs réels, calculateur, suivi d'un colis.
 // Les tarifs et conditions viennent de /api/conditions : la page reste juste quand le centre change ses prix.
-import { state, api, esc, ar, setLang, makeMap, geocode, code128Svg, toastErr, TANA, drawRoad } from './core.js';
+import { state, api, esc, ar, setLang, makeMap, geocode, code128Svg, toastErr, TANA, drawRoad, chatBubble } from './core.js';
 
 const L2 = (fr, mg) => (state.lang === 'mg' ? mg : fr);
 const ICON = {
@@ -32,6 +32,7 @@ export async function mountHome(app, { onAuth }) {
   app.className = 'home';
   app.innerHTML = page(c).replace(/ ([?!;»])/g, '\u00a0$1'); // espaces insécables (typographie française)
   const go = (mode) => (e) => { e?.preventDefault(); onAuth(mode); };
+  chatBubble('guest', { phone: c?.support_phone || '038 51 201 42', onLogin: go('login') });
   app.querySelectorAll('[data-login]').forEach((b) => (b.onclick = go('login')));
   app.querySelectorAll('[data-register]').forEach((b) => (b.onclick = go('register')));
   app.querySelectorAll('[data-lang]').forEach((b) => (b.onclick = () => { setLang(b.dataset.lang); mountHome(app, { onAuth }); }));

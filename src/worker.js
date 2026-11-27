@@ -882,7 +882,7 @@ const NUMERIC = ['commission_percent', 'subscription_monthly', 'base_fare', 'per
   'bike_speed_kmh', 'moto_speed_kmh', 'position_retention_days', 'max_open_requests', 'max_courier_debt', 'axe_slot_minutes', 'default_fee', 'delivery_max_dist_m',
   'max_value', 'bike_max_kg', 'moto_max_kg', 'weight_free_kg', 'weight_step_kg', 'weight_step_fee', 'share_t1_max', 'share_t1', 'share_t2_max', 'share_t2', 'share_t3',
   'cat_s_kg', 'cat_s_cm', 'cat_s_fee', 'cat_m_kg', 'cat_m_cm', 'cat_m_fee', 'cat_l_kg', 'cat_l_cm', 'cat_l_fee', 'pickup_fee_large', 'opt_fragile', 'opt_express', 'opt_wait',
-  'return_fee_percent', 'direct_km', 'direct_fee', 'late_hours', 'cash_cap', 'cash_cap_hours', 'zone1_km', 'zone1_fee', 'zone2_km', 'zone2_fee', 'zone3_km', 'zone3_fee', 'zone4_fee',
+  'return_fee_percent', 'direct_km', 'direct_fee', 'late_hours', 'hold_hours', 'cash_alert_hours', 'cash_cap', 'cash_cap_hours', 'zone1_km', 'zone1_fee', 'zone2_km', 'zone2_fee', 'zone3_km', 'zone3_fee', 'zone4_fee',
   'multi_discount', 'big_value', 'big_value_pct', 'xl_min_fee', 'max_attempts', 'centre_keep_days'];
 async function adminSettingsPut(ctx, env) {
   const cur = await settings(env);
@@ -1106,6 +1106,19 @@ async function adminResetPassword(ctx, env) {
   return json({ ok: true });
 }
 
+// L'administration corrige le nom ou le numéro d'un livreur ou d'un client (le numéro sert d'identifiant de connexion).
+async function adminEditUser(ctx, env) {
+  const u = await one(env, 'SELECT id, name, phone, role FROM users WHERE id = ?', ctx.params.id);
+  if (!u) fail(404, 'not_found', 'Utilisateur introuvable');
+  const name = ctx.body.name != null ? str(ctx.body.name, { min: 2, max: 80, name: 'Nom' }) : u.name;
+  const phone = ctx.body.phone ? normalizePhone(ctx.body.phone) : u.phone;
+  if (phone !== u.phone && await one(env, 'SELECT id FROM users WHERE phone = ? AND id != ?', phone, u.id)) fail(409, 'phone_taken', 'Ce numéro est déjà utilisé par un autre compte');
+  await run(env, 'UPDATE users SET name = ?, phone = ? WHERE id = ?', name, phone, u.id);
+  if (phone !== u.phone) await run(env, 'DELETE FROM sessions WHERE user_id = ?', u.id); // reconnexion avec le nouveau numéro
+  await audit(env, ctx, 'admin_user_edit', { id: u.id, name: name !== u.name ? name : undefined, phone: phone !== u.phone ? { from: u.phone, to: phone } : undefined });
+  return json({ ok: true, user: { id: u.id, name, phone } });
+}
+
 async function adminAudit(ctx, env) {
   return json({ audit: await all(env, 'SELECT a.*, u.name AS user_name FROM audit a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 300') });
 }
@@ -1208,7 +1221,7 @@ async function adminCentralIA(ctx, env) {
       creneau_livraison: s.deliver_from ? `${ciaDay(s.deliver_from)} ${ciaHour(s.deliver_from)}-${ciaHour(s.deliver_to)}` : '',
       attente_programmation_min: ciaMin(s.created_at, s.assigned_at || s.accepted_at), duree_recuperation_min: ciaMin(s.created_at, s.picked_at),
       duree_livraison_min: ciaMin(s.picked_at, s.done_at),
-      ...(() => { const r = ['delivered', 'cancelled', 'returned', 'refused'].includes(s.status) ? null : lateReason(s, t0, Number(st.late_hours || 24)); return { en_retard: r ? 1 : 0, retard: r || '' }; })(),
+      ...(() => { const r = ['delivered', 'cancelled', 'returned', 'refused'].includes(s.status) ? null : lateReason(s, t0, Number(st.late_hours || 24), Number(st.hold_hours ?? 3)); return { en_retard: r ? 1 : 0, retard: r || '' }; })(),
     })),
     clients: cl.map((c) => ({ nom: c.name, boutique: c.is_business ? 1 : 0, entreprise: c.company || '', statut: c.status, inscrit_le: ciaDay(c.created_at),
       nb_colis: c.n || 0, nb_livres: c.livres || 0, total_frais: c.frais || 0, total_valeur: c.valeur || 0, dernier_envoi: c.dernier ? ciaDay(c.dernier) : '' })),
@@ -1353,6 +1366,7 @@ route('DELETE', '/api/admin/axes/:id', ['admin'], adminAxeDelete);
 route('GET', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesGet);
 route('PUT', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesPut);
 route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
+route('POST', '/api/admin/users/:id/profile', ['admin'], adminEditUser);
 route('POST', '/api/admin/users/:id/vehicle', ['admin'], adminSetVehicle);
 
 registerShipmentRoutes(route);
@@ -1418,7 +1432,7 @@ export default {
   // Chaque minute : synchronisation Tsena ; une fois par heure : maintenance.
   async scheduled(event, env, ctx) {
     ctx.waitUntil(syncTsena(env).catch((e) => console.error('tsena', e))
-      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env).then(() => m.alertLate(env))).catch((e) => console.error('reassign', e)));
+      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env).then(() => m.alertLate(env)).then(() => m.alertHolds(env))).catch((e) => console.error('reassign', e)));
     if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() === 17) ctx.waitUntil(maintenance(env));
   },
 };

@@ -356,3 +356,11 @@ i.g { background: var(--hg2); } i.o { background: #f08a24; } i.c { background: v
 .cv-month em { font-style: normal; font-size: .74rem; color: var(--hk2); }
 .cv-month > div:first-child small { margin-bottom: 2px; }
 @media (min-width: 861px) { .cv-main.nomap .cv-kpis { grid-template-columns: repeat(4, 1fr); } }
+/* Alertes du livreur (colis ou argent gardés trop longtemps) */
+.cv-alert { border-radius: 20px; padding: 14px 16px; margin-bottom: 14px; background: #fff3f3; box-shadow: 0 0 0 2px #f3b4b4; }
+.cv-alert > b { color: #c0262d; display: block; margin-bottom: 6px; }
+.cv-alert-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; padding: 8px 0; border-top: 1px solid #f6dada; font: inherit; color: inherit; cursor: pointer; }
+.cv-alert-row small { display: block; color: var(--hk2); font-size: .78rem; }
+.cv-alert-h { min-width: 48px; text-align: center; font-weight: 900; color: #fff; background: #e5484d; border-radius: 10px; padding: 6px; }
+.cv-alert-h.cash { background: #c27c00; }
+.cv-alert-help { display: block; color: var(--hk2); margin-top: 6px; font-size: .76rem; }

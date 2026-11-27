@@ -221,3 +221,40 @@ test('fin de tournée : plus d\'offres', async () => {
     sender: { name: 'Lova', address: 'Behoririka', ...BEHORIRIKA }, recipient: { name: 'Zo', phone: '0331112299', address: 'Ankorondrano', ...ANKORONDRANO } }, null, { 'x-api-key': key });
   assert.ok(!notes(uid('+261341000001')).some((n) => n.body.includes(r.data.shipment.ref)));
 });
+
+test('alertes « ça traîne » : colis chez le livreur depuis des heures, argent pas remis', async () => {
+  const { alertHolds, heldParcels } = await import('../src/shipments.js');
+  const hery = db.prepare("SELECT id FROM users WHERE name = 'Hery Rakoto'").get().id;
+  const sid = db.prepare('SELECT id FROM shipments ORDER BY id LIMIT 1').get().id;
+  const ref = db.prepare('SELECT ref FROM shipments WHERE id = ?').get(sid).ref;
+  // le colis est chez Hery depuis 7 h (récupéré, pas déposé au centre, pas livré)
+  db.prepare("UPDATE shipments SET status = 'picked_up', courier_id = ?, courier_confirmed_at = NULL, centre_in_at = NULL, centre_out_at = NULL, picked_at = ?, done_at = NULL WHERE id = ?").run(hery, Date.now() - 7 * 3600e3, sid);
+  const held = await heldParcels(env, 3);
+  assert.ok(held.find((p) => p.ref === ref && p.hours === 7 && p.courier === 'Hery Rakoto'));
+  const before = notes(hery).length;
+  await alertHolds(env);
+  const mine = notes(hery).slice(before).map((n) => n.title);
+  assert.ok(mine.some((t) => t.includes(ref)), 'rappel au livreur');
+  assert.ok(mine.filter((t) => t.includes(ref)).length === 2, '7 h ≥ 2 × 3 h : deuxième rappel');
+  const adm = db.prepare("SELECT body FROM complaints WHERE kind = 'alert' AND body LIKE ? ").all(`%${ref}%`);
+  assert.ok(adm.some((c) => c.body.includes('Hery Rakoto depuis 7 h')), 'administration prévenue');
+  // une seule fois par seuil
+  const n1 = notes(hery).length; await alertHolds(env); assert.equal(notes(hery).length, n1);
+  // visible sur le tableau de bord du livreur, de l'admin, et en retard dans la liste
+  assert.ok((await call('GET', '/api/courier/dashboard', null, c1)).data.alerts.held.some((p) => p.ref === ref));
+  const h = (await call('GET', '/api/admin/courier-stats/holds', null, admin)).data;
+  assert.equal(h.hold_hours, 3); assert.ok(h.parcels.some((p) => p.ref === ref));
+  // réglage modifiable ; 0 = désactivé
+  assert.equal((await call('PUT', '/api/admin/settings', { settings: { hold_hours: 10 } }, admin)).status, 200);
+  assert.ok(!(await call('GET', '/api/admin/courier-stats/holds', null, admin)).data.parcels.some((p) => p.ref === ref), '7 h < 10 h');
+  await call('PUT', '/api/admin/settings', { settings: { hold_hours: 3 } }, admin);
+});
+
+test('admin : modifier le nom et le téléphone d\'un livreur', async () => {
+  const hery = db.prepare("SELECT id FROM users WHERE name = 'Hery Rakoto'").get().id;
+  assert.equal((await call('POST', `/api/admin/users/${hery}/profile`, { phone: '0340000000' }, admin)).status, 409, 'numéro déjà pris');
+  const r = await call('POST', `/api/admin/users/${hery}/profile`, { name: 'Hery R.', phone: '034 55 666 77' }, admin);
+  assert.equal(r.status, 200); assert.equal(r.data.user.phone, '+261345566677');
+  assert.equal((await call('GET', '/api/courier/dashboard', null, c1)).status, 401, 'déconnecté après changement de numéro');
+  assert.equal((await call('POST', `/api/admin/users/${hery}/profile`, { name: 'x' }, c2)).status, 403);
+});

@@ -56,12 +56,18 @@ async function reply(ctx, env) {
   await notify(env, [uid], 'support', '💬 Service client Alefa', body.slice(0, 140));
   return json({ ok: true }, 201);
 }
+// Client ou livreur : réponses du service client pas encore lues (pastille de la bulle de discussion).
+async function myUnread(ctx, env) {
+  const r = await one(env, 'SELECT COUNT(*) AS n FROM support_messages WHERE user_id = ? AND from_centre = 1 AND read_user = 0', ctx.user.id);
+  return json({ unread: r.n });
+}
 async function unreadCount(ctx, env) {
   const r = await one(env, 'SELECT COUNT(DISTINCT user_id) AS n FROM support_messages WHERE from_centre = 0 AND read_centre = 0');
   return json({ unread_threads: r.n });
 }
 
 export function registerSupportRoutes(route) {
+  route('GET', '/api/support/unread', ['client', 'courier'], myUnread);
   route('GET', '/api/support', ['client', 'courier'], myThread);
   route('POST', '/api/support', ['client', 'courier'], postMine);
   route('GET', '/api/admin/support', ['admin'], threads);

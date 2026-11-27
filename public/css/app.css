@@ -355,3 +355,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .brand-mg b { color: #e6d800; font-weight: inherit; }
 .sp-side .brand-mg, .ad .side .brand-mg, .h-logo.w .brand-mg, .auth .brand-dark .brand-mg { color: #9fd6f5; }
 .sp-side .brand-mg b, .ad .side .brand-mg b, .h-logo.w .brand-mg b { color: #faff00; }
+
+/* Bulle de discussion : en bas à droite sur toutes les pages (au-dessus de la barre du bas sur téléphone). */
+.chat-bubble { position: fixed; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); z-index: 1200; width: 58px; height: 58px; border-radius: 50%; border: 0; cursor: pointer;
+  background: #ffe81a; color: #0e3552; display: grid; place-items: center; box-shadow: 0 14px 30px -10px rgba(14, 53, 82, .55), 0 0 0 4px rgba(255, 255, 255, .9); transition: transform .15s; animation: bubIn .35s ease-out; }
+.chat-bubble:hover { transform: scale(1.06); }
+.chat-bubble svg { width: 30px; height: 30px; }
+.chat-bubble-n { position: absolute; top: -3px; right: -3px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: #e5484d; color: #fff; font-size: .74rem; font-weight: 900; display: grid; place-items: center; box-shadow: 0 0 0 2px #fff; }
+.chat-bubble.adm-bub { right: 90px; } /* à gauche de l'assistant Central IA */
+.chat-bubble.trk-bub { top: 72px; bottom: auto; width: 50px; height: 50px; }
+@media (max-width: 860px) { .chat-bubble.sp-bub { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); right: 14px; } }
+@keyframes bubIn { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@media print { .chat-bubble { display: none; } }

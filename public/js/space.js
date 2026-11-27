@@ -1,7 +1,7 @@
 // Espace client : menu latéral (ordinateur) ou barre du bas (téléphone), tableau de bord, nouvel envoi en 4 étapes,
 // mes colis (envoyés et reçus), page de suivi (carte + étapes + détails). La course express (carte) reste disponible.
 import { state, api, esc, ar, km, dt, time, toastErr, phoneFmt, initials, every, stopAll, makeMap, upsertMarker, icons, vehIcon,
-  startNotifications, showNotifications, setNotifOpener, supportChat, profileForm, logout, drawRoad } from './core.js';
+  startNotifications, showNotifications, setNotifOpener, supportChat, profileForm, logout, drawRoad, chatBubble } from './core.js';
 import { shipDetail, importForm, winTxt, stepLabel } from './colis.js';
 import { sendWizard } from './wizard.js';
 
@@ -55,6 +55,7 @@ export async function mount(el) {
     if (tg.type === 'delivery') return go('express');
   });
   startNotifications(() => { if (['home', 'parcels'].includes(view)) render(); });
+  const bub = chatBubble('user', { cls: 'sp-bub', poll: async () => (await api('GET', '/api/support/unread')).unread, onOpen: () => { bub.setCount(0); supportChat(); } });
   window.addEventListener('popstate', () => { const h = location.hash.slice(1).split('/'); go(h[0] || 'home', { id: h[1] }, true); });
   // Lien « Alefa » depuis un logiciel de vente : nouvel envoi déjà rempli.
   const pending = sessionStorage.getItem('alefa_send');

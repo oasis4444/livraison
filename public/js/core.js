@@ -112,6 +112,7 @@ export async function api(method, path, body) {
 }
 
 export function logout(silent) {
+  removeChatBubble();
   if (!silent) api('POST', '/api/auth/logout').catch(() => {});
   localStorage.removeItem(TOKEN_KEY);
   state.token = null; state.user = null;
@@ -566,6 +567,33 @@ export function chatPanel(el, { load, send, centre = false, refs = [] }) {
   const timer = every(5000, refresh);
   return { refresh, stop: () => timer.stop() };
 }
+// ---------------------------------------------------------------- bulle de discussion (en bas à droite, sur toutes les pages)
+// kind : 'guest' (site public : appeler, SMS, se connecter), 'user' (client/livreur : service client), 'admin' (boîte du service client).
+const BUBBLE_IC = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10.5H9.5L5 20v-4H4z" fill="currentColor"/><circle cx="8.5" cy="10.8" r="1.3" fill="#ffe81a"/><circle cx="12" cy="10.8" r="1.3" fill="#ffe81a"/><circle cx="15.5" cy="10.8" r="1.3" fill="#ffe81a"/></svg>';
+let bubbleTimer = null;
+export function chatBubble(kind, { phone = '038 51 201 42', onLogin = null, onOpen = null, poll = null, cls = '' } = {}) {
+  document.querySelector('.chat-bubble')?.remove(); bubbleTimer?.stop(); bubbleTimer = null;
+  const mg = state.lang === 'mg', tel = String(phone || '').replace(/\s/g, '');
+  const b = document.createElement('button');
+  b.className = `chat-bubble ${cls}`; b.type = 'button';
+  b.setAttribute('aria-label', mg ? 'Resaka amin\'ny sampana mpanjifa' : 'Discuter avec le service client');
+  b.innerHTML = `${BUBBLE_IC}<span class="chat-bubble-n hidden" data-bn></span>`;
+  const setN = (n) => { const e = b.querySelector('[data-bn]'); e.textContent = n > 9 ? '9+' : n; e.classList.toggle('hidden', !n); };
+  b.onclick = () => {
+    if (kind !== 'guest') return onOpen ? onOpen() : supportChat();
+    const m = modal(`💬 ${mg ? 'Mifandraisa aminay' : 'Contactez Alefa.mg'}`, `<div class="stack">
+      <p class="small muted" style="margin:0">${mg ? 'Alatsinainy ka hatramin\'ny Sabotsy, 8 ora – 17 ora.' : 'Du lundi au samedi, de 8 h à 17 h.'}</p>
+      <a class="btn primary block lg" href="tel:${esc(tel)}">${symbol('phone')} ${mg ? 'Antsoy' : 'Appeler'} ${esc(phone)}</a>
+      <a class="btn block" href="sms:${esc(tel)}">✉️ ${mg ? 'Handefa SMS' : 'Envoyer un SMS'}</a>
+      ${onLogin ? `<button class="btn block" data-bl>💬 ${mg ? 'Hiresaka ao amin\'ny kaontiko' : 'Écrire au service client (avec mon compte)'}</button>` : ''}</div>`);
+    m.el.querySelector('[data-bl]')?.addEventListener('click', () => { m.close(); onLogin(); });
+  };
+  document.body.append(b);
+  if (poll) { const tick = async () => { try { setN(await poll()); } catch {} }; bubbleTimer = every(30000, tick, true); }
+  return { setCount: setN, el: b };
+}
+export function removeChatBubble() { document.querySelector('.chat-bubble')?.remove(); bubbleTimer?.stop(); bubbleTimer = null; }
+
 // Fenêtre « 💬 Service client » pour un client ou un livreur.
 export async function supportChat(refs = []) {
   const mg = state.lang === 'mg';
