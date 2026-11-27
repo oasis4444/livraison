@@ -449,7 +449,7 @@ async function conditions(ctx, env) {
     direct: { km: Number(st.direct_km), fee: Number(st.direct_fee) }, limits: { bike_kg: Number(st.bike_max_kg), moto_kg: Number(st.moto_max_kg), max_value: Number(st.max_value) },
     zones: st.zones_enabled === '1' ? [[1, Number(st.zone1_km), Number(st.zone1_fee)], [2, Number(st.zone2_km), Number(st.zone2_fee)], [3, Number(st.zone3_km), Number(st.zone3_fee)], [4, null, Number(st.zone4_fee)]] : null,
     default_fee: Number(st.default_fee || 3000), max_attempts: Number(st.max_attempts ?? 2), centre_keep_days: Number(st.centre_keep_days ?? 7),
-    liability_cap: Number(st.liability_cap) || null, centre_addr: st.centre_addr || '', support_phone: st.support_phone || '' });
+    liability_cap: Number(st.liability_cap) || null, centre_addr: st.centre_addr || '', support_phone: st.support_phone || '038 51 201 42' });
 }
 
 async function appCreate(ctx, env) {

@@ -60,7 +60,7 @@ function page(c) {
   const addr = c?.centre_addr || 'Lot II V 89 Ampandrana, Antananarivo';
   return `
   <header class="h-head"><div class="h-wrap h-bar">
-    <a href="/" class="h-logo"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa</span></a>
+    <a href="/" class="h-logo"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a>
     <nav class="h-nav">
       <a href="#fonctionnement">${L2('Fonctionnement', 'Fomba fiasa')}</a><a href="#tarifs">${L2('Tarifs', 'Saran-dalana')}</a>
       <a href="#estimer">${L2('Estimer', 'Kajy')}</a><a href="#pros">${L2('Boutiques', 'Mpivarotra')}</a><a href="/suivi">${L2('Suivre un colis', 'Arahina ny colis')}</a>
@@ -94,6 +94,7 @@ function page(c) {
     <li>${ic('cam')}<div><b>${L2('Photo et code', 'Sary sy kaody')}</b><span>${L2('à chaque étape du trajet', 'isaky ny dingana')}</span></div></li>
     <li>${ic('cash')}<div><b>${L2('Payé à la réception', 'Aloa rehefa voaray')}</b><span>${L2('espèces ou Mobile Money', 'vola na Mobile Money')}</span></div></li>
   </ul></div></section>
+  <section class="h-cover"><div class="h-wrap"><img src="/img/couverture.jpg" width="1600" height="594" loading="lazy" alt="${L2('Alefa.mg — service de livraison à moto ou à vélo à Antananarivo, à partir de 2 000 Ar, de 8 h à 17 h. Récupération gratuite. 038 51 201 42.', 'Alefa.mg — fanaterana amin\'ny moto na bisikileta ao Antananarivo, manomboka 2 000 Ar, 8 ora – 17 ora. Maimaim-poana ny fakana. 038 51 201 42.')}"></div></section>
 
   <section class="h-sec" id="fonctionnement"><div class="h-wrap">
     <div class="h-head2 reveal"><span class="h-kicker">${L2('Fonctionnement', 'Fomba fiasa')}</span><h2>${L2('De votre porte à celle du destinataire.', 'Avy eo am-baravaranao ka hatrany amin\'ny mpandray.')}</h2>
@@ -182,7 +183,7 @@ function page(c) {
   </div></section>
 
   <footer class="h-foot"><div class="h-wrap h-foot-grid">
-    <div><a href="/" class="h-logo w"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa</span></a>
+    <div><a href="/" class="h-logo w"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a>
       <p>${L2('Livraison de colis à vélo et à moto dans Antananarivo et ses environs.', 'Fanaterana entana amin\'ny bisikileta sy moto eto Antananarivo sy ny manodidina.')}</p></div>
     <div><b>${L2('Service', 'Tolotra')}</b><a href="#tarifs">${L2('Tarifs', 'Saran-dalana')}</a><a href="#estimer">${L2('Estimer un prix', 'Kajio ny vidiny')}</a><a href="/suivi">${L2('Suivre un colis', 'Arahina ny colis')}</a><a href="#" data-terms>${L2('Conditions de livraison', 'Fepetra fanaterana')}</a></div>
     <div><b>${L2('Accès', 'Fidirana')}</b><a href="#" data-login>${L2('Connexion', 'Hiditra')}</a><a href="#" data-register>${L2('Créer un compte', 'Hisoratra anarana')}</a><a href="/livreur">${L2('Espace livreur', 'Ho an\'ny livreur')}</a></div>

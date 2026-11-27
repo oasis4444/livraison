@@ -32,7 +32,7 @@ export async function mount(el) {
   const navs = [['home', 'home', L2('Tableau de bord', 'Tabilao')], ['colis', 'box', c('colis')], ['req', 'bolt', 'Express'], ['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')]];
   root.className = 'sp cv';
   root.innerHTML = `<aside class="sp-side">
-      <a class="sp-logo" href="/livreur"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa</span></a>
+      <a class="sp-logo" href="/livreur"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a>
       <div class="sp-label">${L2('Espace livreur', 'Toeran\'ny livreur')}</div>
       <nav>${navs.map(([k, i, l]) => `<button data-act="tab" data-t="${k}">${ic(i)}<span>${l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}<hr>
         <button data-act="support">${ic('chat')}<span>${L2('Service client', 'Sampana mpanjifa')}</span></button>
@@ -41,7 +41,7 @@ export async function mount(el) {
       <div class="sp-me"><span class="sp-av">${esc(initials(u.name))}</span><div><b>${esc(u.name)}</b><small>${esc(phoneFmt(u.phone))}</small></div><button data-act="out" title="${L2('Déconnexion', 'Hivoaka')}">${ic('out')}</button></div>
     </aside>
     <div class="sp-main">
-      <header class="sp-top"><a class="sp-logo m" href="/livreur"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa</span></a>
+      <header class="sp-top"><a class="sp-logo m" href="/livreur"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a>
         <span class="cv-state ${available ? 'on' : ''}" data-state>${available ? t('available') : t('unavailable')}</span><div class="grow"></div>
         <button class="sp-bell" data-act="notifs" aria-label="Notifications">${ic('bell')}<span class="sp-dot hidden" data-unread></span></button>
         <button class="sp-chip" data-act="profile"><span class="sp-av">${esc(initials(u.name))}</span><span>${esc(u.name.split(' ')[0])}</span></button></header>
@@ -256,7 +256,7 @@ async function openRequest(id) {
 function drawRoute(r, fit) {
   if (!map) return;
   routeLayer?.remove();
-  routeLayer = L.layerGroup([L.polyline(r.coords, { color: '#0b6e4f', weight: 9, opacity: .18 }), L.polyline(r.coords, { color: '#0b6e4f', weight: 4.5, dashArray: r.approx ? '8 8' : null })]).addTo(map);
+  routeLayer = L.layerGroup([L.polyline(r.coords, { color: '#1a6fa3', weight: 9, opacity: .18 }), L.polyline(r.coords, { color: '#1a6fa3', weight: 4.5, dashArray: r.approx ? '8 8' : null })]).addTo(map);
   if (fit) map.fitBounds(L.latLngBounds(r.coords).pad(.2), { padding: [30, 30] });
 }
 function clearRoute() { routeLayer?.remove(); routeLayer = null; for (const k of ['A', 'B']) if (mk[k]) { mk[k].remove(); delete mk[k]; } lastRouteKey = ''; }

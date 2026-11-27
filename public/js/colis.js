@@ -102,7 +102,7 @@ export async function scheduleHtml(map, onDeps) {
   }
   const groups = {};
   for (const d of r.departures) (groups[dayLabel(d.departure_at)] ||= []).push(d);
-  for (const tr of r.trips || []) (groups[dayLabel(tr.departure_at)] ||= []).push({ ...tr, axe: `${tr.from.split(',')[0]} → ${tr.to.split(',')[0]}`, color: '#0f7a55', trip: true });
+  for (const tr of r.trips || []) (groups[dayLabel(tr.departure_at)] ||= []).push({ ...tr, axe: `${tr.from.split(',')[0]} → ${tr.to.split(',')[0]}`, color: '#1a6fa3', trip: true });
   for (const k of Object.keys(groups)) groups[k].sort((a, b) => a.departure_at - b.departure_at);
   return `<div class="small muted" style="margin-bottom:8px">🏢 ${esc(r.centre?.name || '')} · ${esc(c('fee'))} : <b>${ar(r.default_fee)}</b></div>
     ${Object.entries(groups).map(([day, list]) => `<h3>${esc(day)}</h3><div class="list">${list.map((d) => `<div class="card row" style="padding:10px 12px">
@@ -868,7 +868,7 @@ const L_TRIP = {
 export async function courierTripsEditor(container, { map, bikeRoute, onChange, base = '/api/courier/trips', readOnly = false, vehicle } = {}) {
   const T = L_TRIP[state.lang] || L_TRIP.fr;
   let layer = null, from = null, to = null, route = null;
-  const draw = (coords) => { if (!map || !window.L) return; layer?.remove(); layer = L.polyline(coords, { color: '#0f7a55', weight: 5, opacity: .8 }).addTo(map); try { map.fitBounds(layer.getBounds(), { padding: [30, 30] }); } catch {} };
+  const draw = (coords) => { if (!map || !window.L) return; layer?.remove(); layer = L.polyline(coords, { color: '#1a6fa3', weight: 5, opacity: .8 }).addTo(map); try { map.fitBounds(layer.getBounds(), { padding: [30, 30] }); } catch {} };
   const load = async () => {
     const { trips } = await api('GET', base);
     const d0 = new Date(); const pad = (n) => String(n).padStart(2, '0');

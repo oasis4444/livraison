@@ -29,13 +29,13 @@ export async function mount(el) {
   const more = [['support', 'chat', L2('Service client', 'Sampana mpanjifa')], ['terms', 'book', L2('Conditions et tarifs', 'Fepetra sy saran-dalana')], ['profile', 'user', L2('Profil', 'Mombamomba')]];
   root.className = 'sp';
   root.innerHTML = `<aside class="sp-side">
-      <a class="sp-logo" href="/"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa</span></a>
+      <a class="sp-logo" href="/"><img src="/icon.svg" alt="" width="34" height="34"><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a>
       <div class="sp-label">${L2('Espace client', 'Toeran\'ny mpanjifa')}</div>
       <nav>${navs.map(([k, i, l]) => `<button data-nav="${k}">${ic(i)}<span>${l}</span></button>`).join('')}<hr>${more.map(([k, i, l]) => `<button data-nav="${k}">${ic(i)}<span>${l}</span></button>`).join('')}</nav>
       <div class="sp-me"><span class="sp-av">${esc(initials(u.name))}</span><div><b>${esc(u.name)}</b><small>${esc(phoneFmt(u.phone))}</small></div><button data-out title="${L2('Déconnexion', 'Hivoaka')}">${ic('out')}</button></div>
     </aside>
     <div class="sp-main">
-      <header class="sp-top"><a class="sp-logo m" href="/"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa</span></a><div class="grow"></div>
+      <header class="sp-top"><a class="sp-logo m" href="/"><img src="/icon.svg" alt="" width="30" height="30"><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a><div class="grow"></div>
         <button class="sp-bell" data-nav="notifs" aria-label="Notifications">${ic('bell')}<span class="sp-dot hidden" data-unread></span></button>
         <button class="sp-chip" data-nav="profile"><span class="sp-av">${esc(initials(u.name))}</span><span>${esc(u.name.split(' ')[0])}</span></button></header>
       <main data-main></main>
@@ -249,7 +249,7 @@ async function trackPage(id) {
     const key = from && D ? [from, D].flat().map((x) => Number(x).toFixed(3)).join(',') : '';
     if (key && key !== roadKey) {
       roadKey = key;
-      const rr = await drawRoad(map, from, D, { vehicle: veh, color: r?.position && r?.on_delivery ? '#e8890c' : '#0b6e4f' });
+      const rr = await drawRoad(map, from, D, { vehicle: veh, color: r?.position && r?.on_delivery ? '#e8890c' : '#1a6fa3' });
       if (view !== 'track' || roadKey !== key) { rr?.layer.remove(); return; }
       road?.layer.remove(); road = rr;
       const ri = main.querySelector('[data-rinfo]');

@@ -13,7 +13,7 @@ if (location.pathname.replace(/\/+$/, '') === '/envoyer') {
 if (COURIER_SPACE) {
   $('#manifest').href = '/manifest-livreur.webmanifest';
   document.title = 'Alefa Livreur';
-  document.querySelector('meta[name=theme-color]').content = '#14211c';
+  document.querySelector('meta[name=theme-color]').content = '#0f2638';
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -26,7 +26,7 @@ function trackFindView() {
   const mg = state.lang === 'mg', q = new URLSearchParams(location.search);
   app.className = 'auth';
   app.innerHTML = `<div class="auth-card stack">
-    <div class="row between"><div class="row" style="gap:8px"><img src="/icon.svg" alt="" style="width:34px"><b>Alefa</b></div>${langSwitch()}</div>
+    <div class="row between"><div class="row" style="gap:8px"><img src="/icon.svg" alt="" style="width:34px"><b>Alefa<i class="brand-mg"><b>.</b>mg</i></b></div>${langSwitch()}</div>
     <h2>📍 ${mg ? 'Arahina ny colis-ko' : 'Suivre mon colis'}</h2>
     <form class="stack" data-f>
       <label class="field"><span>${mg ? 'Laharan\'ny colis na ny baiko' : 'Numéro du colis ou de la commande'}</span><input class="input" name="ref" required placeholder="AL7X2K9QP · L-00004" value="${esc(q.get('ref') || '')}" autocapitalize="characters"></label>
@@ -147,7 +147,7 @@ async function trackView(token) {
     const key = from && r.drop ? [from, r.drop].flat().map((x) => Number(x).toFixed(3)).join(',') : '';
     if (key && key !== roadKey) {
       roadKey = key;
-      const rr = await core.drawRoad(map, from, r.drop, { vehicle: r.vehicle, color: r.position && r.on_delivery ? '#e8890c' : '#0b6e4f' });
+      const rr = await core.drawRoad(map, from, r.drop, { vehicle: r.vehicle, color: r.position && r.on_delivery ? '#e8890c' : '#1a6fa3' });
       if (roadKey !== key) rr?.layer.remove(); else { road?.layer.remove(); road = rr; }
     }
   };
@@ -221,7 +221,7 @@ function authView(mode = 'login', role = 'client') {
   window.scrollTo(0, 0);
   app.innerHTML = `<div class="auth"><div class="auth-card">
     <div class="row between" style="margin-bottom:6px"><a href="/" class="small" data-act="home" style="text-decoration:none;font-weight:600">← ${state.lang === 'mg' ? 'Fandraisana' : 'Accueil'}</a>${langSwitch()}</div>
-    <div class="auth-brand"><img src="/icon.svg" alt=""><div><b>Alefa</b><span class="muted small">${t('tagline')}</span></div></div>
+    <div class="auth-brand"><img src="/icon.svg" alt=""><div><b>Alefa<i class="brand-mg"><b>.</b>mg</i></b><span class="muted small">${t('tagline')}</span></div></div>
     <div class="seg" style="margin-bottom:16px"><button data-act="mode" data-m="login" class="${mode === 'login' ? 'on' : ''}">${t('login')}</button><button data-act="mode" data-m="register" class="${mode === 'register' ? 'on' : ''}">${t('register')}</button></div>
     <form class="stack" data-form autocomplete="on">
       ${mode === 'register' ? `

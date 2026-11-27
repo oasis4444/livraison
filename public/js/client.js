@@ -233,8 +233,8 @@ async function drawRoute(from, to, fit) {
   if (!map) return r;
   routeLayer?.remove();
   routeLayer = L.layerGroup([
-    L.polyline(r.coords, { color: '#0b6e4f', weight: 9, opacity: .18 }),
-    L.polyline(r.coords, { color: '#0b6e4f', weight: 4.5, opacity: .9, dashArray: r.approx ? '8 8' : null }),
+    L.polyline(r.coords, { color: '#1a6fa3', weight: 9, opacity: .18 }),
+    L.polyline(r.coords, { color: '#1a6fa3', weight: 4.5, opacity: .9, dashArray: r.approx ? '8 8' : null }),
   ]).addTo(map);
   if (fit) map.fitBounds(L.latLngBounds(r.coords).pad(.25), { paddingBottomRight: [0, window.innerWidth < 900 ? 260 : 0], paddingTopLeft: [window.innerWidth >= 900 ? 430 : 0, 60] });
   return r;
@@ -475,7 +475,7 @@ function invoice(d) {
   const w = window.open('', '_blank');
   if (!w) return toast('Popup bloquée', 'err');
   w.document.write(`<!doctype html><meta charset="utf-8"><title>Facture Alefa #${d.id}</title>
-  <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:30px auto;color:#14211c;padding:0 16px}h1{color:#0b6e4f;margin:0}table{width:100%;border-collapse:collapse;margin-top:20px}td{padding:9px 0;border-bottom:1px solid #e4ebe8}td:last-child{text-align:right;font-weight:600}.tot td{font-size:1.2em;border:0}.m{color:#85938d;font-size:.9em}</style>
+  <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:30px auto;color:#0f2638;padding:0 16px}h1{color:#1a6fa3;margin:0}table{width:100%;border-collapse:collapse;margin-top:20px}td{padding:9px 0;border-bottom:1px solid #dfe8ee}td:last-child{text-align:right;font-weight:600}.tot td{font-size:1.2em;border:0}.m{color:#8399a8;font-size:.9em}</style>
   <h1>Alefa</h1><div class="m">Livraison à vélo — Antananarivo</div>
   <h2 style="margin-top:28px">Reçu de livraison n° ${d.id}</h2><div class="m">Émis le ${new Date().toLocaleDateString('fr-FR')}</div>
   <table><tr><td>Client</td><td>${esc(d.client?.name || state.user.name)}</td></tr><tr><td>Livreur</td><td>${esc(d.courier?.name || '')}</td></tr>

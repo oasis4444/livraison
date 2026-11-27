@@ -39,7 +39,7 @@ export async function mount(el) {
   if (!document.querySelector('link[data-admin-css]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/css/admin.css'; l.dataset.adminCss = '1'; document.head.append(l); }
   const u = state.user;
   root.innerHTML = `<div class="admin ad">
-    <aside class="side" id="side"><a class="logo" href="#dash"><img src="/icon.svg" alt="">Alefa</a><div class="ad-label">Administration</div><nav id="nav"></nav>
+    <aside class="side" id="side"><a class="logo" href="#dash"><img src="/icon.svg" alt=""><span>Alefa<i class="brand-mg"><b>.</b>mg</i></span></a><div class="ad-label">Administration</div><nav id="nav"></nav>
       <div class="ad-me"><span class="ad-av">${esc(initials(u.name))}</span><div><b>${esc(u.name)}</b><small>${esc(phoneFmt(u.phone))}</small></div>
         <button data-act="profile" title="Profil">${aic('gear')}</button><button data-act="logout" title="Déconnexion">${aic('out')}</button></div></aside>
     <div class="side-back" data-act="menu"></div>
@@ -219,13 +219,13 @@ const VIEWS = {
         const t = toPickup ? p.pickup : g === 'centre' ? null : p.drop;
         if (!t) continue;
         keep.add('p' + p.id);
-        upsertMarker(liveMap, liveMk, 'p' + p.id, t, icons.dot(g === 'review' ? '#c2410c' : toPickup ? '#0b6e4f' : '#e8890c', p.ref), { refreshIcon: true })
+        upsertMarker(liveMap, liveMk, 'p' + p.id, t, icons.dot(g === 'review' ? '#c2410c' : toPickup ? '#1a6fa3' : '#e8890c', p.ref), { refreshIcon: true })
           ?.bindTooltip(`<b>${esc(p.ref)}</b> · ${esc(p.step_label)}<br>${toPickup ? '🟢 Récupération' : '🟠 Livraison'} : ${esc(toPickup ? p.pickup_addr : p.drop_addr)}<br>${toPickup && p.windows ? `🕘 ${win(p.windows.pickup)}` : p.windows ? `🏁 ${win(p.windows.delivery)}` : ''}${p.courier ? ` · ${esc(p.courier)}` : ' · sans livreur'}`)
           .off('click').on('click', () => parcelDetail(p.id));
         if (p.courier_id && pos[p.courier_id]) {
           keepL.add(p.id);
           const ll = [pos[p.courier_id], t];
-          if (!lines[p.id]) lines[p.id] = L.polyline(ll, { color: toPickup ? '#0b6e4f' : '#e8890c', weight: 2, dashArray: '4 6', opacity: .8, interactive: false }).addTo(liveMap);
+          if (!lines[p.id]) lines[p.id] = L.polyline(ll, { color: toPickup ? '#1a6fa3' : '#e8890c', weight: 2, dashArray: '4 6', opacity: .8, interactive: false }).addTo(liveMap);
           else lines[p.id].setLatLngs(ll);
         }
       }
@@ -319,7 +319,7 @@ const VIEWS = {
       <div class="live-wrap"><div class="livemap" id="livemap"></div><div class="live-list panel" data-live-list></div></div>`;
     liveMap = makeMap($('#livemap'), { zoom: 13, zoomControl: true, layers: true });
     const trails = {}, links = {}, tripLayers = {};
-    const COLORS = ['#0b6e4f', '#2563eb', '#c2410c', '#7c3aed', '#be123c', '#0891b2', '#a16207', '#4d7c0f'];
+    const COLORS = ['#1a6fa3', '#2563eb', '#c2410c', '#7c3aed', '#be123c', '#0891b2', '#a16207', '#4d7c0f'];
     const colorOf = (id) => COLORS[id % COLORS.length];
     let fitted = false;
     $('[data-win]').onchange = (e) => { sessionStorage.setItem('adm_trail', e.target.value); show(); };
@@ -363,13 +363,13 @@ const VIEWS = {
         const target = toPickup ? p.pickup : p.drop;
         if (!target) continue;
         keep.add('p' + p.id);
-        upsertMarker(liveMap, liveMk, 'p' + p.id, target, icons.dot(p.courier_id ? colorOf(p.courier_id) : toPickup ? '#0b6e4f' : '#e8890c', `${toPickup ? '↑' : '↓'} ${(toPickup ? p.sender : p.recipient || '').split(' ')[0]}`), { refreshIcon: true })
+        upsertMarker(liveMap, liveMk, 'p' + p.id, target, icons.dot(p.courier_id ? colorOf(p.courier_id) : toPickup ? '#1a6fa3' : '#e8890c', `${toPickup ? '↑' : '↓'} ${(toPickup ? p.sender : p.recipient || '').split(' ')[0]}`), { refreshIcon: true })
           ?.bindTooltip(`<b>${esc(p.ref)}</b> · ${esc(p.step_label)}<br>${toPickup ? '🟢 Récupération' : '🟠 Livraison'} : ${esc(toPickup ? p.pickup_addr : p.drop_addr)}<br>${esc(p.sender)} → ${esc(p.recipient)} · ${ar(p.amount)}${p.courier ? `<br>🚲 ${esc(p.courier)}` : ''}`)
           .off('click').on('click', () => parcelDetail(p.id));
         if (p.courier_id && pos[p.courier_id] && p.step !== 'scheduled') {
           keepLinks.add(p.id);
           const ll = [pos[p.courier_id], target];
-          if (!links[p.id]) links[p.id] = L.polyline(ll, { color: toPickup ? '#0b6e4f' : '#e8890c', weight: 2, dashArray: '6 6', opacity: .8, interactive: false }).addTo(liveMap);
+          if (!links[p.id]) links[p.id] = L.polyline(ll, { color: toPickup ? '#1a6fa3' : '#e8890c', weight: 2, dashArray: '6 6', opacity: .8, interactive: false }).addTo(liveMap);
           else links[p.id].setLatLngs(ll);
         }
       }
@@ -390,7 +390,7 @@ const VIEWS = {
         ${out.map((c) => { const mine = r.parcels.filter((p) => p.courier_id === c.id); return `<div class="small" data-act="ctrack" data-id="${c.id}" style="cursor:pointer;padding:6px 0 6px 8px;border-bottom:1px solid var(--line);border-left:4px solid ${colorOf(c.id)}">
           <div class="row between"><b>${esc(c.name)}</b><span class="muted">${time(c.last_seen)} · ${mine.length} colis</span></div>
           ${c.delivery_id ? `<div class="muted">course express #${c.delivery_id}</div>` : ''}
-          ${mine.map((p) => { const up = ['pending', 'scheduled', 'departed', 'at_pickup'].includes(p.step); return `<div class="tiny" style="margin-top:2px"><span style="color:${up ? '#0b6e4f' : '#e8890c'}">●</span> ${esc(p.step_label)} — ${esc((up ? p.pickup_addr : p.drop_addr || '').split(',')[0])} <span class="muted">(${esc(up ? p.sender : p.recipient)})</span></div>`; }).join('') || `<div class="muted tiny">${c.axe ? `axe ${esc(c.axe)}` : 'disponible'}</div>`}</div>`; }).join('') || '<p class="muted small">Aucun livreur en service.</p>'}
+          ${mine.map((p) => { const up = ['pending', 'scheduled', 'departed', 'at_pickup'].includes(p.step); return `<div class="tiny" style="margin-top:2px"><span style="color:${up ? '#1a6fa3' : '#e8890c'}">●</span> ${esc(p.step_label)} — ${esc((up ? p.pickup_addr : p.drop_addr || '').split(',')[0])} <span class="muted">(${esc(up ? p.sender : p.recipient)})</span></div>`; }).join('') || `<div class="muted tiny">${c.axe ? `axe ${esc(c.axe)}` : 'disponible'}</div>`}</div>`; }).join('') || '<p class="muted small">Aucun livreur en service.</p>'}
         ${(r.trips || []).length ? `<h3 style="margin-top:12px">🛣 Trajets prévus (${r.trips.length})</h3>${r.trips.map((t) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--line)"><b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${colorOf(t.courier_id)}"></span> ${esc(t.courier)}</b> · ${time(t.depart_at)} <span class="muted">${esc(t.from.address.split(',')[0])} → ${esc(t.to.address.split(',')[0])} · ${t.load}/${t.capacity}</span></div>`).join('')}` : ''}
         <h3 style="margin-top:12px">⚡ Mouvements</h3>
         <div class="feed">${r.feed.slice(0, 40).map((f) => `<div><time>${time(f.at)}</time><span>${icon(f.kind)} <b>${esc(f.who)}</b>${f.role ? ` <span class="muted tiny">${{ client: 'client', courier: 'livreur', admin: 'centre' }[f.role] || ''}</span>` : ''} — ${esc(f.text)}</span></div>`).join('') || '<p class="muted small">—</p>'}</div>`;
@@ -697,7 +697,7 @@ const VIEWS = {
       <div class="grid2" style="margin-bottom:16px"><div class="panel stack">
         <h3>① Le plus simple : le lien « Alefa » (aucun développement)</h3>
         <p class="small">Dans le logiciel de vente, ajoutez un bouton <b>« Livrer avec Alefa »</b> qui ouvre ce lien en remplaçant les valeurs par celles de la commande. Le vendeur (connecté à Alefa) voit le formulaire déjà rempli et appuie sur <b>Envoyer</b>.</p>
-        <pre style="background:#0f1a16;color:#cfe3da;padding:12px;border-radius:12px;white-space:pre-wrap;word-break:break-all;font-size:.8rem">${esc(base)}/envoyer?ref=<b style="color:#ffc83d">N°COMMANDE</b>&nom=<b style="color:#ffc83d">NOM</b>&tel=<b style="color:#ffc83d">TELEPHONE</b>&adresse=<b style="color:#ffc83d">ADRESSE</b>&valeur=<b style="color:#ffc83d">MONTANT</b>&desc=<b style="color:#ffc83d">ARTICLE</b></pre>
+        <pre style="background:#0f2638;color:#d6e8f5;padding:12px;border-radius:12px;white-space:pre-wrap;word-break:break-all;font-size:.8rem">${esc(base)}/envoyer?ref=<b style="color:#ffe81a">N°COMMANDE</b>&nom=<b style="color:#ffe81a">NOM</b>&tel=<b style="color:#ffe81a">TELEPHONE</b>&adresse=<b style="color:#ffe81a">ADRESSE</b>&valeur=<b style="color:#ffe81a">MONTANT</b>&desc=<b style="color:#ffe81a">ARTICLE</b></pre>
         <div class="row wrap">${[['ref', 'CMD-1042'], ['nom', 'Rasoa'], ['tel', '0341234567'], ['adresse', 'Behoririka'], ['valeur', '25000'], ['desc', 'Robe']].map(([k, ph]) => `<input class="input" data-gl="${k}" placeholder="${k}" value="${ph}" style="width:130px">`).join('')}<button class="btn sm primary" data-act="genlink">Générer</button></div>
         <div class="small" style="word-break:break-all"><code data-glout></code></div><a class="btn sm" data-gltest target="_blank" rel="noopener" href="#">Tester le lien ↗</a>
         <p class="tiny muted">Paramètres facultatifs : <code>lat</code>, <code>lng</code> (position du destinataire), <code>depart</code> (adresse de récupération). Une même référence n'est jamais créée deux fois.</p></div>
@@ -713,7 +713,7 @@ const VIEWS = {
         <td style="white-space:nowrap"><button class="btn sm" data-act="mhook" data-id="${m.id}" data-url="${esc(m.webhook_url || '')}">Webhook</button> <button class="btn sm" data-act="mkey" data-id="${m.id}">Nouvelle clé</button> <button class="btn sm ${m.active ? 'danger' : 'primary'}" data-act="mactive" data-id="${m.id}" data-v="${m.active ? 0 : 1}">${m.active ? 'Désactiver' : 'Activer'}</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Aucun logiciel connecté.</td></tr>'}</tbody></table></div>
       <div class="panel" style="margin-top:16px"><h3>Intégration rapide</h3>
         <p class="small">Base : <code>${esc(base)}/api/v1</code> · En-tête : <code>X-API-Key: ak_…</code> · Documentation complète : <a href="https://github.com/oasis4444/livraison/blob/main/docs/API.md" target="_blank" rel="noopener">docs/API.md</a></p>
-        <pre style="background:#0f1a16;color:#cfe3da;padding:14px;border-radius:12px;overflow:auto;font-size:.8rem">curl -X POST ${esc(base)}/api/v1/shipments \
+        <pre style="background:#0f2638;color:#d6e8f5;padding:14px;border-radius:12px;overflow:auto;font-size:.8rem">curl -X POST ${esc(base)}/api/v1/shipments \
   -H "X-API-Key: ak_VOTRE_CLE" -H "Content-Type: application/json" \
   -d '{"external_ref":"CMD-1042","declared_value":25000,"description":"Robe taille M",
        "sender":{"address":"Boutique Soa, Analakely","lat":-18.9055,"lng":47.5255},
@@ -895,7 +895,7 @@ const actions = {
       <label class="field"><span>Rayon (km)</span><input class="input" type="number" data-r value="${z.radius_km}"></label>
       <label class="row small"><input type="checkbox" data-a ${z.active ? 'checked' : ''}> Zone active</label><button class="btn primary block" data-ok>Enregistrer</button></div>`);
     const zm = makeMap(m.el.querySelector('#zmap'), { center: [z.center_lat, z.center_lng], zoom: 11, zoomControl: true });
-    let circle = zm && L.circle([z.center_lat, z.center_lng], { radius: z.radius_km * 1000, color: '#0b6e4f' }).addTo(zm);
+    let circle = zm && L.circle([z.center_lat, z.center_lng], { radius: z.radius_km * 1000, color: '#1a6fa3' }).addTo(zm);
     const upd = () => circle && (circle.setLatLng(zm.getCenter()), circle.setRadius(Number(m.el.querySelector('[data-r]').value) * 1000));
     zm?.on('move', upd); m.el.querySelector('[data-r]').addEventListener('input', upd);
     m.el.querySelector('[data-ok]').onclick = async () => {
@@ -1021,7 +1021,7 @@ function courierForm() {
 }
 
 function axeForm(a) {
-  a ||= { name: '', center_lat: TANA[0], center_lng: TANA[1], radius_km: 1.5, color: '#0b6e4f', active: 1 };
+  a ||= { name: '', center_lat: TANA[0], center_lng: TANA[1], radius_km: 1.5, color: '#1a6fa3', active: 1 };
   const m = modal(a.id ? `Axe : ${a.name}` : 'Nouvel axe', `<div class="stack">
     <div class="row"><input class="input grow" data-n placeholder="Nom (ex : Analakely – Tsaralalana)" value="${esc(a.name)}"><input type="color" data-c value="${esc(a.color)}" style="width:52px;height:46px;border:0;background:none"></div>
     <div class="small muted">Déplacez la carte pour centrer l'axe, réglez le rayon.</div>
@@ -1101,7 +1101,7 @@ async function planningForm(courierId, name, vehicle = 'velo') {
     const pts = [];
     for (const x of slots) {
       if (!x.from || !x.to) continue;
-      const color = axes.find((a) => a.id === x.axe_id)?.color || '#0f7a55';
+      const color = axes.find((a) => a.id === x.axe_id)?.color || '#1a6fa3';
       const line = x.route?.length > 1 ? x.route : [[x.from.lat, x.from.lng], [x.to.lat, x.to.lng]];
       sLayers.push(L.polyline(line, { color, weight: 5, opacity: .75 }).addTo(smap).bindTooltip(`${hm(x.start_min)} · ${esc(x.from.address)} → ${esc(x.to.address)}`));
       sLayers.push(L.marker([x.from.lat, x.from.lng], { icon: icons.a() }).addTo(smap), L.marker([x.to.lat, x.to.lng], { icon: icons.b() }).addTo(smap));

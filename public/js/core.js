@@ -203,7 +203,7 @@ function baseLayers() {
   return { 'Plan': vec('liberty'), 'Clair': vec('positron'), 'Classique': osm() };
 }
 export function makeMap(el, { center = TANA, zoom = 14, zoomControl = false, layers = false } = {}) {
-  if (!window.L) { el.innerHTML = '<div style="padding:90px 20px;text-align:center;color:#85938d">Carte indisponible (connexion)</div>'; return null; }
+  if (!window.L) { el.innerHTML = '<div style="padding:90px 20px;text-align:center;color:#8399a8">Carte indisponible (connexion)</div>'; return null; }
   const map = L.map(el, { zoomControl, attributionControl: true, center, zoom, preferCanvas: false, maxZoom: 19 });
   const bases = baseLayers();
   const pref = localStorage.getItem('alefa_map') || 'Plan';
@@ -299,7 +299,7 @@ export async function bikeRoute(from, to, vehicle) {
 }
 // Trace l'itinéraire réel (qui suit les rues) sur la carte : halo + trait ; pointillé fin seulement si le service ne répond pas.
 // Renvoie { layer, km, min, approx } ; l'appelant retire l'ancien calque avec layer.remove().
-export async function drawRoad(map, from, to, { vehicle, color = '#0b6e4f' } = {}) {
+export async function drawRoad(map, from, to, { vehicle, color = '#1a6fa3' } = {}) {
   if (!map || !window.L || !from || !to) return null;
   const r = await bikeRoute(from, to, vehicle);
   const layer = L.layerGroup(r.approx
@@ -628,7 +628,7 @@ const P = {
   glass: '<path d="M7 3h10l-1 7a4 4 0 0 1-8 0zM12 14v7M8 21h8"/>', mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>', party: '<path d="M4 20l5-14 9 9z"/><path d="M14 4l1 2M19 9l2-1M17 3l-1 3"/>',
   traffic: '<rect x="8" y="2.5" width="8" height="19" rx="3"/><circle cx="12" cy="7" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="12" cy="17" r="1.3"/>',
 };
-const G = '#0e8a63', O = '#e8890c', R = '#d64545';
+const G = '#2e8cc9', O = '#e8890c', R = '#d64545';
 const EMO = {
   '✅': ['check', G], '✔': ['check', G], '❌': ['x', R], '✖': ['x'], '⚠': ['alert', O], '🚨': ['alert', R], '🆘': ['alert', R], '🚲': ['bike'], '🛵': ['moto'], '🏍': ['moto'], '🚐': ['van'], '🚚': ['van'],
   '📦': ['box'], '📍': ['pin'], '🏢': ['building'], '📞': ['phone'], '📱': ['mobile'], '🚌': ['bus'], '🏁': ['flag'], '🕘': ['clock'], '⏰': ['clock', O], '⏱': ['clock'], '⏳': ['clock'],
@@ -636,7 +636,7 @@ const EMO = {
   '↩': ['back'], '🧾': ['receipt'], '🔒': ['lock'], '🔑': ['key'], '📥': ['inbox'], '📝': ['edit'], '✏': ['edit'], '👍': ['check', G], '👎': ['x', R], '⚡': ['bolt'], '🗺': ['map'], '🗓': ['cal'], '📅': ['cal'],
   '🎉': ['party', G], '🛣': ['route'], '🖨': ['print'], '🔗': ['link'], '📵': ['nophone'], '📄': ['doc'], '🏪': ['store'], '🛒': ['store'], '⭐': ['star', '#f5a400'], '⏸': ['pause'], '🔖': ['tag'],
   '🔎': ['search'], '📋': ['clip'], '🎁': ['gift'], '✋': ['stop'], '🥚': ['glass'], '✉': ['mail'], '🚦': ['traffic'],
-  '🟢': ['dot', G], '🟠': ['dot', O], '🔴': ['dot', R], '⚪': ['dot', '#c9c3b5'], '🟩': ['dot', G], '🟧': ['dot', O], '🔵': ['dot', '#2563eb'], '🟡': ['dot', '#f5b800'],
+  '🟢': ['dot', G], '🟠': ['dot', O], '🔴': ['dot', R], '⚪': ['dot', '#bccbd6'], '🟩': ['dot', G], '🟧': ['dot', O], '🔵': ['dot', '#2563eb'], '🟡': ['dot', '#f5b800'],
 };
 const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const EMO_RE = new RegExp(`(?:${Object.keys(EMO).sort((a, b) => b.length - a.length).map(reEsc).join('|')})\\uFE0F?|[\\u{1F000}-\\u{1FAFF}]\\uFE0F?|\\uFE0F|\\u200D`, 'gu');

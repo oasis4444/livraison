@@ -212,7 +212,7 @@ async function publicConfig(ctx, env) {
   const s = await settings(env);
   const zones = await all(env, 'SELECT id, name, center_lat, center_lng, radius_km FROM zones WHERE active = 1');
   return json({
-    platform_name: s.platform_name, support_phone: s.support_phone, min_price: Number(s.min_price),
+    platform_name: s.platform_name, support_phone: s.support_phone || '038 51 201 42', min_price: Number(s.min_price),
     commission_mode: s.commission_mode, payment_numbers: { mvola: s.mvola_number, orange_money: s.orange_money_number, airtel_money: s.airtel_money_number },
     zones,
   });
@@ -1037,7 +1037,7 @@ async function adminAxeSave(ctx, env) {
   const radius = Number(b.radius_km);
   if (!(radius >= 0.2 && radius <= 50)) fail(400, 'invalid', 'Rayon invalide (0,2 – 50 km)');
   const name = str(b.name, { min: 2, max: 60, name: 'Nom de l\'axe' });
-  const color = /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : '#0b6e4f';
+  const color = /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : '#1a6fa3';
   const fee = b.fee === '' || b.fee == null ? null : int(b.fee, { min: 0, max: 1_000_000, name: 'Frais de l\'axe' });
   if (b.id) await run(env, 'UPDATE axes SET name = ?, center_lat = ?, center_lng = ?, radius_km = ?, color = ?, active = ?, fee = ? WHERE id = ?', name, lat, lng, radius, color, b.active === false ? 0 : 1, fee, int(b.id));
   else await run(env, 'INSERT INTO axes (name, center_lat, center_lng, radius_km, color, fee) VALUES (?,?,?,?,?,?)', name, lat, lng, radius, color, fee);
