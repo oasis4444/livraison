@@ -36,6 +36,11 @@ test('Central IA : jeux de données pour l\'assistant, sans téléphone ni PIN, 
     'Ivandry, Antananarivo',3000,25000,'delivered','document','M',?,?,?,?,?,1000,2000,25000,'9876')`)
     .run(ids.Admin, ids['Hery Velo'], t0, t0 + 600e3, t0 + 1800e3, t0 + 5400e3);
 
+  // Livreur en service près d'Analakely (adresse d'un colis), avec un colis en route
+  db.prepare("UPDATE shipments SET pickup_lat = -18.9060, pickup_lng = 47.5250, drop_lat = -18.8752, drop_lng = 47.5328 WHERE ref = 'ALTEST01'").run();
+  db.prepare("INSERT INTO shipments (ref, sender_id, sender_name, sender_phone, pickup_addr, recipient_name, recipient_phone, drop_addr, fee, status, courier_id, created_at) VALUES ('ALTEST02',?,'Boutique Soa','+261330000000','Analakely','Lova','+261340000008','67 Ha, Antananarivo',3000,'picked_up',?,?)")
+    .run(ids.Admin, ids['Hery Velo'], Date.now() - 3600e3);
+  db.prepare('UPDATE couriers SET lat = -18.9064, lng = 47.5254, last_seen = ?, available = 1 WHERE user_id = ?').run(Date.now() - 120e3, ids['Hery Velo']);
   assert.equal((await call('GET', '/api/admin/centralia', null, caisse)).status, 403, 'rôle « caisse » : refusé');
   assert.equal((await call('GET', '/api/admin/centralia')).status, 401);
   const r = await call('GET', '/api/admin/centralia', null, admin);
@@ -44,7 +49,7 @@ test('Central IA : jeux de données pour l\'assistant, sans téléphone ni PIN, 
   assert.deepEqual(Object.keys(d).sort(), ['clients', 'colis', 'equipe', 'journal', 'livraisons', 'livreurs', 'planning', 'presence', 'reclamations',
     'remises_caisse', 'service_client', 'tarifs', 'transactions', 'versements']);
   // Colis : quartiers, livreurs, délais, paiement, sans téléphone ni PIN
-  const c = d.colis[0];
+  const c = d.colis.find((x) => x.ref === 'ALTEST01');
   assert.equal(c.quartier_depart, 'Analakely'); assert.equal(c.quartier_arrivee, 'Ivandry'); assert.equal(c.type, 'document');
   assert.equal(c.livreur_livraison, 'Hery Velo'); assert.equal(c.duree_livraison_min, 60); assert.equal(c.attente_programmation_min, 10);
   assert.equal(c.paiement, 'à encaisser'); assert.equal(c.caisse_reglee, 0); assert.equal(c.en_retard, 0); assert.equal(c.heure_livraison, '11:00');
@@ -62,6 +67,9 @@ test('Central IA : jeux de données pour l\'assistant, sans téléphone ni PIN, 
   const flat = JSON.stringify(d);
   assert.ok(!flat.includes('+261') && !/"pin"/.test(flat) && !flat.includes('9876') && !flat.includes('101211100001'), 'ni téléphone, ni PIN, ni CIN');
   assert.equal(d.livreurs[0].nom, 'Hery Velo');
+  const lv = d.livreurs[0];
+  assert.equal(lv.en_service, 1); assert.equal(lv.position_il_y_a_min, 2); assert.match(lv.pres_de, /Analakely \(\d+ m\)/);
+  assert.match(lv.lien_carte, /^https:\/\/www\.google\.com\/maps\?q=-18\.906/); assert.equal(lv.colis_en_cours, 1); assert.match(lv.mission, /ALTEST02 en route → 67 Ha/);
   assert.equal(d.presence.length, 1, 'une ligne par minute de GPS');
   const j = d.journal.find((x) => x.action === 'Livraison annulée');
   assert.equal(j.heure, '09:30'); assert.equal(j.date, '2026-11-27');

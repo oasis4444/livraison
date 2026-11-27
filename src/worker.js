@@ -1138,7 +1138,7 @@ async function adminCentralIA(ctx, env) {
     all(env, `SELECT s.*, cu.name AS courier_name, pc.name AS pickup_courier_name, dc.name AS delivery_courier_name FROM shipments s
       LEFT JOIN users cu ON cu.id = s.courier_id LEFT JOIN users pc ON pc.id = s.pickup_courier_id LEFT JOIN users dc ON dc.id = s.delivery_courier_id
       WHERE s.created_at >= ? ORDER BY s.id DESC LIMIT 20000`, since),
-    all(env, `SELECT u.name, u.status, u.created_at, c.vehicle, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen,
+    all(env, `SELECT u.id, u.name, u.status, u.created_at, c.vehicle, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen, c.lat, c.lng,
       (SELECT COUNT(*) FROM deliveries d WHERE d.courier_id = u.id AND d.status = 'delivered') AS livrees,
       (SELECT COUNT(*) FROM shipments s WHERE s.courier_id = u.id AND s.status = 'delivered') AS colis_livres
       FROM users u JOIN couriers c ON c.user_id = u.id WHERE u.role = 'courier'`),
@@ -1165,6 +1165,21 @@ async function adminCentralIA(ctx, env) {
   const quart = (a) => String(a || '').split(',')[0].trim().slice(0, 60);
   const hhmm = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
   const JOURS = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+  // Où est chaque livreur : dernière position GPS, adresse connue la plus proche (adresses des colis), mission en cours
+  const places = [];
+  for (const s of sh) {
+    if (s.pickup_lat != null) places.push([s.pickup_lat, s.pickup_lng, quart(s.pickup_addr)]);
+    if (s.drop_lat != null) places.push([s.drop_lat, s.drop_lng, quart(s.drop_addr)]);
+  }
+  const cLat = Number(st.centre_lat), cLng = Number(st.centre_lng), hasCentre = !!st.centre_lat && !!st.centre_lng;
+  const near = (lat, lng) => {
+    let best = null;
+    for (const [a, b, n] of places) { if (!n) continue; const d = haversineKm(lat, lng, a, b); if (!best || d < best.d) best = { d, n }; }
+    if (hasCentre) { const d = haversineKm(lat, lng, cLat, cLng); if (d < 0.3 && (!best || d < best.d)) best = { d, n: 'Centre Alefa (Ampandrana)' }; }
+    return best && best.d <= 2 ? `${best.d < 0.15 ? 'à' : 'près de'} ${best.n} (${Math.round(best.d * 1000)} m)` : '';
+  };
+  const STEP = { assigned: 'à récupérer', picked_up: 'en route' };
+  const missions = (id) => sh.filter((s) => ['assigned', 'picked_up'].includes(s.status) && [s.courier_id, s.pickup_courier_id, s.delivery_courier_id].includes(id));
   const datasets = {
     livraisons: dl.map((d) => ({
       id: d.id, date: ciaDay(d.created_at), heure: ciaHour(d.created_at), client: d.client_name || '', livreur: d.courier_name || '',
@@ -1210,6 +1225,14 @@ async function adminCentralIA(ctx, env) {
       note_moyenne: c.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null, nb_notes: c.rating_count || 0,
       livraisons: c.livrees || 0, colis_livres: c.colis_livres || 0, dernier_vu: c.last_seen ? `${ciaDay(c.last_seen)} ${ciaHour(c.last_seen)}` : '',
       inscrit_le: ciaDay(c.created_at),
+      ...(() => {
+        const ok = c.lat != null && c.lng != null && c.last_seen, age = ok ? Math.round((t0 - c.last_seen) / 60e3) : null, m = missions(c.id);
+        return { en_service: c.available && age != null && age <= 10 ? 1 : 0, position_heure: ok ? `${ciaDay(c.last_seen)} ${ciaHour(c.last_seen)}` : '',
+          position_il_y_a_min: age, pres_de: ok ? near(c.lat, c.lng) : '', distance_centre_km: ok && hasCentre ? Math.round(haversineKm(c.lat, c.lng, cLat, cLng) * 10) / 10 : null,
+          latitude: ok ? Math.round(c.lat * 1e5) / 1e5 : null, longitude: ok ? Math.round(c.lng * 1e5) / 1e5 : null,
+          lien_carte: ok ? `https://www.google.com/maps?q=${c.lat.toFixed(5)},${c.lng.toFixed(5)}` : '',
+          colis_en_cours: m.length, mission: m.slice(0, 3).map((s) => `${s.ref} ${STEP[s.status] || s.status} → ${quart(s.drop_addr)}`).join(' ; ') };
+      })(),
     })),
     transactions: tx.map((t) => ({ date: ciaDay(t.at), heure: ciaHour(t.at), livreur: t.courier_name, type: t.kind, montant: t.amount, livraison: t.delivery_id || null, note: t.note || '' })),
     reclamations: co.map((c) => ({ date: ciaDay(c.at), heure: ciaHour(c.at), type: c.kind, statut: c.status, personne: c.user_name || '', role: c.user_role || '',
