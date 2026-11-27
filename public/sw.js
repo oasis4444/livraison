@@ -1,6 +1,6 @@
 // Service worker : installation de l'application (PWA) et ouverture rapide hors ligne.
-const CACHE = 'alefa-v42';
-const SHELL = ['/', '/css/app.css', '/js/app.js', '/js/core.js', '/js/client.js', '/js/courier.js', '/js/admin.js', '/js/colis.js', '/js/terms.js', '/js/home.js', '/css/home.css', '/js/space.js', '/js/wizard.js', '/js/talk.js', '/css/space.css', '/css/admin.css', '/icon.svg', '/manifest.webmanifest', '/manifest-livreur.webmanifest'];
+const CACHE = 'alefa-v43';
+const SHELL = ['/', '/css/app.css', '/js/app.js', '/js/core.js', '/js/client.js', '/js/courier.js', '/js/admin.js', '/js/colis.js', '/js/terms.js', '/js/home.js', '/css/home.css', '/js/space.js', '/js/wizard.js', '/js/talk.js', '/css/space.css', '/css/admin.css', '/js/centralia-kit.js', '/icon.svg', '/manifest.webmanifest', '/manifest-livreur.webmanifest'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {
