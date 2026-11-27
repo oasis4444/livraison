@@ -10,6 +10,7 @@
  *           visible: () => !!utilisateurConnecte,                  // quand afficher le bouton 🤖
  *           admin: () => utilisateurConnecte?.role === "admin",    // qui peut coller le code de connexion (⚙)
  *           donnees: () => ({ ventes: [...], clients: [...] }),    // (facultatif) tables envoyées au Central IA (ou une promesse)
+ *           connaissances: () => [{ titre: "Tarifs", texte: "…" }],  // (facultatif) textes : fonctionnement, règles, tarifs (ou une promesse)
  *         });
  *       </script>
  *  2. Dans le logiciel : bouton 🤖 → ⚙ → coller le « code de connexion » (Central IA → Intégration).
@@ -119,6 +120,11 @@
               body: { application_id: CFG.app, mode: i === 0 ? "remplacer" : "ajouter", rows: rows.slice(i, i + 5000) } });
           }
           total += rows.length;
+        }
+        // Connaissances du logiciel (fonctionnement, tarifs, règles…) : l'assistant sait répondre aux questions « comment ? »
+        if (O.connaissances) {
+          const docs = ((await call(O.connaissances, [])) || []).filter((d) => d && d.titre && d.texte);
+          if (docs.length) await api("/api/v1/knowledge/sync", { method: "POST", body: { application_id: CFG.app, documents: docs.slice(0, 200) } });
         }
         CFG.lastPush = Date.now(); save();
       }

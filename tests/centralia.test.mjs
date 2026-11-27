@@ -31,17 +31,36 @@ test('Central IA : jeux de données pour l\'assistant, sans téléphone ni PIN, 
   db.prepare('INSERT INTO positions (courier_id, lat, lng, at) VALUES (?,?,?,?),(?,?,?,?)')
     .run(ids['Hery Velo'], -18.9, 47.5, Date.now() - 120e3, ids['Hery Velo'], -18.9, 47.5, Date.now() - 115e3);
   db.prepare('INSERT INTO audit (user_id, action, detail, at) VALUES (?,?,?,?)').run(ids.Admin, 'delivery_cancel', '{"id":9}', t0);
+  db.prepare(`INSERT INTO shipments (ref, sender_id, sender_name, sender_phone, pickup_addr, recipient_name, recipient_phone, drop_addr, fee, value, status, kind, category,
+    courier_id, created_at, assigned_at, picked_at, done_at, centre_share, courier_share, collected, pin) VALUES ('ALTEST01',?,'Boutique Soa','+261330000000','Analakely, Antananarivo','Rivo','+261340000009',
+    'Ivandry, Antananarivo',3000,25000,'delivered','document','M',?,?,?,?,?,1000,2000,25000,'9876')`)
+    .run(ids.Admin, ids['Hery Velo'], t0, t0 + 600e3, t0 + 1800e3, t0 + 5400e3);
 
   assert.equal((await call('GET', '/api/admin/centralia', null, caisse)).status, 403, 'rôle « caisse » : refusé');
   assert.equal((await call('GET', '/api/admin/centralia')).status, 401);
   const r = await call('GET', '/api/admin/centralia', null, admin);
   assert.equal(r.status, 200);
   const d = r.data.datasets;
-  assert.deepEqual(Object.keys(d).sort(), ['colis', 'journal', 'livraisons', 'livreurs', 'presence', 'reclamations', 'transactions']);
+  assert.deepEqual(Object.keys(d).sort(), ['clients', 'colis', 'equipe', 'journal', 'livraisons', 'livreurs', 'planning', 'presence', 'reclamations',
+    'remises_caisse', 'service_client', 'tarifs', 'transactions', 'versements']);
+  // Colis : quartiers, livreurs, délais, paiement, sans téléphone ni PIN
+  const c = d.colis[0];
+  assert.equal(c.quartier_depart, 'Analakely'); assert.equal(c.quartier_arrivee, 'Ivandry'); assert.equal(c.type, 'document');
+  assert.equal(c.livreur_livraison, 'Hery Velo'); assert.equal(c.duree_livraison_min, 60); assert.equal(c.attente_programmation_min, 10);
+  assert.equal(c.paiement, 'à encaisser'); assert.equal(c.caisse_reglee, 0); assert.equal(c.en_retard, 0); assert.equal(c.heure_livraison, '11:00');
+  assert.ok(d.tarifs.some((t) => t.element === 'Zone 1' && t.valeur === 2000), 'grille des tarifs');
+  assert.deepEqual(d.equipe.map((e) => e.role).sort(), ['Administrateur', 'Caisse']);
+  // Connaissances : fonctionnement, tarifs, conditions… écrits à partir des Paramètres
+  const k = r.data.connaissances;
+  assert.ok(k.length >= 7 && k.every((x) => x.titre && x.texte.length > 200));
+  const all = k.map((x) => x.texte).join('\n');
+  assert.match(all, /Zone 1 : jusqu'à 3 km → 2 000 Ar/); assert.match(all, /038 51 201 42/); assert.match(all, /Lot II V 89 Ampandrana/);
+  assert.match(all, /code PIN/i); assert.match(all, /tsy azo alefa/i);
+  assert.ok(!/sms_gateway_token|turn_pass|tsena_api_key|pass_hash/.test(all), 'aucun secret');
   const l = d.livraisons[0];
   assert.equal(l.livreur, 'Hery Velo'); assert.equal(l.prix_final, 6500); assert.equal(l.duree_livraison_min, 20); assert.equal(l.attente_livreur_min, 2);
   const flat = JSON.stringify(d);
-  assert.ok(!flat.includes('+261') && !/"pin"/.test(flat) && !flat.includes('101211100001'), 'ni téléphone, ni PIN, ni CIN');
+  assert.ok(!flat.includes('+261') && !/"pin"/.test(flat) && !flat.includes('9876') && !flat.includes('101211100001'), 'ni téléphone, ni PIN, ni CIN');
   assert.equal(d.livreurs[0].nom, 'Hery Velo');
   assert.equal(d.presence.length, 1, 'une ligne par minute de GPS');
   const j = d.journal.find((x) => x.action === 'Livraison annulée');

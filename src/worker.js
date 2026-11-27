@@ -11,7 +11,8 @@ import { registerSupportRoutes } from './support.js';
 import { registerSmsRoutes } from './sms.js';
 import { registerTalkRoutes } from './talk.js';
 import { setPayoutAccount, getPayoutAccount } from './payouts.js';
-import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed } from './shipments.js';
+import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed, lateReason } from './shipments.js';
+import { buildKnowledge } from './centralia.js';
 
 const SESSION_DAYS = 30;
 // Sans position GPS reçue depuis 2 minutes, le livreur n'est plus proposé aux clients ni notifié.
@@ -1130,10 +1131,12 @@ const ciaMin = (a, b) => (a && b && b >= a ? Math.round((b - a) / 60e3) : null);
 
 async function adminCentralIA(ctx, env) {
   const since = now() - 365 * 864e5;
-  const [dl, sh, cu, tx, co, au, ps] = await Promise.all([
+  const st = await settings(env);
+  const [dl, sh, cu, tx, co, au, ps, cl, vp, cs, ax, eq, sm] = await Promise.all([
     all(env, `SELECT d.*, cl.name AS client_name, cu.name AS courier_name FROM deliveries d JOIN users cl ON cl.id = d.client_id
       LEFT JOIN users cu ON cu.id = d.courier_id WHERE d.created_at >= ? ORDER BY d.id DESC LIMIT 20000`, since),
-    all(env, `SELECT s.*, cu.name AS courier_name FROM shipments s LEFT JOIN users cu ON cu.id = s.courier_id
+    all(env, `SELECT s.*, cu.name AS courier_name, pc.name AS pickup_courier_name, dc.name AS delivery_courier_name FROM shipments s
+      LEFT JOIN users cu ON cu.id = s.courier_id LEFT JOIN users pc ON pc.id = s.pickup_courier_id LEFT JOIN users dc ON dc.id = s.delivery_courier_id
       WHERE s.created_at >= ? ORDER BY s.id DESC LIMIT 20000`, since),
     all(env, `SELECT u.name, u.status, u.created_at, c.vehicle, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen,
       (SELECT COUNT(*) FROM deliveries d WHERE d.courier_id = u.id AND d.status = 'delivered') AS livrees,
@@ -1147,7 +1150,21 @@ async function adminCentralIA(ctx, env) {
     // Présence des livreurs : une ligne par minute où le GPS du livreur a envoyé sa position (en service), 3 derniers jours
     all(env, `SELECT u.name, p.at FROM (SELECT courier_id, MIN(at) AS at FROM positions WHERE at >= ? GROUP BY courier_id, at / 60000) p
       JOIN users u ON u.id = p.courier_id ORDER BY p.at LIMIT 60000`, now() - 3 * 864e5),
+    all(env, `SELECT u.name, u.status, u.is_business, u.company, u.created_at, COUNT(s.id) AS n, SUM(CASE WHEN s.status = 'delivered' THEN 1 ELSE 0 END) AS livres,
+      SUM(CASE WHEN s.status = 'delivered' THEN s.fee ELSE 0 END) AS frais, SUM(COALESCE(s.value, s.declared_value, 0)) AS valeur, MAX(s.created_at) AS dernier
+      FROM users u LEFT JOIN shipments s ON s.sender_id = u.id WHERE u.role = 'client' GROUP BY u.id LIMIT 20000`),
+    all(env, `SELECT v.amount, v.note, v.at, u.name, d.method FROM vendor_payouts v JOIN users u ON u.id = v.user_id
+      LEFT JOIN vendor_payout_details d ON d.payout_id = v.id WHERE v.at >= ? ORDER BY v.id DESC LIMIT 20000`, since).catch(() => []),
+    all(env, `SELECT c.amount, c.shipments, c.note, c.at, u.name FROM cash_settlements c JOIN users u ON u.id = c.courier_id WHERE c.at >= ? ORDER BY c.id DESC LIMIT 20000`, since).catch(() => []),
+    all(env, `SELECT u.name, a.name AS axe, ca.start_min, ca.end_min, ca.days, ca.from_addr, ca.to_addr, ca.km FROM courier_axes ca JOIN users u ON u.id = ca.courier_id
+      LEFT JOIN axes a ON a.id = ca.axe_id ORDER BY u.name, ca.start_min`).catch(() => []),
+    all(env, `SELECT name, perms, status FROM users WHERE role = 'admin'`),
+    all(env, `SELECT m.at, m.from_centre, u.name, u.role FROM support_messages m JOIN users u ON u.id = m.user_id WHERE m.at >= ? ORDER BY m.id LIMIT 20000`, since).catch(() => []),
   ]);
+  const t0 = now();
+  const quart = (a) => String(a || '').split(',')[0].trim().slice(0, 60);
+  const hhmm = (m) => (m == null ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  const JOURS = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
   const datasets = {
     livraisons: dl.map((d) => ({
       id: d.id, date: ciaDay(d.created_at), heure: ciaHour(d.created_at), client: d.client_name || '', livreur: d.courier_name || '',
@@ -1165,7 +1182,29 @@ async function adminCentralIA(ctx, env) {
       province: s.province ? 1 : 0, ville: s.dest_city || '', distance_km: s.distance_km || null, tentatives: s.attempts || 0,
       distance_remise_m: s.delivered_dist_m ?? null, duree_totale_min: ciaMin(s.created_at, s.done_at), motif: s.outcome_note || '',
       livre_le: s.done_at ? ciaDay(s.done_at) : '',
+      type: s.kind || 'colis', quartier_depart: quart(s.pickup_addr), quartier_arrivee: quart(s.drop_addr),
+      livreur_recuperation: s.pickup_courier_name || (s.relay ? '' : s.courier_name || ''), livreur_livraison: s.delivery_courier_name || (s.relay ? '' : s.courier_name || ''),
+      relais: s.relay ? 1 : 0, cooperative: s.coop_name || '', poids_kg: s.weight_kg || null,
+      paiement: s.value_paid ? 'déjà payée (Mobile Money)' : (s.value || s.declared_value) ? 'à encaisser' : 'rien à encaisser',
+      caisse_reglee: s.cash_settled_at ? 1 : 0, vendeur_paye: s.vendor_paid_at ? 1 : 0,
+      recupere_le: s.picked_at ? `${ciaDay(s.picked_at)} ${ciaHour(s.picked_at)}` : '', au_centre_le: s.centre_in_at ? `${ciaDay(s.centre_in_at)} ${ciaHour(s.centre_in_at)}` : '',
+      heure_livraison: s.done_at ? ciaHour(s.done_at) : '',
+      creneau_recuperation: s.pickup_from ? `${ciaDay(s.pickup_from)} ${ciaHour(s.pickup_from)}-${ciaHour(s.pickup_to)}` : '',
+      creneau_livraison: s.deliver_from ? `${ciaDay(s.deliver_from)} ${ciaHour(s.deliver_from)}-${ciaHour(s.deliver_to)}` : '',
+      attente_programmation_min: ciaMin(s.created_at, s.assigned_at || s.accepted_at), duree_recuperation_min: ciaMin(s.created_at, s.picked_at),
+      duree_livraison_min: ciaMin(s.picked_at, s.done_at),
+      ...(() => { const r = ['delivered', 'cancelled', 'returned', 'refused'].includes(s.status) ? null : lateReason(s, t0, Number(st.late_hours || 24)); return { en_retard: r ? 1 : 0, retard: r || '' }; })(),
     })),
+    clients: cl.map((c) => ({ nom: c.name, boutique: c.is_business ? 1 : 0, entreprise: c.company || '', statut: c.status, inscrit_le: ciaDay(c.created_at),
+      nb_colis: c.n || 0, nb_livres: c.livres || 0, total_frais: c.frais || 0, total_valeur: c.valeur || 0, dernier_envoi: c.dernier ? ciaDay(c.dernier) : '' })),
+    versements: vp.map((v) => ({ date: ciaDay(v.at), heure: ciaHour(v.at), vendeur: v.name, montant: v.amount, mode: v.method || 'espèces', note: String(v.note || '').slice(0, 200) })),
+    remises_caisse: cs.map((c) => ({ date: ciaDay(c.at), heure: ciaHour(c.at), livreur: c.name, montant: c.amount,
+      nb_colis: (() => { try { return JSON.parse(c.shipments || '[]').length; } catch { return 0; } })(), note: String(c.note || '').slice(0, 200) })),
+    planning: ax.map((a) => ({ livreur: a.name, axe: a.axe || '', jours: String(a.days || '').split(',').filter(Boolean).map((d) => JOURS[Number(d)] || d).join(' ') || 'tous',
+      debut: hhmm(a.start_min), fin: hhmm(a.end_min), depart: a.from_addr || '', arrivee: a.to_addr || '', km: a.km || null })),
+    equipe: eq.map((e) => ({ nom: e.name, role: e.perms ? (STAFF_ROLES[e.perms]?.label || e.perms) : 'Administrateur', droits: e.perms ? (STAFF_ROLES[e.perms]?.perms || []).join(', ') : 'tout', statut: e.status })),
+    service_client: sm.map((m) => ({ date: ciaDay(m.at), heure: ciaHour(m.at), personne: m.name, role: m.role, sens: m.from_centre ? 'centre' : 'client' })),
+    tarifs: tarifRows(st),
     livreurs: cu.map((c) => ({
       nom: c.name, statut: c.status, vehicule: c.vehicle, disponible: c.available ? 1 : 0, solde: c.balance || 0,
       note_moyenne: c.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null, nb_notes: c.rating_count || 0,
@@ -1179,7 +1218,32 @@ async function adminCentralIA(ctx, env) {
       details: String(a.detail || '').slice(0, 300) })),
     presence: ps.map((p) => ({ date: ciaDay(p.at), heure: ciaHour(p.at), utilisateur: p.name, nom: p.name, etat: 'actif', appareil: 'gps' })),
   };
-  return json({ datasets });
+  return json({ datasets, connaissances: buildKnowledge(st) });
+}
+
+// Grille des tarifs en vigueur, en lignes (analyse « Tarifs » du Central IA).
+function tarifRows(st) {
+  const n = (k, d) => (st[k] === undefined || st[k] === '' ? d : Number(st[k]));
+  const rows = [];
+  const r = (rubrique, element, valeur, precision = '') => rows.push({ ordre: rows.length + 1, rubrique, element, valeur, precision });
+  if (st.zones_enabled === '1') {
+    r('Zone de distance', 'Zone 1', n('zone1_fee', 2000), `jusqu'à ${n('zone1_km', 3)} km`);
+    r('Zone de distance', 'Zone 2', n('zone2_fee', 3000), `${n('zone1_km', 3)} à ${n('zone2_km', 7)} km`);
+    r('Zone de distance', 'Zone 3', n('zone3_fee', 4000), `${n('zone2_km', 7)} à ${n('zone3_km', 12)} km`);
+    r('Zone de distance', 'Périphérie', n('zone4_fee', 5000), `plus de ${n('zone3_km', 12)} km`);
+  } else r('Frais', 'Frais par défaut', n('default_fee', 3000), 'selon l\'axe');
+  for (const k of ['s', 'm', 'l']) r('Taille', k.toUpperCase(), n(`cat_${k}_fee`, 0), `jusqu'à ${n(`cat_${k}_kg`, 0)} kg, ${n(`cat_${k}_cm`, 0)} cm${st[`cat_${k}_ex`] ? ` (${st[`cat_${k}_ex`]})` : ''}`);
+  r('Option', 'Fragile', n('opt_fragile', 1000)); r('Option', 'Express (dans l\'heure)', n('opt_express', 2000)); r('Option', 'Attente > 10 min', n('opt_wait', 500));
+  r('Option', 'Plusieurs colis même adresse', -n('multi_discount', 50), '% de réduction à partir du 2e');
+  r('Option', 'Encaissement grosse valeur', n('big_value_pct', 1), `% au-delà de ${n('big_value', 200000)} Ar`);
+  r('Récupération', 'Colis L', n('pickup_fee_large', 2000), 'ou dépôt gratuit au centre');
+  r('Retour', 'Retour à l\'expéditeur', n('return_fee_percent', 50), '% des frais');
+  r('Part du centre', `Frais jusqu'à ${n('share_t1_max', 4000)} Ar`, n('share_t1', 1000));
+  r('Part du centre', `Frais jusqu'à ${n('share_t2_max', 8000)} Ar`, n('share_t2', 2000));
+  r('Part du centre', 'Frais au-delà', n('share_t3', 3000));
+  r('Limite', 'Vélo (kg)', n('bike_max_kg', 15)); r('Limite', 'Moto (kg)', n('moto_max_kg', 30)); r('Limite', 'Valeur sans validation (Ar)', n('max_value', 300000));
+  r('Caisse', 'Plafond d\'argent chez un livreur', n('cash_cap', 200000), `${n('cash_cap_hours', 48)} h maximum`);
+  return rows;
 }
 
 // ---------------------------------------------------------------- tâches planifiées

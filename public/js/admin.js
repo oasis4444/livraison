@@ -76,6 +76,11 @@ export async function mount(el) {
 
 // Assistant Central IA (bouton 🤖) : questions sur l'activité en français ou en malgache, décisions, contrôle anti-triche,
 // suivi des livreurs. Administrateur complet seulement ; les données viennent du serveur (/api/admin/centralia).
+let ciaCache = null;
+const ciaLoad = () => {
+  if (!ciaCache || Date.now() - ciaCache.t > 60e3) ciaCache = { t: Date.now(), p: api('GET', '/api/admin/centralia') };
+  return ciaCache.p;
+};
 function startCentralIA() {
   if (state.user.perms || window.CentralIA) return;
   const s = document.createElement('script');
@@ -88,7 +93,9 @@ function startCentralIA() {
     presence: false,          // le suivi porte sur les livreurs (GPS en service), pas sur l'administration
     envoiParDefaut: true,     // les données viennent du serveur : tout appareil de l'administrateur peut les envoyer
     suggestions: ['Ahoana ny raharaha androany ?', 'Iza no livreur niasa betsaka indrindra ?', 'Misy hosoka ve ?', 'Combien de livraisons cette semaine ?'],
-    donnees: () => api('GET', '/api/admin/centralia').then((r) => r.datasets),
+    // Une seule lecture du serveur pour les chiffres et les connaissances (tarifs, conditions, fonctionnement)
+    donnees: () => ciaLoad().then((r) => r.datasets),
+    connaissances: () => ciaLoad().then((r) => r.connaissances || []),
   });
   document.head.append(s);
 }
