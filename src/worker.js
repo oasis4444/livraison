@@ -1050,6 +1050,55 @@ async function adminAxeDelete(ctx, env) {
   await audit(env, ctx, 'admin_axe_delete', { id: ctx.params.id });
   return json({ ok: true });
 }
+// Planning simple : matin et après-midi (créneaux des Paramètres), un axe par case.
+const hhmmMin = (v, d) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(v || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : d; };
+function dayWindows(st) {
+  return { am: [hhmmMin(st.am_start, 480), hhmmMin(st.am_end, 720)], pm: [hhmmMin(st.pm_start, 780), hhmmMin(st.pm_end, 1020)] };
+}
+async function adminAxesBoard(ctx, env) {
+  const st = await settings(env);
+  const [axes, couriers, slots] = await Promise.all([
+    all(env, 'SELECT id, name, color, active, center_lat, center_lng, radius_km FROM axes ORDER BY name'),
+    all(env, `SELECT u.id, u.name, u.status, c.vehicle, c.available FROM users u JOIN couriers c ON c.user_id = u.id WHERE u.role = 'courier' AND u.status IN ('active', 'pending') ORDER BY u.name`),
+    all(env, 'SELECT courier_id, axe_id, start_min, end_min, days FROM courier_axes ORDER BY start_min'),
+  ]);
+  const w = dayWindows(st);
+  const by = {};
+  for (const x of slots) (by[x.courier_id] ||= []).push(x);
+  return json({
+    axes, windows: w,
+    couriers: couriers.map((c) => {
+      const mine = by[c.id] || [], at = (k) => mine.find((x) => x.start_min === w[k][0] && x.end_min === w[k][1]);
+      const am = at('am'), pm = at('pm');
+      return { ...c, am: am?.axe_id || null, pm: pm?.axe_id || null, days: (am || pm)?.days || '123456',
+        other: mine.filter((x) => x !== am && x !== pm).length };
+    }),
+  });
+}
+async function adminCourierAxesQuick(ctx, env) {
+  const cid = ctx.params.id, b = ctx.body;
+  if (!(await one(env, 'SELECT user_id FROM couriers WHERE user_id = ?', cid))) fail(404, 'not_found', 'Livreur introuvable');
+  const st = await settings(env), w = dayWindows(st);
+  const days = String(b.days ?? '123456').replace(/[^1-7]/g, '');
+  if (!days) fail(400, 'invalid', 'Choisissez au moins un jour');
+  const cLat = Number(st.centre_lat), cLng = Number(st.centre_lng), centre = st.centre_lat && st.centre_lng && Number.isFinite(cLat) && Number.isFinite(cLng);
+  const stmts = [q(env, 'DELETE FROM courier_axes WHERE courier_id = ? AND ((start_min = ? AND end_min = ?) OR (start_min = ? AND end_min = ?))', cid, w.am[0], w.am[1], w.pm[0], w.pm[1])];
+  for (const k of ['am', 'pm']) {
+    if (b[k] == null || b[k] === '') continue;
+    const a = await one(env, 'SELECT id, name, center_lat, center_lng FROM axes WHERE id = ?', int(b[k], { name: 'Axe' }));
+    if (!a) fail(404, 'not_found', 'Axe introuvable');
+    // Trajet par défaut : du centre Alefa vers le cœur de l'axe (les colis proches de ce chemin lui sont confiés)
+    const route = centre ? JSON.stringify([[cLat, cLng], [a.center_lat, a.center_lng]]) : null;
+    const km = centre ? Math.round(haversineKm(cLat, cLng, a.center_lat, a.center_lng) * 1.3 * 100) / 100 : null;
+    stmts.push(q(env, `INSERT INTO courier_axes (courier_id, axe_id, start_min, end_min, days, from_addr, from_lat, from_lng, to_addr, to_lat, to_lng, route, km)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, cid, a.id, w[k][0], w[k][1], days,
+      centre ? 'Centre Alefa' : null, centre ? cLat : null, centre ? cLng : null, centre ? a.name : null, centre ? a.center_lat : null, centre ? a.center_lng : null, route, km));
+  }
+  await env.DB.batch(stmts);
+  await notify(env, [cid], 'axe', 'Planning mis à jour', 'Vos axes de travail ont été modifiés par l\'administration.');
+  await audit(env, ctx, 'admin_courier_axes_quick', { courier: cid, am: b.am || null, pm: b.pm || null, days });
+  return json({ ok: true });
+}
 async function adminCourierAxesGet(ctx, env) {
   const slots = await all(env, `${SLOT_SQL} WHERE ca.courier_id = ? ORDER BY ca.start_min`, ctx.params.id);
   return json({ slots, state: axeState(slots) });
@@ -1365,6 +1414,8 @@ route('POST', '/api/admin/axes', ['admin'], adminAxeSave);
 route('DELETE', '/api/admin/axes/:id', ['admin'], adminAxeDelete);
 route('GET', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesGet);
 route('PUT', '/api/admin/couriers/:id/axes', ['admin'], adminCourierAxesPut);
+route('GET', '/api/admin/axes/board', ['admin'], adminAxesBoard);
+route('PUT', '/api/admin/couriers/:id/axes/quick', ['admin'], adminCourierAxesQuick);
 route('POST', '/api/admin/users/:id/password', ['admin'], adminResetPassword);
 route('POST', '/api/admin/users/:id/profile', ['admin'], adminEditUser);
 route('POST', '/api/admin/users/:id/vehicle', ['admin'], adminSetVehicle);

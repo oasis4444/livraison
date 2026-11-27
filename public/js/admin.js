@@ -58,6 +58,7 @@ export async function mount(el) {
   };
   const F = ':is(.filters, [data-autofilter])';
   root.addEventListener('change', (e) => { if (e.target.matches(`${F} select, ${F} input[type=date]`)) runFilter(e.target, 0); });
+  root.addEventListener('change', (e) => { if (e.target.matches('[data-bk]')) saveBoardRow(e.target.closest('tr')); });
   root.addEventListener('input', (e) => { if (e.target.matches(`${F} input:not([type=date])`)) runFilter(e.target, 500); });
   root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches(`${F} input`)) { e.preventDefault(); runFilter(e.target, 0); } });
   admBubble = chatBubble('admin', { cls: 'adm-bub', onOpen: () => { location.hash = 'support'; } });
@@ -604,10 +605,24 @@ const VIEWS = {
   },
 
   async axes() {
-    const r = await api('GET', '/api/admin/axes');
+    const [r, b] = await Promise.all([api('GET', '/api/admin/axes'), api('GET', '/api/admin/axes/board')]);
+    const on = b.axes.filter((a) => a.active);
+    const sel = (c, k) => `<select class="input" data-bk="${k}"><option value="">— Pas d'axe —</option>${on.map((a) => `<option value="${a.id}" ${c[k] === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
+    const win = (w) => `${hm(w[0])}–${hm(w[1])}`;
     main.innerHTML = head('Axes & planning', '<button class="btn primary" data-act="axe">＋ Nouvel axe</button>') + `
-      <p class="small muted">Un axe est un secteur de travail (cercle sur la carte). Attribuez des axes aux livreurs par créneaux horaires depuis <a href="#couriers">Livreurs → 🧭 Axes</a>.
-      Un livreur avec planning ne voit que les demandes dont le départ est dans l'axe du créneau en cours ; sans planning, il voit toute la zone autour de lui.</p>
+      <div class="panel ax-board" style="margin-bottom:18px">
+        <div class="row between wrap"><h3 style="margin:0">Planning des livreurs</h3><span class="small muted">Choisissez un axe pour le matin (${win(b.windows.am)}) et l'après-midi (${win(b.windows.pm)}) : c'est enregistré tout de suite.</span></div>
+        ${!on.length ? '<p class="muted" style="margin:12px 0 0">Créez d\'abord un axe (bouton « ＋ Nouvel axe »), puis attribuez-le ici.</p>'
+        : !b.couriers.length ? '<p class="muted" style="margin:12px 0 0">Aucun livreur.</p>' : `
+        <div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>Livreur</th><th>Matin · ${win(b.windows.am)}</th><th>Après-midi · ${win(b.windows.pm)}</th><th>Jours</th><th></th></tr></thead><tbody>
+        ${b.couriers.map((c) => `<tr data-bc="${c.id}" data-days="${esc(c.days)}">
+          <td><b>${vehIcon(c.vehicle)} ${esc(c.name)}</b>${c.status === 'pending' ? ' <span class="tiny muted">(à valider)</span>' : ''}${c.other ? `<div class="tiny muted">+ ${c.other} créneau(x) personnalisé(s)</div>` : ''}<div class="tiny" data-bsaved></div></td>
+          <td>${sel(c, 'am')}</td>
+          <td><div class="row" style="gap:6px;flex-wrap:nowrap">${sel(c, 'pm')}<button class="btn sm" data-act="bsame" title="Même axe que le matin">= matin</button></div></td>
+          <td><span class="chips">${DAYS.map((d, j) => `<button class="chip ${String(c.days).includes(String(j + 1)) ? 'on' : ''}" data-act="bday" data-day="${j + 1}" style="padding:.25rem .5rem">${d}</button>`).join('')}</span></td>
+          <td class="nowrap"><button class="btn sm" data-act="bmore" data-name="${esc(c.name)}" data-veh="${esc(c.vehicle || 'velo')}" title="Horaires détaillés, départ et arrivée, trajets">Détails</button></td></tr>`).join('')}
+        </tbody></table></div>`}
+        <p class="tiny muted" style="margin:10px 0 0">Le livreur reçoit les colis de son axe pendant le créneau (trajet du centre vers l'axe). « Détails » : autres horaires, lieux de départ et d'arrivée précis, trajets. Sans axe, il travaille sur toute la zone autour de lui.</p></div>
       <div class="grid2"><div class="livemap" id="axemap" style="height:520px"></div>
       <div class="panel"><div class="list">${r.axes.map((a) => `<div class="row between" style="border-bottom:1px solid var(--line);padding-bottom:8px">
         <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${esc(a.color)}"></span> <b>${esc(a.name)}</b>${a.active ? '' : ' <span class="muted">(inactif)</span>'}<br><span class="small muted">Rayon ${a.radius_km} km · ${a.couriers} livreur(s) · frais ${a.fee ? ar(a.fee) : 'par défaut'}</span></span>
@@ -1015,6 +1030,9 @@ const actions = {
     modal('Mot de passe modifié', `<p>Communiquez ce mot de passe à <b>${esc(el.dataset.name)}</b> :</p><p style="font-size:1.6rem;font-weight:800;text-align:center;letter-spacing:.05em">${esc(pw)}</p><p class="small muted">Il pourra le changer dans son profil.</p>`);
   },
   axe: (el) => axeForm(el.dataset.a ? JSON.parse(el.dataset.a) : null),
+  bsame: (el) => { const tr = el.closest('tr'); const pm = tr.querySelector('[data-bk=pm]'); pm.value = tr.querySelector('[data-bk=am]').value; pm.dispatchEvent(new Event('change', { bubbles: true })); },
+  bday: (el) => { el.classList.toggle('on'); saveBoardRow(el.closest('tr')); },
+  bmore: (el) => planningForm(+el.closest('tr').dataset.bc, el.dataset.name, el.dataset.veh),
   axedel: async (el) => { if (!(await confirmBox('Supprimer cet axe ? Il sera retiré du planning des livreurs.', 'Supprimer', true))) return; await api('DELETE', `/api/admin/axes/${el.dataset.id}`); show(); },
   newstaff: async () => {
     const r = await api('GET', '/api/admin/staff');
@@ -1087,6 +1105,18 @@ function axeForm(a) {
 }
 
 const DAYS = ['L', 'Ma', 'Me', 'J', 'V', 'S', 'D'];
+// Planning simple : une ligne par livreur, enregistrée dès qu'on change l'axe du matin / de l'après-midi ou un jour.
+async function saveBoardRow(tr) {
+  const days = [...tr.querySelectorAll('[data-act=bday].on')].map((x) => x.dataset.day).join('');
+  const out = tr.querySelector('[data-bsaved]');
+  if (!days) { tr.querySelector('[data-act=bday]')?.classList.add('on'); return toast('Gardez au moins un jour', 'err'); }
+  out.textContent = '…';
+  try {
+    await api('PUT', `/api/admin/couriers/${tr.dataset.bc}/axes/quick`, { am: tr.querySelector('[data-bk=am]').value || null, pm: tr.querySelector('[data-bk=pm]').value || null, days });
+    out.innerHTML = '<span style="color:var(--green)">✓ enregistré</span>';
+    setTimeout(() => { if (out.isConnected) out.textContent = ''; }, 2500);
+  } catch (e) { out.textContent = ''; toastErr(e); }
+}
 const toMin = (v) => { const [h, mi] = String(v || '0:0').split(':').map(Number); return h * 60 + (mi || 0); };
 async function planningForm(courierId, name, vehicle = 'velo') {
   const [{ axes, slot_minutes }, cur] = await Promise.all([api('GET', '/api/admin/axes'), api('GET', `/api/admin/couriers/${courierId}/axes`)]);

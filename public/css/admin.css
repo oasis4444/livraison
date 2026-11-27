@@ -149,3 +149,9 @@
 .ad .ad-hold-row.click { cursor: pointer; }
 .ad .ad-hold-h { min-width: 52px; text-align: center; font-weight: 900; color: #fff; background: #e5484d; border-radius: 10px; padding: 6px 8px; }
 .ad .ad-hold-h.cash { background: #c27c00; }
+
+/* Planning des livreurs (Axes & planning) */
+.ad td.nowrap { white-space: nowrap; }
+.ax-board .tbl select.input { min-width: 170px; }
+.ax-board .tbl td { vertical-align: middle; }
+.ax-board .chips { flex-wrap: nowrap; }

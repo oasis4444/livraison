@@ -100,6 +100,13 @@ try {
     await admin.waitForSelector('.modal >> text=Analakely → Behoririka');
     await admin.screenshot({ path: 'tests/screens/12-admin-planning.png' });
     await admin.click('[data-save]'); await admin.waitForSelector('text=Planning enregistré');
+    // Planning simple : choisir l'axe du matin dans la grille → enregistré tout de suite
+    await admin.click('[data-v=axes]'); await admin.waitForSelector('.ax-board [data-bk=am]');
+    await admin.waitForSelector('.ax-board >> text=créneau(x) personnalisé(s)');
+    await admin.selectOption('.ax-board tr >> nth=1 >> [data-bk=am]', { label: 'Analakely – Tsaralalana' });
+    await admin.waitForSelector('.ax-board >> text=enregistré');
+    await admin.click('.ax-board [data-act=bsame]'); await admin.waitForTimeout(600);
+    await admin.screenshot({ path: 'tests/screens/12b-admin-planning-grille.png' });
   });
   await step('espace livreur séparé /livreur + GPS obligatoire', async () => {
     // sans autorisation GPS → écran bloquant
