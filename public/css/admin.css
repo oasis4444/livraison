@@ -29,7 +29,9 @@
 
 /* Contenu */
 .ad .main { padding: 26px 34px 50px; }
-.ad .main-head { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+/* En-tête fixe : reste en haut pendant le défilement */
+.ad .main-head { position: sticky; top: 0; z-index: 30; margin: -26px -34px 22px; padding: 18px 34px 14px; border-bottom: 1px solid var(--line);
+  background: rgba(251, 248, 241, .92); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); }
 .ad .main-head h1 { font-size: 1.85rem; font-weight: 800; }
 .ad-tools { gap: 8px; }
 .ad-bell { position: relative; width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line); background: #fff; cursor: pointer; display: grid; place-items: center; color: var(--hk); }
@@ -89,6 +91,7 @@
   .ad .side.open + .side-back { display: block; position: fixed; inset: 0; z-index: 1400; background: rgba(6, 42, 31, .45); }
   .ad .main { padding: 14px 14px 40px; }
   .ad .main-head h1 { font-size: 1.4rem; }
+  .ad .main-head { margin: -14px -14px 16px; padding: 10px 14px; }
   .ad .mobile-nav { width: 40px; height: 40px; box-shadow: none; border: 1px solid var(--line); }
   .ad-chip span:last-child { display: none; }
   .ad-chip { padding: 3px; }

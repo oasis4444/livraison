@@ -2,7 +2,7 @@
 .home {
   --hf: #062a1f; --hg: #0b6e4f; --hg2: #0e8a63; --hs: #ffc83d; --hs2: #ffd76a; --hp: #fbf8f1; --hk: #10231c; --hk2: #4b5d55; --hl: #e7e1d3;
   --disp: "Manrope", "Inter", system-ui, sans-serif;
-  background: var(--hp); color: var(--hk); min-height: 100%; font-size: 16px; overflow-x: hidden;
+  background: var(--hp); color: var(--hk); min-height: 100%; font-size: 16px; overflow-x: clip; /* clip (et non hidden) : l'en-tête reste fixe */
 }
 .home h1, .home h2, .home h3 { font-family: var(--disp); letter-spacing: -.025em; margin: 0; }
 .home p { margin: 0; line-height: 1.6; }

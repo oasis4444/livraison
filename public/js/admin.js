@@ -51,13 +51,14 @@ export async function mount(el) {
   // Filtres appliqués tout seuls : choix dans une liste → tout de suite ; recherche → pendant la frappe (ou touche Entrée).
   let ftmr;
   const runFilter = (el, delay) => {
-    const box = el.closest('.filters'), b = box?.querySelector('[data-act$="filter"]'); if (!b) return;
+    const box = el.closest('.filters, [data-autofilter]'), b = box?.querySelector('[data-act$="filter"], [data-act=crgo]'); if (!b) return;
     clearTimeout(ftmr);
     ftmr = setTimeout(() => { const k = [...el.attributes].find((a) => a.name.startsWith('data-') && a.name !== 'data-act'); refocus = el.matches('input') && k ? { sel: `[${k.name}="${k.value}"]`, pos: el.selectionStart } : null; b.click(); }, delay);
   };
-  root.addEventListener('change', (e) => { if (e.target.matches('.filters select')) runFilter(e.target, 0); });
-  root.addEventListener('input', (e) => { if (e.target.matches('.filters input')) runFilter(e.target, 500); });
-  root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('.filters input')) { e.preventDefault(); runFilter(e.target, 0); } });
+  const F = ':is(.filters, [data-autofilter])';
+  root.addEventListener('change', (e) => { if (e.target.matches(`${F} select, ${F} input[type=date]`)) runFilter(e.target, 0); });
+  root.addEventListener('input', (e) => { if (e.target.matches(`${F} input:not([type=date])`)) runFilter(e.target, 500); });
+  root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches(`${F} input`)) { e.preventDefault(); runFilter(e.target, 0); } });
   startNotifications(() => { refreshCounts(); if (['dash', 'complaints', 'support'].includes(view)) show(); });
   // clic sur une notification : fiche du colis, course, réclamations, colis à répartir, paiements
   setNotifOpener((tg) => {
@@ -402,7 +403,7 @@ const VIEWS = {
     main.innerHTML = head('Livraisons', `<a class="btn sm" href="/api/admin/export?type=deliveries" data-act="export" data-type="deliveries">⬇ Excel (CSV)</a>`) + `
       <div class="filters"><select class="input" data-f="status">${[['active', 'En cours'], ['', 'Toutes'], ['open', 'En attente'], ['assigned', 'Attribuées'], ['picked_up', 'Récupérées'], ['delivered', 'Livrées'], ['cancelled', 'Annulées'], ['expired', 'Expirées'], ['flagged', '⚠ Signalées']].map(([v, l]) => `<option value="${v}" ${p.get('status') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <select class="input" data-f="payment"><option value="">Tous paiements</option><option value="pending" ${p.get('payment') === 'pending' ? 'selected' : ''}>Mobile Money à confirmer</option></select>
-      <input class="input" data-f="q" placeholder="Rechercher (n°, nom, adresse)" value="${esc(p.get('q') || '')}"><button class="btn sm primary" data-act="dfilter">Filtrer</button></div>
+      <input class="input" data-f="q" placeholder="Rechercher (n°, nom, adresse)" value="${esc(p.get('q') || '')}"><button class="hidden" data-act="dfilter">Filtrer</button></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Date</th><th>Client</th><th>Livreur</th><th>Trajet</th><th class="num">km</th><th class="num">Prix</th><th>Paiement</th><th>Statut</th></tr></thead><tbody data-rows><tr><td colspan="9">…</td></tr></tbody></table></div>`;
     const r = await api('GET', '/api/admin/deliveries?' + p.toString());
     $('[data-rows]').innerHTML = r.deliveries.map((d) => `<tr class="click" data-act="delivery" data-id="${d.id}"><td>#${d.id}${d.flagged ? ' ⚠' : ''}</td><td class="small">${dt(d.created_at)}</td><td>${esc(d.client_name)}</td><td>${esc(d.courier_name || '—')}</td>
@@ -616,7 +617,7 @@ const VIEWS = {
       <div class="filters"><select class="input" data-pf="status">${[['open', 'En cours'], ['pending', 'À programmer'], ['assigned', 'Programmés'], ['picked_up', 'Récupérés'], ['return', 'À rendre'], ['delivered', 'Livrés'], ['refused', 'Refusés'], ['cancelled', 'Annulés'], ['', 'Tous']].map(([v, l]) => `<option value="${v}" ${st === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <select class="input" data-pf="courier"><option value="">Tous les livreurs</option><option value="none" ${cv === 'none' ? 'selected' : ''}>Sans livreur</option>${cs.users.map((u) => `<option value="${u.id}" ${cv === String(u.id) ? 'selected' : ''}>${vehIcon(u.vehicle)} ${esc(u.name)}</option>`).join('')}</select>
         <select class="input" data-pf="paid">${[['', 'Payé ou non'], ['unpaid', 'Non réglés'], ['paid', 'Tout réglé']].map(([v, l]) => `<option value="${v}" ${pv === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <input class="input" data-pf="q" placeholder="Rechercher : réf., nom, téléphone, adresse" value="${esc(qv)}"><button class="btn sm primary" data-act="pfilter">Filtrer</button></div>
+        <input class="input" data-pf="q" placeholder="Rechercher : réf., nom, téléphone, adresse" value="${esc(qv)}"><button class="hidden" data-act="pfilter">Filtrer</button></div>
       <div class="pc-sum"><span><b>${tot.n}</b> colis</span>${tot.late ? `<span class="pc-late-n"><b>${tot.late}</b> en retard</span>` : ''}<span>Valeur livrée <b>${ar(tot.value)}</b></span><span>Frais <b>${ar(tot.fees)}</b></span>${cv && cv !== 'none' ? `<span>Part du livreur <b>${ar(tot.share)}</b></span>` : ''}<span>${tot.unpaid ? `<span class="pt no">${tot.unpaid} livraison(s) non payée(s)</span>` : '<span class="pt ok">Livraisons payées</span>'}</span></div>
       <div class="tbl-wrap"><table class="tbl pc-tbl"><thead><tr><th>Colis</th><th>Expéditeur · récupération</th><th>Destinataire · livraison</th><th>Livreurs</th><th class="num">Valeur · frais</th><th>Argent</th><th>Statut</th></tr></thead><tbody>
       ${rows.map((x) => `<tr class="click ${x.late ? 'late' : ''}" data-act="parcel" data-id="${x.id}" data-ref="${esc(x.ref)}">
@@ -640,11 +641,11 @@ const VIEWS = {
     const period = crF.from === crF.to ? dayLabel(crF.from) : `du ${dayLabel(crF.from)} au ${dayLabel(crF.to)}`;
     const td = (v, money = true) => `<td class="num">${v ? (money ? ar(v) : v) : '<span class="muted">—</span>'}</td>`;
     main.innerHTML = head('Rapport livreurs', `<button class="btn sm" data-act="crcsv">⬇ Excel (CSV)</button>`) + `
-      <div class="panel" style="margin-bottom:16px"><div class="row wrap" style="gap:10px;align-items:flex-end">
+      <div class="panel" style="margin-bottom:16px"><div class="row wrap" data-autofilter style="gap:10px;align-items:flex-end">
         <label class="field" style="margin:0"><span>Du</span><input class="input" type="date" data-cr="from" value="${esc(crF.from)}"></label>
         <label class="field" style="margin:0"><span>Au</span><input class="input" type="date" data-cr="to" value="${esc(crF.to)}"></label>
         <label class="field" style="margin:0;min-width:200px"><span>Livreur</span><select class="input" data-cr="courier"><option value="">Tous les livreurs</option>${r.couriers.map((c) => `<option value="${c.id}" ${c.id === r.courier ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
-        <button class="btn primary" data-act="crgo">Afficher</button></div>
+        <button class="hidden" data-act="crgo">Afficher</button></div>
         <div class="row wrap" style="gap:6px;margin-top:10px">${quick.map(([k, l]) => `<button class="btn sm ${crF.quick === k ? 'primary' : ''}" data-act="crquick" data-q="${k}">${l}</button>`).join('')}</div></div>
       <p class="small muted" style="margin:-4px 0 12px">${esc(one ? one.name : 'Tous les livreurs')} · ${esc(period)}</p>
       <div class="kpis k6">${kpi('Colis récupérés', T.picked)}${kpi('Colis livrés', T.delivered)}${kpi('Refusés', T.refused)}${kpi('Annulés', r.overview.cancelled)}${kpi('Nouveaux colis', r.overview.created)}${kpi('En cours maintenant', r.overview.open)}</div>
@@ -734,7 +735,7 @@ async function usersView(role) {
   const isC = role === 'courier';
   main.innerHTML = head(isC ? 'Livreurs' : 'Clients', `${isC ? '<button class="btn sm primary" data-act="newcourier">＋ Nouveau livreur</button>' : ''}<a class="btn sm" href="#" data-act="export" data-type="users">⬇ CSV</a>`) + `
     <div class="filters"><select class="input" data-u="status"><option value="">Tous</option>${(isC ? ['pending', 'active', 'suspended', 'rejected'] : ['active', 'suspended']).map((s) => `<option value="${s}" ${st === s ? 'selected' : ''}>${{ pending: 'À valider', active: 'Actifs', suspended: 'Suspendus', rejected: 'Refusés' }[s]}</option>`).join('')}</select>
-    <input class="input" data-u="q" placeholder="Nom ou téléphone" value="${esc(qv)}"><button class="btn sm primary" data-act="ufilter" data-role="${role}">Filtrer</button></div>
+    <input class="input" data-u="q" placeholder="Nom ou téléphone" value="${esc(qv)}"><button class="hidden" data-act="ufilter" data-role="${role}">Filtrer</button></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nom</th><th>Téléphone</th>${isC ? '<th>CIN</th><th>Note</th><th class="num">Solde</th><th>En ligne</th>' : '<th>Type</th><th>Annulations</th>'}<th class="num">Livraisons</th><th>Inscrit</th><th>Statut</th><th></th></tr></thead><tbody>
     ${r.users.map((u) => `<tr><td><b>${esc(u.name)}</b>${isC ? ` <button class="btn sm ghost" data-act="veh" data-id="${u.id}" data-v="${u.vehicle === 'moto' ? 'velo' : 'moto'}" title="Changer de véhicule (vélo / moto)">${vehIcon(u.vehicle)} ${u.vehicle === 'moto' ? 'Moto' : 'Vélo'}</button>` : ''}${u.company ? `<div class="tiny muted">${esc(u.company)}</div>` : ''}${isC && u.doc_note ? `<div class="tiny muted">${esc(u.doc_note)}</div>` : ''}</td><td><a href="tel:${esc(u.phone)}">${esc(phoneFmt(u.phone))}</a></td>
       ${isC ? `<td class="small">${esc(u.cin || '')}${u.address ? `<div class="tiny muted">${esc(u.address)}</div>` : ''}${u.emergency_contact ? `<div class="tiny muted">🆘 ${esc(u.emergency_contact)}</div>` : ''}</td><td>${stars(u.rating_count ? Math.round((u.rating_sum / u.rating_count) * 10) / 10 : null)}</td><td class="num">${ar(u.balance)}</td><td class="small">${u.available && u.last_seen > Date.now() - 600e3 ? '🟢' : '⚪'} ${u.last_seen ? dt(u.last_seen) : ''}</td>`

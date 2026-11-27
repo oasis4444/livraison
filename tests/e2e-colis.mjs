@@ -6,6 +6,15 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 // Onglets de l'espace livreur : menu latéral (ordinateur) ou barre du bas (téléphone) ; sinon via « Plus ».
+// En-tête fixe : après défilement, l'en-tête doit toujours toucher le haut de l'écran.
+async function stuck(p, sel) {
+  const vp = p.viewportSize(); await p.setViewportSize({ width: vp.width, height: 420 });
+  const r = await p.evaluate(async (s) => { scrollTo(0, 99999); await new Promise((x) => setTimeout(x, 200)); const o = { y: scrollY, top: document.querySelector(s)?.getBoundingClientRect().top }; scrollTo(0, 0); return o; }, sel);
+  await p.setViewportSize(vp);
+  if (r.y < 50) throw new Error(`page trop courte pour vérifier ${sel}`);
+  if (r.top == null || Math.abs(r.top) > 2) throw new Error(`en-tête non fixe ${sel} : ${r.top}`);
+}
+
 async function ctab(p, k) {
   const sel = `[data-act=tab][data-t=${k}] >> visible=true`;
   if (await p.locator(sel).count()) return p.click(sel);
@@ -69,6 +78,7 @@ try {
     await v.waitForSelector('.h-res-top b'); if (!/Ar/.test(await v.textContent('.h-res-top b'))) throw new Error('prix');
     await v.evaluate(() => document.querySelectorAll('.reveal').forEach((e) => e.classList.add('in'))); await v.waitForTimeout(800);
     await v.screenshot({ path: 'tests/screens/00-accueil.png', fullPage: true });
+    await stuck(v, '.h-head');
     await v.setViewportSize({ width: 390, height: 844 }); await v.evaluate(() => window.scrollTo(0, 0)); await v.waitForTimeout(300);
     await v.screenshot({ path: 'tests/screens/00-accueil-mobile.png', fullPage: true });
     await v.click('[data-burger]'); await v.click('.h-nav-cta [data-register]'); await v.waitForSelector('[data-accept]');
@@ -164,7 +174,7 @@ try {
     await client.click('[data-next]'); await client.click('[data-cat=S]'); await client.click('[data-next]');
     if ((await client.inputValue('[data-k=value]')) !== '15000') throw new Error('valeur préremplie');
     await client.click('[data-next]'); await client.click('[data-ok]'); await client.waitForSelector('.wz-pin');
-    await client.click('.sp-tab [data-nav=home]'); await client.waitForSelector('.sp-hero');
+    await client.click('.sp-tab [data-nav=home]'); await client.waitForSelector('.sp-hero'); await stuck(client, '.sp-top');
   });
   await step('import Excel/CSV : une ligne = un colis', async () => {
     await client.click('[data-imp]');
@@ -249,6 +259,7 @@ try {
   await step('centre : encaissement du livreur puis paiement du vendeur', async () => {
     await admin.click('[data-v=parcels]'); await admin.selectOption('[data-pf=status]', ''); await admin.waitForTimeout(700); // filtre appliqué tout seul
     await admin.waitForSelector('tr.click a[href^="tel:"]');
+    await stuck(admin, '.main-head');
     await admin.screenshot({ path: 'tests/screens/27-admin-colis.png' });
     await admin.click('[data-v=cash]'); await admin.click('[data-act=settle]'); await admin.click('[data-yes]');
     await admin.waitForSelector('text=encaissés');
