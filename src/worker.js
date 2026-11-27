@@ -76,7 +76,7 @@ export const STAFF_ROLES = {
 export const staffPerms = (u) => (u.role !== 'admin' ? [] : STAFF_ROLES[u.perms]?.perms || null); // null = tout
 // Rubrique exigée par chaque adresse de l'administration (« system » : administrateur complet seulement).
 const STAFF_RULES = [
-  [/^\/api\/admin\/(settings|zones|promos|sms-|merchants|tsena|sync-log|audit|export|staff)/, 'system'],
+  [/^\/api\/admin\/(settings|zones|promos|sms-|merchants|tsena|sync-log|audit|export|staff|centralia)/, 'system'],
   [/^POST \/api\/admin\/users$|^\S+ \/api\/admin\/users\/\d+\/password$/, 'system'],
   [/^\S+ \/api\/admin\/(cash|vendors|transactions)|\/settle$|\/payment$/, 'cash'],
   [/^GET \/api\/admin\/support\/unread$/, null],
@@ -1109,6 +1109,79 @@ async function adminAudit(ctx, env) {
   return json({ audit: await all(env, 'SELECT a.*, u.name AS user_name FROM audit a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 300') });
 }
 
+// ---------------------------------------------------------------- Central IA (assistant d'analyse)
+// Données envoyées au Central IA par l'interface d'administration (bouton 🤖) : 365 derniers jours, heure de Madagascar,
+// sans téléphones ni codes PIN. Réservé à l'administrateur complet (règle « system »).
+const CIA_ACTIONS = {
+  login: 'Connexion', delivery_create: 'Livraison créée', delivery_cancel: 'Livraison annulée', delivery_pickup: 'Livraison récupérée',
+  delivery_done: 'Livraison terminée', offer_accept: 'Offre acceptée', offer_take: 'Offre prise', pin_fail: 'PIN erroné',
+  shipment_create: 'Colis créé', shipment_cancel: 'Colis annulé', shipment_reject: 'Colis refusé', shipment_assign: 'Colis attribué',
+  shipment_fee: 'Frais du colis modifiés', shipment_approve: 'Colis validé', shipment_plan: 'Tournée planifiée', shipment_import: 'Colis importés',
+  admin_payment: 'Paiement modifié', admin_transaction: 'Transaction livreur ajoutée', admin_password_reset: 'Mot de passe réinitialisé',
+  admin_user_status: 'Statut de compte modifié', admin_user_create: 'Compte créé', admin_settings: 'Paramètres modifiés',
+  admin_promo: 'Code promo modifié', admin_zone: 'Zone modifiée', admin_export: 'Export des données', cash_settle: 'Caisse réglée',
+  vendor_pay: 'Paiement vendeur', staff_role: 'Rôle d\'équipe modifié', admin_courier_vehicle: 'Véhicule livreur modifié',
+  password_change: 'Mot de passe changé', phone_change: 'Téléphone changé', courier_depart: 'Départ du livreur',
+};
+const ciaDate = (ms) => (ms ? new Date(Number(ms) + 3 * 3600e3).toISOString() : '');  // Madagascar = UTC+3
+const ciaDay = (ms) => ciaDate(ms).slice(0, 10);
+const ciaHour = (ms) => ciaDate(ms).slice(11, 16);
+const ciaMin = (a, b) => (a && b && b >= a ? Math.round((b - a) / 60e3) : null);
+
+async function adminCentralIA(ctx, env) {
+  const since = now() - 365 * 864e5;
+  const [dl, sh, cu, tx, co, au, ps] = await Promise.all([
+    all(env, `SELECT d.*, cl.name AS client_name, cu.name AS courier_name FROM deliveries d JOIN users cl ON cl.id = d.client_id
+      LEFT JOIN users cu ON cu.id = d.courier_id WHERE d.created_at >= ? ORDER BY d.id DESC LIMIT 20000`, since),
+    all(env, `SELECT s.*, cu.name AS courier_name FROM shipments s LEFT JOIN users cu ON cu.id = s.courier_id
+      WHERE s.created_at >= ? ORDER BY s.id DESC LIMIT 20000`, since),
+    all(env, `SELECT u.name, u.status, u.created_at, c.vehicle, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen,
+      (SELECT COUNT(*) FROM deliveries d WHERE d.courier_id = u.id AND d.status = 'delivered') AS livrees,
+      (SELECT COUNT(*) FROM shipments s WHERE s.courier_id = u.id AND s.status = 'delivered') AS colis_livres
+      FROM users u JOIN couriers c ON c.user_id = u.id WHERE u.role = 'courier'`),
+    all(env, `SELECT t.*, u.name AS courier_name FROM transactions t JOIN users u ON u.id = t.courier_id WHERE t.at >= ? ORDER BY t.id DESC LIMIT 20000`, since),
+    all(env, `SELECT c.kind, c.status, c.at, c.resolved_at, c.delivery_id, u.name AS user_name, u.role AS user_role FROM complaints c
+      LEFT JOIN users u ON u.id = c.user_id WHERE c.at >= ? ORDER BY c.id LIMIT 20000`, since),
+    all(env, `SELECT a.action, a.detail, a.at, u.name AS user_name FROM audit a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.at >= ? ORDER BY a.id DESC LIMIT 20000`, since),
+    // Présence des livreurs : une ligne par minute où le GPS du livreur a envoyé sa position (en service), 3 derniers jours
+    all(env, `SELECT u.name, p.at FROM (SELECT courier_id, MIN(at) AS at FROM positions WHERE at >= ? GROUP BY courier_id, at / 60000) p
+      JOIN users u ON u.id = p.courier_id ORDER BY p.at LIMIT 60000`, now() - 3 * 864e5),
+  ]);
+  const datasets = {
+    livraisons: dl.map((d) => ({
+      id: d.id, date: ciaDay(d.created_at), heure: ciaHour(d.created_at), client: d.client_name || '', livreur: d.courier_name || '',
+      type: d.type, distance_km: d.distance_km, prix_conseille: d.suggested_price, prix_propose: d.proposed_price, prix_final: d.final_price || 0,
+      remise: d.discount || 0, commission: d.commission || 0, paiement: d.payment_method, statut_paiement: d.payment_status, statut: d.status,
+      attente_livreur_min: ciaMin(d.created_at, d.assigned_at), duree_livraison_min: ciaMin(d.picked_at, d.delivered_at),
+      duree_totale_min: ciaMin(d.created_at, d.delivered_at), annule_par: d.cancelled_by || '', motif_annulation: d.cancel_reason || '',
+      annule_le: d.cancelled_at ? `${ciaDay(d.cancelled_at)} ${ciaHour(d.cancelled_at)}` : '', note: d.rating || null, signalement: d.flagged || '',
+    })),
+    colis: sh.map((s) => ({
+      ref: s.ref, date: ciaDay(s.created_at), heure: ciaHour(s.created_at), source: s.source, expediteur: s.sender_name || '',
+      destinataire: s.recipient_name || '', livreur: s.courier_name || '', statut: s.status, etape: s.stage || '', categorie: s.category || '',
+      quantite: s.qty || 1, frais: s.fee || 0, frais_retour: s.return_fee || 0, valeur: s.value || s.declared_value || 0, encaisse: s.collected || 0,
+      part_centre: s.centre_share || 0, part_livreur: s.courier_share || 0, express: s.express ? 1 : 0, fragile: s.fragile ? 1 : 0,
+      province: s.province ? 1 : 0, ville: s.dest_city || '', distance_km: s.distance_km || null, tentatives: s.attempts || 0,
+      distance_remise_m: s.delivered_dist_m ?? null, duree_totale_min: ciaMin(s.created_at, s.done_at), motif: s.outcome_note || '',
+      livre_le: s.done_at ? ciaDay(s.done_at) : '',
+    })),
+    livreurs: cu.map((c) => ({
+      nom: c.name, statut: c.status, vehicule: c.vehicle, disponible: c.available ? 1 : 0, solde: c.balance || 0,
+      note_moyenne: c.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null, nb_notes: c.rating_count || 0,
+      livraisons: c.livrees || 0, colis_livres: c.colis_livres || 0, dernier_vu: c.last_seen ? `${ciaDay(c.last_seen)} ${ciaHour(c.last_seen)}` : '',
+      inscrit_le: ciaDay(c.created_at),
+    })),
+    transactions: tx.map((t) => ({ date: ciaDay(t.at), heure: ciaHour(t.at), livreur: t.courier_name, type: t.kind, montant: t.amount, livraison: t.delivery_id || null, note: t.note || '' })),
+    reclamations: co.map((c) => ({ date: ciaDay(c.at), heure: ciaHour(c.at), type: c.kind, statut: c.status, personne: c.user_name || '', role: c.user_role || '',
+      livraison: c.delivery_id || null, delai_resolution_min: ciaMin(c.at, c.resolved_at) })),
+    journal: au.map((a) => ({ date: ciaDay(a.at), heure: ciaHour(a.at), utilisateur: a.user_name || '', action: CIA_ACTIONS[a.action] || a.action,
+      details: String(a.detail || '').slice(0, 300) })),
+    presence: ps.map((p) => ({ date: ciaDay(p.at), heure: ciaHour(p.at), utilisateur: p.name, nom: p.name, etat: 'actif', appareil: 'gps' })),
+  };
+  return json({ datasets });
+}
+
 // ---------------------------------------------------------------- tâches planifiées
 export async function maintenance(env) {
   const s = await settings(env);
@@ -1186,6 +1259,7 @@ route('GET', '/api/admin/reports', ['admin'], adminReports);
 route('GET', '/api/admin/export', ['admin'], adminExport);
 route('GET', '/api/admin/track', ['admin'], adminTrack);
 route('GET', '/api/admin/audit', ['admin'], adminAudit);
+route('GET', '/api/admin/centralia', ['admin'], adminCentralIA);
 route('GET', '/api/admin/axes', ['admin'], adminAxes);
 route('POST', '/api/admin/axes', ['admin'], adminAxeSave);
 route('DELETE', '/api/admin/axes/:id', ['admin'], adminAxeDelete);

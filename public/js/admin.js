@@ -71,6 +71,26 @@ export async function mount(el) {
   });
   every(30000, refreshCounts);
   show();
+  startCentralIA();
+}
+
+// Assistant Central IA (bouton 🤖) : questions sur l'activité en français ou en malgache, décisions, contrôle anti-triche,
+// suivi des livreurs. Administrateur complet seulement ; les données viennent du serveur (/api/admin/centralia).
+function startCentralIA() {
+  if (state.user.perms || window.CentralIA) return;
+  const s = document.createElement('script');
+  s.src = '/js/centralia-kit.js';
+  s.onload = () => window.CentralIA.init({
+    nom: 'Alefa Livraison', cle: 'alefa-admin', couleur: '#1a6fa3',
+    utilisateur: () => state.user?.name || '',
+    visible: () => !!state.user && state.user.role === 'admin' && !state.user.perms,
+    admin: () => !!state.user && state.user.role === 'admin' && !state.user.perms,
+    presence: false,          // le suivi porte sur les livreurs (GPS en service), pas sur l'administration
+    envoiParDefaut: true,     // les données viennent du serveur : tout appareil de l'administrateur peut les envoyer
+    suggestions: ['Ahoana ny raharaha androany ?', 'Iza no livreur niasa betsaka indrindra ?', 'Misy hosoka ve ?', 'Combien de livraisons cette semaine ?'],
+    donnees: () => api('GET', '/api/admin/centralia').then((r) => r.datasets),
+  });
+  document.head.append(s);
 }
 
 async function refreshCounts() {
