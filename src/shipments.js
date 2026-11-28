@@ -152,6 +152,48 @@ export function stepSince(s) {
   return s.done_at || s.created_at;
 }
 
+// Où est le colis en ce moment (pour le client) : chez l'expéditeur, avec un livreur vers le centre, au centre,
+// en route vers le destinataire, livré, en retour… avec depuis quand.
+const WHERE = {
+  sender_waiting: ['Chez l\'expéditeur — en attente d\'un livreur', 'Mbola ao amin\'ny mpandefa — miandry livreur'],
+  sender_planned: ['Chez l\'expéditeur — récupération prévue', 'Mbola ao amin\'ny mpandefa — voalahatra ny fakana'],
+  pickup_coming: ['Le livreur arrive chez l\'expéditeur', 'Efa ho avy haka ny entana ny livreur'],
+  to_centre: ['Récupéré — en route vers le centre Alefa', 'Voaray — eny an-dalana mankany amin\'ny centre Alefa'],
+  at_centre: ['Au centre Alefa (Ampandrana)', 'Ao amin\'ny centre Alefa (Ampandrana)'],
+  on_way: ['En route vers le destinataire', 'Eny an-dalana mankany amin\'ny mpandray'],
+  nearby: ['Le livreur est tout proche du destinataire', 'Efa akaiky ny mpandray ny livreur'],
+  handed: ['Remis au destinataire — confirmation en cours', 'Natolotra ny mpandray — andrasana ny fanamafisana'],
+  delivered: ['Livré au destinataire', 'Tonga tany amin\'ny mpandray'],
+  coop: ['Remis à la coopérative (province)', 'Natolotra ny koperativa (faritany)'],
+  returning: ['En retour vers l\'expéditeur', 'Haverina amin\'ny mpandefa'],
+  returned: ['Rendu à l\'expéditeur', 'Naverina tamin\'ny mpandefa'],
+  cancelled: ['Envoi annulé', 'Nofoanana ny fandefasana'],
+};
+export function whereNow(s) {
+  let code, since = stepSince(s);
+  if (s.status === 'pending') code = 'sender_waiting';
+  else if (s.status === 'assigned') code = ['departed', 'at_pickup'].includes(s.stage) ? 'pickup_coming' : 'sender_planned';
+  else if (s.status === 'picked_up') {
+    if (s.centre_in_at && !s.centre_out_at) { code = 'at_centre'; since = s.centre_in_at; }
+    else if (s.relay && !s.centre_in_at) { code = 'to_centre'; since = s.picked_at; }
+    else if (s.courier_confirmed_at || s.recipient_confirmed_at) code = 'handed';
+    else { code = s.stage === 'nearby' ? 'nearby' : 'on_way'; since = s.centre_out_at || s.stage_at || s.picked_at; }
+  } else if (s.status === 'delivered') { code = s.province ? 'coop' : 'delivered'; since = s.done_at; }
+  else if (['refused', 'cancelled'].includes(s.status)) code = s.returned_at ? 'returned' : s.picked_at ? 'returning' : 'cancelled';
+  else code = 'sender_planned';
+  const [fr, mg] = WHERE[code];
+  return { code, label: fr, label_mg: mg, since: since ?? null };
+}
+// Qui a récupéré, qui livre (deux livreurs en relais, ou le même).
+export function teamOf(s) {
+  const pid = s.pickup_courier_id || (s.relay ? null : s.courier_id), did = s.delivery_courier_id || (s.relay ? null : s.courier_id);
+  const nameOf = (id) => (id === s.pickup_courier_id ? s.pickup_courier_name : id === s.delivery_courier_id ? s.delivery_courier_name : null) || (id === s.courier_id ? s.courier_name : null);
+  const vehOf = (id) => (id === s.pickup_courier_id ? s.pickup_courier_vehicle : id === s.delivery_courier_id ? s.delivery_courier_vehicle : null) || (id === s.courier_id ? s.courier_vehicle : null) || 'velo';
+  const p = pid ? { id: pid, name: nameOf(pid), vehicle: vehOf(pid), at: s.picked_at ?? null } : null;
+  const d = did ? { id: did, name: nameOf(did), vehicle: vehOf(did), at: s.status === 'delivered' ? s.done_at : s.centre_out_at ?? null } : null;
+  return { pickup: p, delivery: d, same: !!(p && d && p.id === d.id), relay: !!s.relay };
+}
+
 export function publicShipment(s) {
   return {
     id: s.id, ref: s.ref, external_ref: s.external_ref, status: s.status, step: stepOf(s), step_label: STEP_FR[stepOf(s)], stage_at: s.stage_at, source: s.source,
@@ -174,11 +216,14 @@ export function publicShipment(s) {
     wait_fee: s.wait_fee || 0, fee_detail: (() => { try { return s.fee_detail ? JSON.parse(s.fee_detail) : null; } catch { return null; } })(), shares: s.centre_share != null ? { centre: s.centre_share, courier: s.courier_share, paid: !!s.cash_settled_at } : null,
     province: s.province ? { city: s.dest_city, coop: s.coop_name, plate: s.coop_plate ?? null, driver_phone: s.coop_driver_phone ?? null, fee: s.coop_fee ?? null, fee_status: s.coop_fee_status ?? null } : null,
     returned: !!s.returned_at, created_at: s.created_at, assigned_at: s.assigned_at, picked_at: s.picked_at, done_at: s.done_at, returned_at: s.returned_at,
+    where: whereNow(s), team: teamOf(s),
   };
 }
 
 const SHIP_SQL = `SELECT s.*, cu.name AS courier_name, cu.phone AS courier_phone, a.name AS axe_name,
   (SELECT name FROM users WHERE id = s.pickup_courier_id) AS pickup_courier_name, (SELECT name FROM users WHERE id = s.delivery_courier_id) AS delivery_courier_name,
+  (SELECT vehicle FROM couriers WHERE user_id = s.courier_id) AS courier_vehicle, (SELECT vehicle FROM couriers WHERE user_id = s.pickup_courier_id) AS pickup_courier_vehicle,
+  (SELECT vehicle FROM couriers WHERE user_id = s.delivery_courier_id) AS delivery_courier_vehicle,
   CASE WHEN tr.id IS NOT NULL THEN substr(tr.from_addr, 1, instr(tr.from_addr || ',', ',') - 1) || ' → ' || substr(tr.to_addr, 1, instr(tr.to_addr || ',', ',') - 1) END AS trip_label
   FROM shipments s LEFT JOIN users cu ON cu.id = s.courier_id LEFT JOIN axes a ON a.id = s.axe_id LEFT JOIN courier_trips tr ON tr.id = s.trip_id`;
 
@@ -597,6 +642,7 @@ export function forViewer(out, s, u) {
   }
   if (u.role === 'client' && !confirmed) {
     out.courier = null; out.pickup_courier = null; out.delivery_courier = null; out.courier_live = null; out.courier_hidden = true;
+    out.team = { pickup: null, delivery: null, same: false, relay: !!s.relay, hidden: true };
   }
   return out;
 }

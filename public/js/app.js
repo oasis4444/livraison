@@ -102,7 +102,7 @@ async function trackView(token) {
       return `<div class="trk-s ${cls}"><div class="trk-d">${x.at && !isKo ? '✓' : isKo ? '✕' : ''}</div><div class="trk-l">${esc(label)}</div><div class="trk-t">${sub}</div></div>`;
     }).join('')}</div>`;
     const stale = r.position_at && Date.now() - r.position_at > 2 * 60e3;
-    app.querySelector('[data-info]').innerHTML = `<div class="trk-title ${ko ? 'ko' : r.step === 'delivered' ? 'ok' : ''}">${esc(title)}</div>${timeline}
+    app.querySelector('[data-info]').innerHTML = `<div class="trk-title ${ko ? 'ko' : r.step === 'delivered' ? 'ok' : ''}">${esc(title)}</div>${core.whereCard(r.where, r.team)}${timeline}
       ${r.on_delivery && !r.done_at && !r.province ? `<div class="card" style="background:var(--sun-soft);border:0;text-align:center;margin:6px 0">
           <div class="small">${mg ? 'Aloa amin\'ny livreur' : 'À payer au livreur'}</div><div style="font-size:2rem;font-weight:900">${core.ar(r.amount_to_pay)}</div>
           ${r.amount_to_pay ? `<div class="tiny muted">${r.value ? `${mg ? 'entana' : 'marchandise'} ${core.ar(r.value)} + ` : ''}${mg ? 'frais' : 'frais'} ${core.ar(r.fee)}</div>` : `<div class="tiny muted">📱 ${mg ? 'efa voaloa daholo' : 'tout est déjà payé'}</div>`}

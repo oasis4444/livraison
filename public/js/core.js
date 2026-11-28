@@ -501,6 +501,28 @@ function showInstall() {
   });
 }
 
+// ---------------------------------------------------------------- « Où est mon colis ? » (client, destinataire, page de suivi)
+// Lieu actuel en gros + depuis quand, petit plan Expéditeur → Centre → En route → Destinataire, et qui a récupéré / qui livre.
+export function whereCard(w, team) {
+  if (!w) return '';
+  const mg = state.lang === 'mg';
+  const ago = (t) => { if (!t) return ''; const m = Math.max(0, Math.round((Date.now() - t) / 60e3)); return m < 1 ? (mg ? 'izao' : 'à l\'instant') : m < 60 ? `${mg ? 'nanomboka' : 'depuis'} ${m} min` : m < 1440 ? `${mg ? 'nanomboka' : 'depuis'} ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}` : `${mg ? 'nanomboka ny' : 'depuis le'} ${new Date(t).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${time(t)}`; };
+  const relay = team?.relay;
+  const PL = [['sender', mg ? 'Mpandefa' : 'Expéditeur'], ...(relay ? [['centre', 'Centre']] : []), ['road', mg ? 'An-dalana' : 'En route'], ['recipient', mg ? 'Mpandray' : 'Destinataire']];
+  const at = { sender_waiting: 'sender', sender_planned: 'sender', pickup_coming: 'sender', to_centre: 'centre', at_centre: 'centre', on_way: 'road', nearby: 'road', handed: 'recipient', delivered: 'recipient', coop: 'recipient', returning: 'road', returned: 'sender', cancelled: 'sender' }[w.code];
+  const pos = Math.max(0, PL.findIndex((p) => p[0] === at)), moving = ['to_centre', 'on_way', 'nearby', 'returning', 'pickup_coming'].includes(w.code);
+  const bad = ['returning', 'returned', 'cancelled'].includes(w.code), ok = ['delivered', 'coop'].includes(w.code);
+  const who = (p) => (p ? `<b>${vehIcon(p.vehicle)} ${esc(p.name || '—')}</b>${p.at ? ` <small>${time(p.at)}</small>` : ''}` : `<span class="muted">${mg ? 'mbola tsy fantatra' : 'pas encore choisi'}</span>`);
+  const people = team?.hidden ? `<div class="wh-who muted small">${mg ? 'Hiseho ny anaran\'ny livreur rehefa nanamafy izy.' : 'Le nom du livreur s\'affiche dès qu\'il a confirmé la mission.'}</div>`
+    : team?.same ? `<div class="wh-who"><span>${mg ? 'Naka sy manatitra' : 'Récupération et livraison'}</span>${who(team.pickup)}</div>`
+    : team ? `<div class="wh-who"><span>${team.pickup?.at ? (mg ? 'Naka' : 'Récupéré par') : (mg ? 'Haka' : 'Récupération par')}</span>${who(team.pickup)}</div><div class="wh-who"><span>${ok ? (mg ? 'Nanatitra' : 'Livré par') : (mg ? 'Hanatitra' : 'Livraison par')}</span>${who(team.delivery)}</div>` : '';
+  return `<div class="wh ${bad ? 'bad' : ok ? 'ok' : ''}">
+    <small class="wh-k">${mg ? 'Aiza ny colis amin\'izao ?' : 'Où est le colis en ce moment ?'}</small>
+    <div class="wh-now">${esc(mg ? w.label_mg : w.label)}</div><div class="wh-since">${ago(w.since)}</div>
+    <div class="wh-path">${PL.map(([k, l], i) => `<div class="wh-st ${i < pos ? 'done' : i === pos ? (moving ? 'cur move' : 'cur') : ''}"><i></i><span>${l}</span></div>`).join('')}</div>
+    ${people}</div>`;
+}
+
 // ---------------------------------------------------------------- GPS permanent (application « Traccar Client »)
 // Le site ne peut pas suivre le téléphone quand il est fermé : une petite application gratuite le fait
 // (arrière-plan, écran éteint, points gardés sans réseau) et envoie la position à Alefa avec la clé du livreur.

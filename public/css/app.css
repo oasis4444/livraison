@@ -384,3 +384,24 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .gps-kv code { font-size: .95rem; font-weight: 700; word-break: break-all; user-select: all; }
 .gps-kv code:last-child { grid-column: 1 / -1; }
 .gps-state { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* « Où est le colis en ce moment ? » */
+.wh { border-radius: 18px; padding: 16px; background: var(--green-soft, #e2f1fb); color: #0e3552; margin: 4px 0 10px; }
+.wh.ok { background: #e4f6ec; } .wh.bad { background: #fdecec; }
+.wh-k { display: block; font-size: .72rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; opacity: .7; }
+.wh-now { font-size: 1.25rem; font-weight: 800; line-height: 1.25; margin-top: 4px; }
+.wh-since { font-size: .85rem; opacity: .75; margin-top: 2px; }
+.wh-path { display: flex; margin: 14px 0 4px; }
+.wh-st { flex: 1; position: relative; text-align: center; font-size: .72rem; font-weight: 700; opacity: .55; }
+.wh-st i { display: block; width: 14px; height: 14px; margin: 0 auto 6px; border-radius: 50%; background: #fff; border: 3px solid #b9cfe0; position: relative; z-index: 1; }
+.wh-st::before { content: ""; position: absolute; top: 6px; left: -50%; width: 100%; height: 3px; background: #b9cfe0; }
+.wh-st:first-child::before { display: none; }
+.wh-st.done, .wh-st.cur { opacity: 1; }
+.wh-st.done i { background: var(--green, #1a6fa3); border-color: var(--green, #1a6fa3); }
+.wh-st.done::before, .wh-st.cur::before { background: var(--green, #1a6fa3); }
+.wh-st.cur i { width: 20px; height: 20px; margin-top: -3px; background: #ffe81a; border-color: #0e3552; }
+.wh-st.move i { animation: whPulse 1.4s ease-in-out infinite; }
+@keyframes whPulse { 50% { box-shadow: 0 0 0 7px rgba(255, 232, 26, .45); } }
+.wh-who { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding-top: 8px; margin-top: 8px; border-top: 1px solid rgba(14, 53, 82, .12); font-size: .9rem; }
+.wh-who > span:first-child { opacity: .7; }
+.wh-who small { opacity: .7; font-weight: 600; }

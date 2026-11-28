@@ -133,10 +133,12 @@ async function cancelTrip(ctx, env) {
 
 // ---------------------------------------------------------------- suivi public (lien envoyé au destinataire / logiciel de vente)
 async function trackPublic(ctx, env) {
-  const s = await one(env, `SELECT s.*, u.name AS courier_name, u.phone AS courier_phone, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen, c.vehicle
+  const s = await one(env, `SELECT s.*, u.name AS courier_name, u.phone AS courier_phone, c.lat AS clat, c.lng AS clng, c.last_seen AS cseen, c.vehicle, c.vehicle AS courier_vehicle,
+      (SELECT name FROM users WHERE id = s.pickup_courier_id) AS pickup_courier_name, (SELECT name FROM users WHERE id = s.delivery_courier_id) AS delivery_courier_name,
+      (SELECT vehicle FROM couriers WHERE user_id = s.pickup_courier_id) AS pickup_courier_vehicle, (SELECT vehicle FROM couriers WHERE user_id = s.delivery_courier_id) AS delivery_courier_vehicle
     FROM shipments s LEFT JOIN users u ON u.id = s.courier_id LEFT JOIN couriers c ON c.user_id = s.courier_id WHERE s.track_token = ?`, ctx.params.ref);
   if (!s) fail(404, 'not_found', 'Lien de suivi invalide');
-  const { stepOf, STEP_LABELS } = await import('./shipments.js');
+  const { stepOf, STEP_LABELS, whereNow, teamOf } = await import('./shipments.js');
   const step = stepOf(s);
   // La position du livreur n'est visible que pendant la livraison (en route vers le destinataire), jamais avant ni après.
   const delivering = s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at));
@@ -170,6 +172,11 @@ async function trackPublic(ctx, env) {
     position: live ? [s.clat, s.clng] : null, position_at: live ? s.cseen : null, eta, departure_at: s.departure_at, done_at: s.done_at,
     can_confirm: s.status === 'picked_up' && (!s.relay || (s.leg === 'delivery' && !!s.centre_out_at)) && !s.recipient_confirmed_at, confirmed: !!s.recipient_confirmed_at,
     relay: !!s.relay, contents: s.description || null, size: s.dim_l ? `${s.dim_l}×${s.dim_w}×${s.dim_h} cm` : null,
+    // Où est le colis, et qui l'a récupéré / qui le livre (prénoms seulement, après confirmation du livreur)
+    where: whereNow(s), team: (() => {
+      const tm = teamOf(s), first = (p) => (p ? { name: (p.name || '').split(' ')[0], vehicle: p.vehicle, at: p.at } : null);
+      return confirmed ? { pickup: first(tm.pickup), delivery: first(tm.delivery), same: tm.same, relay: tm.relay } : { pickup: null, delivery: null, same: false, relay: tm.relay, hidden: true };
+    })(),
     // à payer au livreur : marchandise (sauf si déjà payée par Mobile Money) + frais ; rien pour un envoi en province
     amount_to_pay: s.province ? 0 : s.value_paid ? s.wait_fee || 0 : (s.value ?? s.declared_value) + s.fee, value_paid: !!s.value_paid,
     value: s.province || s.value_paid ? 0 : s.value ?? s.declared_value, fee: s.province || s.value_paid ? s.wait_fee || 0 : s.fee,

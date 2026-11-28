@@ -1,7 +1,8 @@
 // Espace client : menu latéral (ordinateur) ou barre du bas (téléphone), tableau de bord, nouvel envoi en 4 étapes,
 // mes colis (envoyés et reçus), page de suivi (carte + étapes + détails). La course express (carte) reste disponible.
 import { state, api, esc, ar, km, dt, time, toastErr, phoneFmt, initials, every, stopAll, makeMap, upsertMarker, icons, vehIcon,
-  startNotifications, showNotifications, setNotifOpener, supportChat, profileForm, logout, drawRoad, chatBubble } from './core.js';
+  startNotifications, showNotifications, setNotifOpener, supportChat, profileForm, logout, drawRoad, chatBubble, whereCard,
+} from './core.js';
 import { shipDetail, importForm, winTxt, stepLabel } from './colis.js';
 import { sendWizard } from './wizard.js';
 
@@ -192,6 +193,7 @@ async function trackPage(id) {
     <div class="sp-track">
       <div class="sp-card sp-map"><div data-map></div><div class="sp-legend"><span><i class="g"></i>${L2('Récupération', 'Fakana')}</span><span><i class="o"></i>${L2('Livraison', 'Fanaterana')}</span><span><i class="c"></i>${L2('Livreur (en livraison)', 'Livreur (eo am-panaterana)')}</span><span><i class="r"></i>${L2('Itinéraire', 'Lalana')}</span></div></div>
       <div class="sp-col">
+        <div class="sp-card" data-where>${whereCard(s.where, s.team)}</div>
         <div class="sp-card"><h3>${L2('Étapes', 'Dingana')}</h3><div class="sp-route-info" data-rinfo></div><ol class="sp-tl" data-tl></ol><div data-live></div></div>
         <div class="sp-card"><h3>${L2('Détails', 'Antsipiriany')}</h3>
           <div class="sp-kv">
@@ -226,6 +228,7 @@ async function trackPage(id) {
     if (view !== 'track') return;
     let r = null; if (s.track_token) r = await api('GET', `/api/track/${s.track_token}`).catch(() => null);
     const tl = main.querySelector('[data-tl]'); if (!tl) return;
+    if (r?.where) main.querySelector('[data-where]').innerHTML = whereCard(r.where, r.team || s.team);
     const items = r?.timeline || [{ k: 'received', label: L2('Commande reçue', 'Voaray ny baiko'), at: s.created_at }, { k: 'picked', label: L2('Récupéré', 'Nalaina'), at: s.picked_at }, { k: 'delivered', label: L2('Livré', 'Tonga'), at: s.done_at }];
     const TL = { received: L2('Envoi enregistré', 'Voaray ny fandefasana'), picked: L2('Colis récupéré', 'Nalaina ny colis'), centre: L2('Au centre Alefa', 'Ao amin\'ny centre Alefa'), delivery: L2('En livraison', 'Eo am-panaterana'), delivered: L2('Livré', 'Tonga') };
     const cur = items.findIndex((x) => !x.at);
