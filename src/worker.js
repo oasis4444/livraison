@@ -11,6 +11,7 @@ import { registerSupportRoutes } from './support.js';
 import { registerSmsRoutes } from './sms.js';
 import { registerTalkRoutes } from './talk.js';
 import { setPayoutAccount, getPayoutAccount } from './payouts.js';
+import { registerPushRoutes, queuePush, takePending } from './push.js';
 import { registerShipmentRoutes, authenticateMerchant, onCourierMove, courierOpenShipments, liveShipments, liveFeed, lateReason } from './shipments.js';
 import { buildKnowledge } from './centralia.js';
 
@@ -43,6 +44,8 @@ export async function notify(env, userIds, kind, title, body, deliveryId = null)
   const t = now();
   await env.DB.batch(ids.map((id) =>
     q(env, 'INSERT INTO notifications (user_id, kind, title, body, delivery_id, at) VALUES (?,?,?,?,?,?)', id, kind, title, body ?? null, deliveryId, t)));
+  // aussi sur le téléphone, même site fermé (si la personne a activé les notifications)
+  queuePush(env, ids, { title, body: body ?? '', tag: kind === 'sos' ? 'sos' : null });
 }
 
 export async function alertAdmins(env, kind, body, deliveryId = null, userId = null, lat = null, lng = null) {
@@ -550,6 +553,32 @@ async function postLocation(ctx, env) {
   ]);
   const stages = parcels ? await onCourierMove(env, u, lat, lng) : [];
   return json({ ok: true, active_delivery: active?.id ?? null, stages });
+}
+
+// Positions gardées par le téléphone pendant une coupure de réseau, envoyées en une fois au retour de la connexion.
+// Chaque point garde son heure réelle : le trajet est reconstitué sans trou (l'historique est trié par heure).
+async function postLocations(ctx, env) {
+  const u = ctx.user;
+  const c = await courierGuard(env, u);
+  const t = now(), raw = Array.isArray(ctx.body.points) ? ctx.body.points.slice(0, 500) : fail(400, 'invalid', 'Points manquants');
+  const pts = [];
+  for (const p of raw) {
+    const at = Math.round(Number(p?.at));
+    if (!Number.isFinite(at) || at > t + 60e3 || at < t - 24 * 3600e3) continue; // pas plus de 24 h de retard
+    let lat, lng; try { [lat, lng] = coord(p.lat, p.lng); } catch { continue; }
+    pts.push({ lat, lng, at: Math.min(at, t) });
+  }
+  pts.sort((a, b) => a.at - b.at);
+  if (!pts.length) return json({ ok: true, saved: 0 });
+  const active = await one(env, "SELECT id FROM deliveries WHERE courier_id = ? AND status IN ('assigned','picked_up')", u.id);
+  await env.DB.batch(pts.map((p) => q(env, 'INSERT INTO positions (courier_id, delivery_id, lat, lng, at) VALUES (?,?,?,?,?)', u.id, active?.id ?? null, p.lat, p.lng, p.at)));
+  const last = pts[pts.length - 1];
+  let stages = [];
+  if (!c.last_seen || last.at > c.last_seen) {
+    await run(env, 'UPDATE couriers SET lat = ?, lng = ?, last_seen = ? WHERE user_id = ?', last.lat, last.lng, last.at, u.id);
+    if (await courierOpenShipments(env, u.id)) stages = await onCourierMove(env, u, last.lat, last.lng);
+  }
+  return json({ ok: true, saved: pts.length, stages, active_delivery: active?.id ?? null });
 }
 
 async function courierRequests(ctx, env) {
@@ -1381,7 +1410,9 @@ route('GET', '/api/favorites', ANY, listFavorites);
 route('POST', '/api/favorites', ANY, addFavorite);
 route('DELETE', '/api/favorites/:id', ANY, deleteFavorite);
 route('POST', '/api/courier/availability', ['courier'], setAvailability);
+registerPushRoutes(route);
 route('POST', '/api/courier/location', ['courier'], postLocation);
+route('POST', '/api/courier/locations', ['courier'], postLocations);
 route('GET', '/api/courier/requests', ['courier'], courierRequests);
 route('GET', '/api/courier/wallet', ['courier'], wallet);
 route('POST', '/api/complaints', ANY, createComplaint);
@@ -1474,16 +1505,22 @@ async function handleApiInner(req, env) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ectx) {
     const url = new URL(req.url);
-    if (url.pathname.startsWith('/api/')) return handleApi(req, env);
+    if (url.pathname.startsWith('/api/')) {
+      const res = await handleApi(req, env);
+      const p = takePending(); // notifications push : envoyées après la réponse
+      if (p.length) ectx?.waitUntil?.(Promise.allSettled(p));
+      return res;
+    }
     const res = await env.ASSETS.fetch(req);
     return withSecurityHeaders(res);
   },
   // Chaque minute : synchronisation Tsena ; une fois par heure : maintenance.
   async scheduled(event, env, ctx) {
     ctx.waitUntil(syncTsena(env).catch((e) => console.error('tsena', e))
-      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env).then(() => m.alertLate(env)).then(() => m.alertHolds(env))).catch((e) => console.error('reassign', e)));
+      .then(() => import('./shipments.js')).then((m) => m.reassignPending(env).then(() => m.alertLate(env)).then(() => m.alertHolds(env))).catch((e) => console.error('reassign', e))
+      .then(() => Promise.allSettled(takePending())));
     if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() === 17) ctx.waitUntil(maintenance(env));
   },
 };

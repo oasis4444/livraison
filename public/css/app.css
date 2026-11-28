@@ -367,3 +367,12 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }
 @media (max-width: 860px) { .chat-bubble.sp-bub { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); right: 14px; } }
 @keyframes bubIn { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @media print { .chat-bubble { display: none; } }
+
+/* Bandeau « Activer les notifications » */
+.push-banner { position: fixed; left: 50%; transform: translateX(-50%); top: 76px; z-index: 1300; width: min(560px, calc(100% - 24px)); display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: 18px; background: #0e3552; color: #fff; box-shadow: 0 18px 40px -16px rgba(14, 53, 82, .7); animation: bubIn .3s ease-out; }
+.push-banner .push-ic { font-size: 1.6rem; }
+.push-banner b { display: block; font-size: .95rem; }
+.push-banner small { display: block; opacity: .85; font-size: .8rem; line-height: 1.35; margin-top: 2px; }
+.push-banner .btn.primary { background: #ffe81a; color: #0e3552; border: 0; white-space: nowrap; }
+.push-banner .push-x { background: none; border: 0; color: #fff; opacity: .7; font-size: 1rem; cursor: pointer; padding: 4px; }

@@ -113,6 +113,8 @@ export async function api(method, path, body) {
 
 export function logout(silent) {
   removeChatBubble();
+  // ce téléphone ne reçoit plus les notifications de ce compte
+  navigator.serviceWorker?.ready.then((r) => r.pushManager?.getSubscription()).then((sub) => sub && api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint })).catch(() => {});
   if (!silent) api('POST', '/api/auth/logout').catch(() => {});
   localStorage.removeItem(TOKEN_KEY);
   state.token = null; state.user = null;
@@ -404,6 +406,60 @@ export function ring(on) {
   once(); ringTimer = setInterval(once, 2200);
 }
 
+// ---------------------------------------------------------------- notifications push (site fermé)
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+const u8 = (b64) => Uint8Array.from(atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0));
+const keyB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+// Résultat : 'on' | 'default' (pas encore demandé) | 'denied' | 'ios_install' (iPhone : ajouter à l'écran d'accueil) | 'unsupported'
+export async function enablePush({ ask = false } = {}) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return isIOS() && !standalone() ? 'ios_install' : 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  if (Notification.permission === 'default') {
+    if (!ask) return 'default';
+    if ((await Notification.requestPermission()) !== 'granted') return Notification.permission;
+  }
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await api('GET', '/api/push/key');
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && sub.options?.applicationServerKey && keyB64(sub.options.applicationServerKey) !== key) { await sub.unsubscribe().catch(() => {}); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8(key) });
+  await api('POST', '/api/push/subscribe', { ...sub.toJSON(), ua: navigator.userAgent.slice(0, 160) });
+  state.pushOn = true;
+  return 'on';
+}
+function pushBanner(kind) {
+  const KEY = 'alefa_push_later';
+  try { if (Date.now() - Number(localStorage.getItem(KEY) || 0) < 3 * 864e5) return; } catch {}
+  if (document.querySelector('.push-banner')) return;
+  const mg = state.lang === 'mg', ios = kind === 'ios_install';
+  const el = document.createElement('div');
+  el.className = 'push-banner';
+  el.innerHTML = `<div class="push-ic">🔔</div><div class="grow"><b>${mg ? 'Mahazoa fampandrenesana na mihidy aza ny site' : 'Recevez vos alertes même site fermé'}</b>
+    <small>${ios ? (mg ? 'iPhone : tsindrio ⬆️ « Partager » → « Sur l\'écran d\'accueil », sokafy avy eo Alefa.mg.' : 'iPhone : touchez ⬆️ « Partager » → « Sur l\'écran d\'accueil », puis ouvrez Alefa.mg depuis l\'icône.')
+      : (mg ? 'Colis vaovao, hafatra, antso : maneno ao amin\'ny finday na tsy misokatra aza.' : 'Nouveaux colis, messages et appels sonnent sur le téléphone, même application fermée.')}</small></div>
+    ${ios ? '' : `<button class="btn primary sm" data-pon>${mg ? 'Alefa' : 'Activer'}</button>`}<button class="push-x" data-plater aria-label="Plus tard">✕</button>`;
+  document.body.append(el);
+  el.querySelector('[data-plater]').onclick = () => { try { localStorage.setItem(KEY, String(Date.now())); } catch {} el.remove(); };
+  el.querySelector('[data-pon]')?.addEventListener('click', async () => {
+    try {
+      const r = await enablePush({ ask: true });
+      el.remove();
+      if (r === 'on') { toast(mg ? 'Voaomana ny fampandrenesana 🔔' : 'Notifications activées 🔔', 'ok'); api('POST', '/api/push/test').catch(() => {}); }
+      else if (r === 'denied') pushHelp();
+    } catch (e) { toastErr(e); }
+  });
+}
+// Notifications refusées : comment les réactiver (le site ne peut plus redemander).
+export function pushHelp() {
+  const mg = state.lang === 'mg';
+  modal(mg ? '🔔 Hamerina ny fampandrenesana' : '🔔 Réactiver les notifications', `<div class="stack small">
+    <p style="margin:0">${mg ? 'Nolavina ny fampandrenesana tamin\'ity finday ity. Hamerenana azy :' : 'Les notifications ont été refusées sur ce téléphone. Pour les réactiver :'}</p>
+    <p style="margin:0"><b>Android (Chrome)</b> : ${mg ? 'tsindrio ny 🔒 eo akaikin\'ny adiresy → Autorisations → Notifications → Autoriser, dia avereno sokafana.' : 'touchez 🔒 à gauche de l\'adresse → Autorisations → Notifications → Autoriser, puis rouvrez le site.'}</p>
+    <p style="margin:0"><b>${mg ? 'Application napetraka' : 'Application installée'}</b> : ${mg ? 'Paramètres ny finday → Applications → Alefa.mg → Notifications → Alefa.' : 'Paramètres du téléphone → Applications → Alefa.mg → Notifications → Activer.'}</p>
+    <p style="margin:0"><b>iPhone</b> : ${mg ? 'Réglages → Notifications → Alefa.mg → Autoriser.' : 'Réglages → Notifications → Alefa.mg → Autoriser.'}</p></div>`);
+}
+
 // Ouverture d'une notification : chaque espace (admin, livreur, client) enregistre comment ouvrir la cible.
 let notifOpener = null;
 export const setNotifOpener = (fn) => { notifOpener = fn; };
@@ -414,7 +470,8 @@ export function openNotif(n) {
 }
 export function startNotifications(onNew) {
   import('./talk.js').then((m) => m.watchCalls()).catch(() => {}); // appels entrants (dans la plateforme)
-  if ('Notification' in window && Notification.permission === 'default') setTimeout(() => Notification.requestPermission().catch(() => {}), 4000);
+  // Notifications push : reçues même site fermé. Déjà autorisées → abonnement silencieux ; sinon un bandeau propose de les activer.
+  setTimeout(() => enablePush().then((r) => { if (r === 'default' || r === 'ios_install') pushBanner(r); }).catch(() => {}), 2500);
   let first = true;
   return every(5000, async () => {
     const r = await api('GET', `/api/notifications?after=${state.lastNotif}`);
@@ -426,7 +483,7 @@ export function startNotifications(onNew) {
     if (!first) {
       for (const n of fresh.reverse()) {
         toast(n.body || '', n.kind === 'sos' ? 'err' : '', n.title, n.target && notifOpener ? () => openNotif(n) : null);
-        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        if (document.hidden && !state.pushOn && 'Notification' in window && Notification.permission === 'granted') {
           // Notification du système (téléphone ou ordinateur), comme une messagerie ; passe par le service worker si possible.
           const opt = { body: n.body || '', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'alefa-' + n.id, renotify: true, vibrate: [90, 60, 90], data: { target: n.target || null } };
           navigator.serviceWorker?.getRegistration().then((reg) => (reg ? reg.showNotification(n.title, opt) : Promise.reject())).catch(() => {

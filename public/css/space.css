@@ -364,3 +364,4 @@ i.g { background: var(--hg2); } i.o { background: #f08a24; } i.c { background: v
 .cv-alert-h { min-width: 48px; text-align: center; font-weight: 900; color: #fff; background: #e5484d; border-radius: 10px; padding: 6px; }
 .cv-alert-h.cash { background: #c27c00; }
 .cv-alert-help { display: block; color: var(--hk2); margin-top: 6px; font-size: .76rem; }
+.cv-state.off { background: #fff1d6; color: #8a5a00; }

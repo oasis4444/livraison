@@ -6,7 +6,7 @@ import {
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel, nextAction } from './colis.js';
 
-let root, map, sheet, watchId = null, pos = null, posTimer, reqTimer, activeTimer, wakeLock = null, myRun = null, runLayer = null, toLeaveN = 0;
+let root, map, sheet, watchId = null, pos = null, posAt = 0, posTimer, reqTimer, activeTimer, wakeLock = null, myRun = null, runLayer = null, toLeaveN = 0;
 const mk = {};
 let axeLayer = null, axe = null, routeLayer = null, tab = 'home', shipTimer = null, requests = [], active = null, available = false, lastSig = '', selected = null, lastRouteKey = '';
 
@@ -53,6 +53,7 @@ export async function mount(el) {
     </div>
     <nav class="sp-tab">${[...navs.slice(0, 4), ['menu', 'more', L2('Plus', 'Hafa')]].map(([k, i, l]) => `<button ${k === 'menu' ? 'data-act="menu"' : `data-act="tab" data-t="${k}"`}>${ic(i)}<span>${k === 'home' ? L2('Accueil', 'Fandraisana') : k === 'plan' ? L2('Départs', 'Fiaingana') : l}</span><em class="cv-count" data-count="${k}"></em></button>`).join('')}</nav>`;
   sheet = $('#sheet');
+  setTimeout(flushQueue, 3000); // positions gardées lors d'une coupure précédente
   const bub = chatBubble('user', { cls: 'sp-bub', poll: async () => (await api('GET', '/api/support/unread')).unread, onOpen: () => { bub.setCount(0); supportChat(); } });
   map = makeMap($('#map'), { zoom: 15 });
   bind(root, actions);
@@ -108,6 +109,7 @@ function onFix(p) {
   lastFix = Date.now();
   const first = !pos;
   pos = [p.coords.latitude, p.coords.longitude];
+  posAt = p.timestamp || Date.now();
   hideGate();
   upsertMarker(map, mk, 'me', pos, icons.bike(active ? 'busy' : '', '', state.courier?.vehicle), { zIndexOffset: 1000, refreshIcon: true });
   if (first) { map?.setView(pos, 15); sendPos(); if (available) loadRequests(); }
@@ -135,10 +137,46 @@ function hideGate() {
   $('#gps-gate')?.remove();
   toast(t('gps_ok'), 'ok');
 }
+// Hors connexion : les positions sont gardées dans le téléphone (au plus 1 toutes les 10 s, 3 000 points ≈ 8 h)
+// puis envoyées d'un coup au retour du réseau, chacune avec son heure réelle : le trajet suivi reste complet.
+const QKEY = 'alefa_gps_queue';
+const qLoad = () => { try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch { return []; } };
+const qSave = (a) => { try { localStorage.setItem(QKEY, JSON.stringify(a.slice(-3000))); } catch {} };
+function queuePoint(p) {
+  const a = qLoad(), l = a[a.length - 1];
+  if (l && p.at - l.at < 10e3) return;
+  a.push(p); qSave(a); offlineBadge(a.length);
+}
+let flushing = false;
+async function flushQueue() {
+  if (flushing) return;
+  let a = qLoad();
+  if (!a.length) return offlineBadge(0);
+  flushing = true;
+  try {
+    while (a.length) {
+      const r = await api('POST', '/api/courier/locations', { points: a.slice(0, 200) });
+      a = qLoad().slice(Math.min(200, a.length)); qSave(a);
+      if (r.stages?.length) { for (const [ref, st] of r.stages) toast(`${ref} · ${stepLabel(st)}`, 'ok'); if (tab === 'colis') loadMissions(); }
+    }
+    toast(state.lang === 'mg' ? 'Tafaverina ny fifandraisana : nalefa ny lalana nalehanao' : 'Connexion revenue : votre trajet a été envoyé', 'ok');
+  } catch {} finally { flushing = false; offlineBadge(qLoad().length); }
+}
+function offlineBadge(n) {
+  const el = root?.querySelector('[data-state]'); if (!el) return;
+  el.classList.toggle('off', n > 0);
+  if (n > 0) { el.textContent = state.lang === 'mg' ? `📴 ${n} voatahiry` : `📴 ${n} points gardés`; el.title = state.lang === 'mg' ? 'Tsy misy rezo : voatahiry ao amin\'ny finday ny lalana, halefa rehefa miverina ny rezo' : 'Hors connexion : le trajet est gardé dans le téléphone et sera envoyé au retour du réseau'; }
+  else { el.textContent = available ? t('available') : t('unavailable'); el.classList.toggle('on', available); }
+}
+window.addEventListener('online', () => flushQueue());
 async function sendPos() {
   // Position envoyée dès que le GPS répond ; le serveur ne l'enregistre que pendant le service (disponible, course ou colis en cours).
   if (!pos) return;
-  const r = await api('POST', '/api/courier/location', { lat: pos[0], lng: pos[1] });
+  const p = { lat: pos[0], lng: pos[1], at: posAt || Date.now() };
+  if (qLoad().length) { queuePoint(p); return flushQueue(); } // garder l'ordre : d'abord les points en attente
+  let r;
+  try { r = await api('POST', '/api/courier/location', { lat: p.lat, lng: p.lng }); }
+  catch (e) { if (e.offline) queuePoint(p); return; }
   if (r.active_delivery && !active) checkActive();
   if (r.stages?.length) { for (const [ref, st] of r.stages) toast(`${ref} · ${stepLabel(st)}`, 'ok'); if (tab === 'colis') loadMissions(); }
 }
@@ -188,7 +226,7 @@ function header() {
 function syncNav() {
   root.querySelectorAll('[data-act=tab]').forEach((b) => b.classList.toggle('on', b.dataset.t === tab));
   const st = root.querySelector('[data-state]');
-  if (st) { st.textContent = available ? t('available') : t('unavailable'); st.classList.toggle('on', available); }
+  if (st) { const nq = qLoad().length; if (nq) offlineBadge(nq); else { st.textContent = available ? t('available') : t('unavailable'); st.classList.toggle('on', available); st.classList.remove('off'); } }
   root.querySelectorAll('[data-count=req]').forEach((e) => { e.textContent = requests.length || ''; });
   const m = root.querySelector('[data-cvmain]'), hide = !active && NOMAP.includes(tab);
   if (m && m.classList.contains('nomap') !== hide) { m.classList.toggle('nomap', hide); if (!hide) setTimeout(() => map?.invalidateSize(), 50); }

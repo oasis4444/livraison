@@ -1,6 +1,7 @@
 // Discussion par colis (expéditeur, destinataire, livreur, centre) et appels audio dans la plateforme (WebRTC).
 // Le serveur ne transporte pas la voix : il relaie seulement la mise en relation (offre, réponse, candidats réseau).
 import { json, fail, str, now } from './lib.js';
+import { queuePush } from './push.js';
 import { one, all, run, notify, settings, staffPerms } from './worker.js';
 
 // ---------------------------------------------------------------- qui participe à un colis
@@ -76,6 +77,9 @@ async function startCall(ctx, env) {
   await run(env, "UPDATE calls SET status = 'ended', ended_at = ? WHERE from_id = ? AND status IN ('ringing','active')", now(), u.id);
   const r = await run(env, 'INSERT INTO calls (from_id, to_id, shipment_id, status, offer, created_at) VALUES (?,?,?,?,?,?)', u.id, to, sid, 'ringing', offer, now());
   const peer = to > 0 ? await one(env, 'SELECT name, role FROM users WHERE id = ?', to) : null;
+  // Fait sonner le téléphone même site fermé : toucher la notification ouvre l'application, qui affiche l'appel.
+  const ring = to > 0 ? [to] : (await all(env, "SELECT id, role, perms FROM users WHERE role = 'admin' AND status = 'active'")).filter((x) => canSupport(x)).map((x) => x.id);
+  queuePush(env, ring, { title: '📞 Appel entrant', body: `${u.role === 'admin' ? 'Centre Alefa' : u.name} vous appelle — touchez pour répondre`, tag: 'call', ttl: 45, url: to > 0 && peer?.role === 'admin' ? '/#support' : null });
   return json({ id: r.meta.last_row_id, peer: label || peer?.name || 'Correspondant' }, 201);
 }
 async function myCall(env, u, id) {
