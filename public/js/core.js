@@ -445,7 +445,7 @@ function pushBanner(kind) {
     try {
       const r = await enablePush({ ask: true });
       el.remove();
-      if (r === 'on') { toast(mg ? 'Voaomana ny fampandrenesana 🔔' : 'Notifications activées 🔔', 'ok'); api('POST', '/api/push/test').catch(() => {}); }
+      if (r === 'on') { toast(mg ? 'Voaomana ny fampandrenesana 🔔' : 'Notifications activées 🔔', 'ok'); api('POST', '/api/push/test', {}).catch(() => {}); }
       else if (r === 'denied') pushHelp();
     } catch (e) { toastErr(e); }
   });
