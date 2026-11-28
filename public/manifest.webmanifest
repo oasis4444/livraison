@@ -1,7 +1,7 @@
 {
   "name": "Alefa — Livraison",
   "short_name": "Alefa",
-  "description": "Livraison à vélo à Antananarivo : proposez votre prix, suivez votre livreur en direct.",
+  "description": "Alefa.mg : livraison de colis à vélo et à moto à Antananarivo. Envoyez, suivez et payez à la réception.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,8 +10,23 @@
   "theme_color": "#1a6fa3",
   "lang": "fr",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "id": "/"
 }

@@ -2,7 +2,7 @@
 import {
   state, t, api, esc, $, $$, bind, toast, toastErr, modal, confirmBox, promptBox, ar, km, dt, time, initials, stars, statusPill, phoneFmt,
   makeMap, icons, upsertMarker, pruneMarkers, bikeRoute, etaMin, vehIcon, getPosition, hm, every, geocode, startNotifications, showNotifications, setNotifOpener, supportChat, profileForm,
-  sendSOS, complaintForm, chatHtml, haversine, beep, logout, chatBubble,
+  sendSOS, complaintForm, chatHtml, haversine, beep, logout, chatBubble, gpsSetup,
 } from './core.js';
 import { c, shipCard, shipDetail, courierScheduleEditor, courierTripsEditor, scheduleHtml, stepLabel, nextAction } from './colis.js';
 
@@ -20,6 +20,7 @@ const SV = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>', out: '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/>', more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
 };
+SV.gps = '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/>';
 const ic = (k) => `<svg class="sp-ic" viewBox="0 0 24 24" aria-hidden="true">${SV[k]}</svg>`;
 const L2 = (fr, mg) => (state.lang === 'mg' ? mg : fr);
 const NOMAP = ['home', 'wallet', 'hist']; // pages sans carte : la place va au contenu
@@ -559,7 +560,7 @@ const actions = {
   menu: () => {
     const back = document.createElement('div');
     back.className = 'sp-sheet-back';
-    back.innerHTML = `<div class="sp-sheet">${[['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')], ['support', 'chat', L2('Service client', 'Sampana mpanjifa')], ['notifs', 'bell', 'Notifications'], ['profile', 'user', L2('Profil et langue', 'Mombamomba sy fiteny')]]
+    back.innerHTML = `<div class="sp-sheet">${[['plan', 'cal', c('my_schedule')], ['wallet', 'cash', t('wallet')], ['hist', 'hist', t('history')], ['support', 'chat', L2('Service client', 'Sampana mpanjifa')], ['notifs', 'bell', 'Notifications'], ['gps', 'gps', L2('GPS permanent', 'GPS maharitra')], ['profile', 'user', L2('Profil et langue', 'Mombamomba sy fiteny')]]
       .map(([k, i, l]) => `<button data-k="${k}">${ic(i)}<span>${l}</span></button>`).join('')}<button data-k="out" class="danger">${ic('out')}<span>${L2('Déconnexion', 'Hivoaka')}</span></button></div>`;
     back.addEventListener('click', (e) => {
       const k = e.target.closest('[data-k]')?.dataset.k; back.remove();
@@ -569,6 +570,7 @@ const actions = {
   },
   out: () => logout(),
   notifs: () => showNotifications(),
+  gps: () => gpsSetup({ base: '/api/courier/gps-key', name: '' }).catch(toastErr),
   support: () => supportChat(),
   profile: () => profileForm(),
   reload: () => location.reload(),

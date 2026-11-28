@@ -794,7 +794,7 @@ async function usersView(role) {
       <td style="white-space:nowrap">${u.status !== 'active' ? `<button class="btn sm primary" data-act="ustatus" data-id="${u.id}" data-s="active">${u.status === 'pending' ? 'Valider' : 'Activer'}</button>` : ''}
         ${u.status === 'pending' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="rejected">Refuser</button>` : ''}
         ${u.status === 'active' ? `<button class="btn sm danger" data-act="ustatus" data-id="${u.id}" data-s="suspended">Suspendre</button>` : ''}
-        ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" data-veh="${u.vehicle || 'velo'}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button>` : ''}
+        ${isC && u.status === 'active' ? `<button class="btn sm" data-act="planning" data-id="${u.id}" data-name="${esc(u.name)}" data-veh="${u.vehicle || 'velo'}" title="Axes & horaires">🧭 Axes</button><button class="btn sm" data-act="tx" data-id="${u.id}" data-name="${esc(u.name)}" title="Opération">💰</button><button class="btn sm ${u.gps_on ? '' : 'ghost'}" data-act="gpsperm" data-id="${u.id}" data-name="${esc(u.name)}" title="GPS permanent (application fermée)">📡${u.gps_on ? (u.gps_seen > Date.now() - 600e3 ? ' 🟢' : ' ⚪') : ''}</button>` : ''}
         <button class="btn sm ghost" data-act="uedit" data-id="${u.id}" data-name="${esc(u.name)}" data-phone="${esc(u.phone)}" title="Modifier le nom ou le téléphone">✏️</button><button class="btn sm ghost" data-act="pwreset" data-id="${u.id}" data-name="${esc(u.name)}" title="Nouveau mot de passe">🔑</button></td></tr>`).join('') || '<tr><td colspan="11" class="muted">Aucun</td></tr>'}
     </tbody></table></div>`;
 }
@@ -965,6 +965,7 @@ const actions = {
     };
   },
   newcourier: () => courierForm(),
+  gpsperm: (el) => gpsSetup({ base: `/api/admin/couriers/${el.dataset.id}/gps-key`, name: el.dataset.name, admin: true }).catch(toastErr),
   pfilter: () => { sessionStorage.setItem('adm_pst', $('[data-pf=status]').value); sessionStorage.setItem('adm_pq', $('[data-pf=q]').value); sessionStorage.setItem('adm_pc', $('[data-pf=courier]').value); sessionStorage.setItem('adm_pp', $('[data-pf=paid]').value); show(); },
   pexport: async () => {
     const res = await fetch('/api/admin/shipments/export', { headers: { authorization: `Bearer ${state.token}` } });

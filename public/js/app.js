@@ -1,5 +1,5 @@
 // Point d'entrée : authentification puis interface selon le rôle.
-import { state, t, setLang, api, esc, $, bind, toast, toastErr, langSwitch, TOKEN_KEY, tokenKeyFor } from './core.js';
+import { state, t, setLang, api, esc, $, bind, toast, toastErr, langSwitch, TOKEN_KEY, tokenKeyFor, installBanner } from './core.js';
 
 setLang(state.lang);
 const app = $('#app');
@@ -270,4 +270,5 @@ function authView(mode = 'login', role = 'client') {
   });
 }
 
+setTimeout(installBanner, 1500); // proposer l'icône sur l'écran dès la première visite
 boot().catch((e) => { app.className = ''; app.innerHTML = `<div class="auth"><div class="auth-card"><h2>${esc(t('error'))}</h2><p>${esc(e.message)}</p><a class="btn primary" href="/">↻</a></div></div>`; });

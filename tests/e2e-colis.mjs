@@ -69,6 +69,20 @@ const courier = await (await ctx({ latitude: -18.9050, longitude: 47.5250 })).ne
 const client = await (await ctx({ latitude: -18.9020, longitude: 47.5170 })).newPage(); watch(client, 'client');
 let apiKey;
 try {
+  await step('première visite sur téléphone : proposition d\'installer l\'application', async () => {
+    for (const [ua, attendu] of [['Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', 'Partager'],
+      ['Mozilla/5.0 (Linux; Android 14; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36', 'Installer l\'application']]) {
+      const ic = await browser.newContext({ viewport: { width: 390, height: 844 }, userAgent: ua, locale: 'fr-FR' });
+      await ic.route('https://unpkg.com/**', (r) => r.request().url().endsWith('.js') ? r.fulfill({ contentType: 'text/javascript', body: LEAFLET_STUB }) : r.fulfill({ contentType: 'text/css', body: '' }));
+      const ip = await ic.newPage(); watch(ip, 'installation');
+      await ip.goto(BASE); await ip.waitForSelector('.inst-banner', { timeout: 9000 }); await ip.waitForTimeout(500);
+      if (!(await ip.textContent('.inst-banner')).includes(attendu)) throw new Error('bandeau installation : ' + attendu);
+      if (attendu === 'Partager') await ip.screenshot({ path: 'tests/screens/00-installer-iphone.png' });
+      await ip.click('.inst-banner [data-ilater]'); await ip.reload(); await ip.waitForTimeout(5500);
+      if (await ip.locator('.inst-banner').count()) throw new Error('« plus tard » non retenu');
+      await ic.close();
+    }
+  });
   await step('accueil public : présentation, tarifs, calculateur, suivi', async () => {
     const vc = await ctx(null, { width: 1366, height: 800 }), v = await vc.newPage(); watch(v, 'visiteur');
     await v.goto(BASE); await v.waitForSelector('.h-hero h1');

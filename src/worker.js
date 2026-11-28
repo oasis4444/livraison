@@ -173,7 +173,8 @@ async function acceptTerms(ctx, env) {
 async function courierProfile(env, id) {
   const c = await one(env, 'SELECT * FROM couriers WHERE user_id = ?', id);
   if (!c) return null;
-  return { ...c, rating: c.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null };
+  const { gps_key, ...rest } = c; // la clé GPS ne circule que dans l'écran « GPS permanent »
+  return { ...rest, gps_on: !!gps_key, rating: c.rating_count ? Math.round((c.rating_sum / c.rating_count) * 10) / 10 : null };
 }
 
 async function updateMe(ctx, env) {
@@ -568,8 +569,11 @@ async function postLocations(ctx, env) {
     let lat, lng; try { [lat, lng] = coord(p.lat, p.lng); } catch { continue; }
     pts.push({ lat, lng, at: Math.min(at, t) });
   }
+  return json(await savePoints(env, u, c, pts));
+}
+async function savePoints(env, u, c, pts) {
   pts.sort((a, b) => a.at - b.at);
-  if (!pts.length) return json({ ok: true, saved: 0 });
+  if (!pts.length) return { ok: true, saved: 0 };
   const active = await one(env, "SELECT id FROM deliveries WHERE courier_id = ? AND status IN ('assigned','picked_up')", u.id);
   await env.DB.batch(pts.map((p) => q(env, 'INSERT INTO positions (courier_id, delivery_id, lat, lng, at) VALUES (?,?,?,?,?)', u.id, active?.id ?? null, p.lat, p.lng, p.at)));
   const last = pts[pts.length - 1];
@@ -578,7 +582,70 @@ async function postLocations(ctx, env) {
     await run(env, 'UPDATE couriers SET lat = ?, lng = ?, last_seen = ? WHERE user_id = ?', last.lat, last.lng, last.at, u.id);
     if (await courierOpenShipments(env, u.id)) stages = await onCourierMove(env, u, last.lat, last.lng);
   }
-  return json({ ok: true, saved: pts.length, stages, active_delivery: active?.id ?? null });
+  return { ok: true, saved: pts.length, stages, active_delivery: active?.id ?? null };
+}
+
+// ---------------------------------------------------------------- GPS permanent (application « Traccar Client »)
+// Le téléphone envoie sa position en arrière-plan (application fermée, écran éteint) et garde les points
+// sans réseau pour les envoyer plus tard. Formats acceptés : paramètres OsmAnd (adresse ou formulaire)
+// ?id=CLE&lat=..&lon=..&timestamp=.. ou JSON { device_id, location: { timestamp, coords: { latitude, longitude } } }.
+const gpsTime = (v, t) => {
+  if (v == null || v === '') return t;
+  const n = Number(v);
+  if (Number.isFinite(n)) return n < 1e11 ? n * 1000 : n;       // secondes ou millisecondes
+  const d = Date.parse(String(v).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(v)) ? '' : 'Z'));
+  return Number.isFinite(d) ? d : t;
+};
+async function gpsTracker(req, env, url) {
+  const t = now(), p = Object.fromEntries(url.searchParams);
+  let locs = [], key = p.id || p.deviceid || p.device_id;
+  if (req.method === 'POST') {
+    const ct = req.headers.get('content-type') || '', raw = (await req.text()).slice(0, 256 * 1024);
+    if (ct.includes('json') || /^\s*[[{]/.test(raw)) {
+      let b = {}; try { b = JSON.parse(raw || '{}'); } catch { return new Response('bad json', { status: 400 }); }
+      key ||= b.device_id || b.deviceid || b.id;
+      const L = b.location ?? b.locations ?? (b.lat != null ? b : null);
+      locs = (Array.isArray(L) ? L : L ? [L] : []).map((l) => ({ lat: l.coords?.latitude ?? l.latitude ?? l.lat, lng: l.coords?.longitude ?? l.longitude ?? l.lon ?? l.lng,
+        at: gpsTime(l.timestamp ?? l.time, t), batt: l.battery?.level ?? l.batt }));
+    } else if (raw) Object.assign(p, Object.fromEntries(new URLSearchParams(raw)));
+  }
+  key ||= p.id || p.deviceid || p.device_id;
+  if (!locs.length && (p.lat != null || p.location)) {
+    const [la, lo] = p.location ? String(p.location).split(',') : [p.lat, p.lon ?? p.lng];
+    locs = [{ lat: la, lng: lo, at: gpsTime(p.timestamp, t), batt: p.batt }];
+  }
+  if (!key || !/^gk_[A-Za-z0-9]{16,64}$/.test(key)) return new Response('unknown device', { status: 404 });
+  const c = await one(env, `SELECT c.*, u.id AS uid, u.name, u.status FROM couriers c JOIN users u ON u.id = c.user_id WHERE c.gps_key = ?`, key);
+  if (!c || c.status !== 'active') return new Response('unknown device', { status: 404 });
+  await rateLimit(env, 'gps' + c.uid);
+  const pts = [];
+  for (const l of locs.slice(0, 500)) {
+    const at = Math.round(Number(l.at));
+    if (!Number.isFinite(at) || at > t + 60e3 || at < t - 24 * 3600e3) continue;
+    let lat, lng; try { [lat, lng] = coord(l.lat, l.lng); } catch { continue; }
+    if (lat === 0 && lng === 0) continue;
+    pts.push({ lat, lng, at: Math.min(at, t) });
+  }
+  const r = await savePoints(env, { id: c.uid, name: c.name, role: 'courier' }, c, pts);
+  await run(env, 'UPDATE couriers SET gps_seen = ? WHERE user_id = ?', t, c.uid);
+  return new Response(JSON.stringify({ ok: true, saved: r.saved }), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+const newGpsKey = () => `gk_${randomHex(12)}`;
+async function gpsKeyInfo(env, uid, create) {
+  let c = await one(env, 'SELECT gps_key, gps_seen FROM couriers WHERE user_id = ?', uid);
+  if (!c) fail(404, 'not_found', 'Livreur introuvable');
+  if (create === 'new' || (create && !c.gps_key)) { await run(env, 'UPDATE couriers SET gps_key = ?, gps_seen = NULL WHERE user_id = ?', newGpsKey(), uid); c = await one(env, 'SELECT gps_key, gps_seen FROM couriers WHERE user_id = ?', uid); }
+  return { key: c.gps_key, last: c.gps_seen, path: '/api/gps' };
+}
+async function adminGpsKey(ctx, env) {
+  const r = await gpsKeyInfo(env, ctx.params.id, ctx.body.renew ? 'new' : true);
+  await audit(env, ctx, 'admin_courier_gps_key', { courier: ctx.params.id, renew: !!ctx.body.renew });
+  return json(r);
+}
+async function adminGpsKeyOff(ctx, env) {
+  await run(env, 'UPDATE couriers SET gps_key = NULL, gps_seen = NULL WHERE user_id = ?', ctx.params.id);
+  await audit(env, ctx, 'admin_courier_gps_off', { courier: ctx.params.id });
+  return json({ ok: true });
 }
 
 async function courierRequests(ctx, env) {
@@ -816,7 +883,7 @@ async function adminUsers(ctx, env) {
   const status = p.get('status');
   const search = (p.get('q') || '').trim();
   let sql = `SELECT u.id, u.phone, u.name, u.role, u.status, u.is_business, u.company, u.cancel_count, u.created_at,
-      c.vehicle, c.cin, c.address, c.emergency_contact, c.doc_note, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen, c.subscription_until,
+      c.vehicle, c.cin, c.address, c.emergency_contact, c.doc_note, c.available, c.balance, c.rating_sum, c.rating_count, c.last_seen, c.subscription_until, c.gps_seen, (c.gps_key IS NOT NULL) AS gps_on,
       (SELECT COUNT(*) FROM deliveries d WHERE (d.client_id = u.id OR d.courier_id = u.id) AND d.status='delivered') AS delivered
     FROM users u LEFT JOIN couriers c ON c.user_id = u.id WHERE 1=1`;
   const args = [];
@@ -1413,6 +1480,10 @@ route('POST', '/api/courier/availability', ['courier'], setAvailability);
 registerPushRoutes(route);
 route('POST', '/api/courier/location', ['courier'], postLocation);
 route('POST', '/api/courier/locations', ['courier'], postLocations);
+route('GET', '/api/courier/gps-key', ['courier'], async (ctx, env) => json(await gpsKeyInfo(env, ctx.user.id, false)));
+route('POST', '/api/courier/gps-key', ['courier'], async (ctx, env) => json(await gpsKeyInfo(env, ctx.user.id, ctx.body.renew ? 'new' : true)));
+route('POST', '/api/admin/couriers/:id/gps-key', ['admin'], adminGpsKey);
+route('DELETE', '/api/admin/couriers/:id/gps-key', ['admin'], adminGpsKeyOff);
 route('GET', '/api/courier/requests', ['courier'], courierRequests);
 route('GET', '/api/courier/wallet', ['courier'], wallet);
 route('POST', '/api/complaints', ANY, createComplaint);
@@ -1475,6 +1546,8 @@ async function handleApiInner(req, env) {
   const url = new URL(req.url);
   const ctx = { url, ip: req.headers.get('cf-connecting-ip') || '', params: {}, body: {} };
   try {
+    // GPS permanent : application de suivi du téléphone (clé du livreur, pas de session ni de JSON imposé)
+    if (url.pathname === '/api/gps' && ['GET', 'POST'].includes(req.method)) return await gpsTracker(req, env, url);
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       // Protection CSRF : les écritures exigent un en-tête JSON (impossible via un formulaire tiers).
       if (!(req.headers.get('content-type') || '').includes('application/json') && req.method !== 'DELETE') fail(415, 'json_required', 'JSON requis');

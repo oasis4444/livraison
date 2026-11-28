@@ -431,7 +431,7 @@ export async function enablePush({ ask = false } = {}) {
 function pushBanner(kind) {
   const KEY = 'alefa_push_later';
   try { if (Date.now() - Number(localStorage.getItem(KEY) || 0) < 3 * 864e5) return; } catch {}
-  if (document.querySelector('.push-banner')) return;
+  if (document.querySelector('.push-banner')) return; // (le bandeau « Installer » passe avant)
   const mg = state.lang === 'mg', ios = kind === 'ios_install';
   const el = document.createElement('div');
   el.className = 'push-banner';
@@ -458,6 +458,85 @@ export function pushHelp() {
     <p style="margin:0"><b>Android (Chrome)</b> : ${mg ? 'tsindrio ny 🔒 eo akaikin\'ny adiresy → Autorisations → Notifications → Autoriser, dia avereno sokafana.' : 'touchez 🔒 à gauche de l\'adresse → Autorisations → Notifications → Autoriser, puis rouvrez le site.'}</p>
     <p style="margin:0"><b>${mg ? 'Application napetraka' : 'Application installée'}</b> : ${mg ? 'Paramètres ny finday → Applications → Alefa.mg → Notifications → Alefa.' : 'Paramètres du téléphone → Applications → Alefa.mg → Notifications → Activer.'}</p>
     <p style="margin:0"><b>iPhone</b> : ${mg ? 'Réglages → Notifications → Alefa.mg → Autoriser.' : 'Réglages → Notifications → Alefa.mg → Autoriser.'}</p></div>`);
+}
+
+// ---------------------------------------------------------------- installer l'application (icône sur l'écran)
+// Android / ordinateur (Chrome, Edge, Samsung) : le navigateur propose l'installation → bouton « Installer ».
+// iPhone (Safari) : pas d'installation automatique → explication « Partager → Sur l'écran d'accueil ».
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; showInstall(); });
+window.addEventListener('appinstalled', () => { installEvt = null; document.querySelector('.inst-banner')?.remove(); try { localStorage.setItem('alefa_installed', '1'); } catch {} });
+export function installBanner() {
+  if (standalone()) return;
+  try { if (localStorage.getItem('alefa_installed')) return; } catch {}
+  // iPhone : explication tout de suite ; Android : bouton dès que le navigateur l'autorise ; sinon, aide après 4 s.
+  if (isIOS()) return showInstall();
+  if (installEvt) return showInstall();
+  setTimeout(() => { if (!installEvt && /android/i.test(navigator.userAgent)) showInstall(); }, 4000);
+}
+let installAsked = false;
+function showInstall() {
+  if (standalone() || document.querySelector('.inst-banner')) return;
+  const KEY = 'alefa_install_later';
+  try { if (Date.now() - Number(localStorage.getItem(KEY) || 0) < 3 * 864e5) return; } catch {}
+  if (!installAsked && !installEvt && !isIOS() && !/android/i.test(navigator.userAgent)) return; // ordinateur sans proposition : rien
+  installAsked = true;
+  document.querySelector('.push-banner')?.remove();
+  const mg = state.lang === 'mg', courier = location.pathname.startsWith('/livreur') || document.title.includes('Livreur');
+  const name = courier ? 'Alefa Livreur' : 'Alefa.mg';
+  const how = installEvt ? '' : isIOS()
+    ? (mg ? 'Tsindrio ⬆️ « Partager » eo ambany, avy eo « Sur l\'écran d\'accueil » → « Ajouter ».' : 'Touchez ⬆️ « Partager » en bas, puis « Sur l\'écran d\'accueil » → « Ajouter ».')
+    : (mg ? 'Tsindrio ⋮ eo ambony ankavanana, avy eo « Installer l\'application » na « Ajouter à l\'écran d\'accueil ».' : 'Touchez ⋮ en haut à droite, puis « Installer l\'application » ou « Ajouter à l\'écran d\'accueil ».');
+  const el = document.createElement('div');
+  el.className = 'push-banner inst-banner';
+  el.innerHTML = `<img src="/icon-192.png" alt="" width="40" height="40" style="border-radius:10px;flex:none"><div class="grow"><b>${mg ? `Apetraho eo amin'ny écran ny ${name}` : `Installez ${name} sur votre téléphone`}</b>
+    <small>${how || (mg ? 'Icône eo amin\'ny écran, misokatra haingana toy ny application, mahazo fampandrenesana.' : 'Une icône sur l\'écran, ouverture rapide comme une application, notifications.')}</small></div>
+    ${installEvt ? `<button class="btn primary sm" data-inst>${mg ? 'Apetraho' : 'Installer'}</button>` : ''}<button class="push-x" data-ilater aria-label="Plus tard">✕</button>`;
+  document.body.append(el);
+  el.querySelector('[data-ilater]').onclick = () => { try { localStorage.setItem(KEY, String(Date.now())); } catch {} el.remove(); };
+  el.querySelector('[data-inst]')?.addEventListener('click', async () => {
+    const ev = installEvt; if (!ev) return;
+    el.remove(); installEvt = null;
+    try { ev.prompt(); const r = await ev.userChoice; if (r?.outcome !== 'accepted') localStorage.setItem(KEY, String(Date.now())); } catch {}
+  });
+}
+
+// ---------------------------------------------------------------- GPS permanent (application « Traccar Client »)
+// Le site ne peut pas suivre le téléphone quand il est fermé : une petite application gratuite le fait
+// (arrière-plan, écran éteint, points gardés sans réseau) et envoie la position à Alefa avec la clé du livreur.
+export async function gpsSetup({ base, name, admin = false }) {
+  const mg = state.lang === 'mg';
+  let info = await api('POST', base, {});
+  const server = `${location.origin}${info.path}`;
+  const m = modal(mg ? 'GPS maharitra' : 'GPS permanent', '<div data-g></div>', { wide: true });
+  const draw = () => {
+    const seen = info.last ? `${new Date(info.last).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '';
+    m.el.querySelector('[data-g]').innerHTML = `<div class="stack small gps-setup">
+      <p style="margin:0">${mg ? `Mba hanarahana ${name ? esc(name) : 'ny livreur'} na mihidy aza ny application na maty ny écran, apetraho ao amin'ny findainy ny application maimaim-poana <b>Traccar Client</b>. Tehirizany ny toerana raha tsy misy réseau, ary alefany rehefa tafaverina.`
+        : `Pour suivre ${name ? esc(name) : 'le livreur'} même application fermée et écran éteint, installez sur son téléphone l'application gratuite <b>Traccar Client</b>. Sans réseau, elle garde les positions et les envoie au retour du réseau.`}</p>
+      <div class="card gps-state">${info.last ? `<span class="pt ok">${mg ? 'Mandeha' : 'Fonctionne'}</span> ${mg ? 'Toerana farany voaray' : 'Dernière position reçue'} : <b>${seen}</b>` : `<span class="pt no">${mg ? 'Mbola tsy nisy toerana voaray' : 'Aucune position reçue pour l\'instant'}</span>`}</div>
+      <ol class="gps-steps">
+        <li>${mg ? 'Ampidino' : 'Installez'} <b>Traccar Client</b> : <a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android (Play Store)</a> · <a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iPhone (App Store)</a></li>
+        <li>${mg ? 'Ao amin\'ny application, soraty ireto' : 'Dans l\'application, remplissez'} :
+          <div class="gps-kv"><span>${mg ? 'Identifiant de l\'appareil (Device identifier)' : 'Identifiant de l\'appareil (Device identifier)'}</span><code data-v="key">${esc(info.key)}</code><button class="btn sm" data-copy="key">${mg ? 'Adikao' : 'Copier'}</button></div>
+          <div class="gps-kv"><span>${mg ? 'Adiresin\'ny serveur (Server URL)' : 'Adresse du serveur (Server URL)'}</span><code data-v="url">${esc(server)}</code><button class="btn sm" data-copy="url">${mg ? 'Adikao' : 'Copier'}</button></div>
+          <div class="gps-kv"><span>${mg ? 'Fahamarinana (Location accuracy)' : 'Précision (Location accuracy)'}</span><code>${mg ? 'Avo (High)' : 'Haute (High)'}</code></div>
+          <div class="gps-kv"><span>${mg ? 'Elanelam-potoana (Frequency)' : 'Fréquence (Frequency)'}</span><code>30 s</code></div></li>
+        <li>${mg ? 'Alefaso ny <b>Service status</b> (ON). Omeo alalana « Toujours » ny toerana.' : 'Activez <b>Service status</b> (ON). Autorisez la localisation « Toujours » (Allow all the time).'}</li>
+        <li>${mg ? 'Android : Paramètres → Applications → Traccar Client → Batterie → <b>Sans restriction</b>, mba tsy hampitsahatra azy ny finday.' : 'Android : Paramètres → Applications → Traccar Client → Batterie → <b>Sans restriction</b>, pour que le téléphone ne l\'arrête pas.'}</li>
+      </ol>
+      <p class="tiny muted" style="margin:0">${mg ? 'Aza zaraina amin\'olon-kafa ny identifiant : izay manana azy no afaka mandefa toerana amin\'ny anaran\'ity livreur ity.' : 'Ne partagez pas l\'identifiant : il permet d\'envoyer des positions au nom de ce livreur.'}</p>
+      <div class="row wrap"><button class="btn sm" data-renew>${mg ? 'Identifiant vaovao' : 'Nouvel identifiant'}</button>${admin ? `<button class="btn sm danger" data-off>${mg ? 'Atsaharo' : 'Désactiver'}</button>` : ''}<button class="btn sm" data-refresh>${mg ? 'Hamarino' : 'Vérifier la réception'}</button></div></div>`;
+  };
+  draw();
+  m.el.addEventListener('click', async (e) => {
+    const cp = e.target.closest('[data-copy]')?.dataset.copy;
+    if (cp) { try { await navigator.clipboard.writeText(cp === 'key' ? info.key : server); toast(mg ? 'Voadika' : 'Copié', 'ok'); } catch { toast(cp === 'key' ? info.key : server); } }
+    if (e.target.closest('[data-refresh]')) { info = await api('POST', base, {}); draw(); }
+    if (e.target.closest('[data-renew]') && (await confirmBox(mg ? 'Hanova identifiant ? Tsy mandeha intsony ny taloha.' : 'Créer un nouvel identifiant ? L\'ancien ne fonctionnera plus.', 'OK'))) { info = await api('POST', base, { renew: true }); draw(); }
+    if (e.target.closest('[data-off]') && (await confirmBox('Désactiver le GPS permanent de ce livreur ?', 'Désactiver', true))) { await api('DELETE', base); m.close(); toast('GPS permanent désactivé', 'ok'); }
+  });
+  return m;
 }
 
 // Ouverture d'une notification : chaque espace (admin, livreur, client) enregistre comment ouvrir la cible.
